@@ -1,4 +1,5 @@
 const { invoke } = window.__TAURI__.core;
+const { listen } = window.__TAURI__.event;
 
 let isListening = false;
 
@@ -14,6 +15,13 @@ async function updateStatus() {
     if (status.model) {
       modelInfo.textContent = `Model: ${status.model}`;
     }
+    isListening = status.recording;
+    if (isListening) {
+      toggleBtn.classList.add("active");
+      toggleLabel.textContent = "Stop Listening";
+      statusBadge.textContent = "Listening";
+      statusBadge.className = "badge listening";
+    }
   } catch (err) {
     console.error("Failed to get status:", err);
   }
@@ -22,14 +30,22 @@ async function updateStatus() {
 toggleBtn.addEventListener("click", async () => {
   if (isListening) {
     try {
-      await invoke("stop_listening");
+      statusBadge.textContent = "Processing";
+      statusBadge.className = "badge processing";
+      const result = await invoke("stop_listening");
       isListening = false;
       toggleBtn.classList.remove("active");
       toggleLabel.textContent = "Start Listening";
       statusBadge.textContent = "Idle";
       statusBadge.className = "badge idle";
+
+      if (result && result.text) {
+        transcriptionText.textContent = result.text;
+      }
     } catch (err) {
       console.error("Failed to stop listening:", err);
+      statusBadge.textContent = "Error";
+      statusBadge.className = "badge idle";
     }
   } else {
     try {
@@ -42,6 +58,14 @@ toggleBtn.addEventListener("click", async () => {
     } catch (err) {
       console.error("Failed to start listening:", err);
     }
+  }
+});
+
+// Listen for transcription events from backend
+listen("transcription", (event) => {
+  const data = event.payload;
+  if (data && data.text) {
+    transcriptionText.textContent = data.text;
   }
 });
 
