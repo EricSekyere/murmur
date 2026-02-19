@@ -1,0 +1,34 @@
+# Rust
+/target/
+**/*.rs.bk
+Cargo.lock
+
+# Models (downloaded at runtime)
+/models/*.bin
+/models/*.ggml
+/models/*.onnx
+
+# Resources (downloaded at build/runtime)
+/resources/silero_vad.onnx
+
+# Claude Code
+.claude/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Environment
+.env
+.env.local
+
+# Tauri
+/crates/voitex-app/gen/

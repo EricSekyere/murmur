@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Voitex</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="app">
+    <header>
+      <h1>Voitex</h1>
+      <span id="status-badge" class="badge idle">Idle</span>
+    </header>
+
+    <section id="controls">
+      <button id="toggle-btn" class="btn-record">
+        <span class="mic-icon">&#127908;</span>
+        <span id="toggle-label">Start Listening</span>
+      </button>
+    </section>
+
+    <section id="audio-level">
+      <div class="level-bar">
+        <div id="level-fill" class="level-fill"></div>
+      </div>
+    </section>
+
+    <section id="transcription">
+      <h2>Last Transcription</h2>
+      <p id="transcription-text" class="transcription-text">No transcription yet.</p>
+    </section>
+
+    <footer>
+      <span class="model-info" id="model-info">Model: small.en</span>
+    </footer>
+  </div>
+
+  <script src="main.js"></script>
+</body>
+</html>

@@ -1,0 +1,57 @@
+[package]
+name = "voitex-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Core library for Voitex voice-to-text tool"
+
+[features]
+default = ["audio", "keyboard"]
+# Enable all features (requires cmake + libclang for whisper.cpp, ONNX Runtime for VAD)
+full = ["audio", "stt", "vad", "keyboard"]
+# Audio capture via CPAL
+audio = ["dep:cpal"]
+# Speech-to-text via whisper.cpp (requires cmake + libclang)
+stt = ["dep:whisper-rs"]
+# Voice activity detection via ONNX Runtime
+vad = ["dep:ort"]
+# Keystroke simulation
+keyboard = ["dep:enigo"]
+
+[dependencies]
+# Audio (optional — needs system audio libs)
+cpal = { version = "0.15", optional = true }
+
+# STT (optional — needs cmake + libclang to build whisper.cpp)
+whisper-rs = { version = "0.15", optional = true }
+
+# VAD (optional — needs ONNX Runtime)
+ort = { version = "2.0.0-rc.11", optional = true }
+
+# Output
+enigo = { version = "0.6", optional = true }
+arboard = "3"
+
+# Hotkeys
+global-hotkey = "0.6"
+
+# Async
+tokio.workspace = true
+
+# Serialization & Config
+serde.workspace = true
+toml.workspace = true
+
+# Logging
+tracing.workspace = true
+
+# Error handling
+anyhow.workspace = true
+
+# Utilities
+dirs = "6"
+sha2 = "0.10"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream"] }
+futures-util = "0.3"
+indicatif = "0.17"

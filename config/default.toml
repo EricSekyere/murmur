@@ -1,0 +1,23 @@
+# Voitex default configuration
+# Copy to ~/.voitex/config.toml (or %APPDATA%/voitex/config.toml on Windows) to customize.
+
+# Global hotkey for push-to-talk.
+# macOS default: "super+shift+space"
+# Windows default: "ctrl+shift+space"
+# hotkey = "ctrl+shift+space"
+
+# Whisper model to use.
+# Options: "base-en", "small-en", "medium-en", "large-v3-turbo"
+model = "small-en"
+
+# Output mode: how transcribed text is delivered.
+# Options: "keyboard" (simulate keystrokes), "clipboard" (copy to clipboard), "stdout" (print to terminal)
+output_mode = "keyboard"
+
+# VAD speech probability threshold (0.0 - 1.0).
+# Higher values require more confidence that speech is present.
+vad_threshold = 0.5
+
+# Preferred audio input device name.
+# Leave unset to use the system default microphone.
+# audio_device = "My USB Microphone"
