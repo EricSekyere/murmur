@@ -8,34 +8,120 @@
 </head>
 <body>
   <div id="app">
+
+    <!-- Model Banner: shown when model not ready -->
+    <div id="model-banner" class="banner banner--warn" hidden>
+      <span class="banner__text" id="model-banner-text">
+        Downloading model...
+      </span>
+      <div id="model-progress-wrap" class="progress-bar" hidden>
+        <div id="model-progress-fill" class="progress-bar__fill"></div>
+      </div>
+      <span id="model-progress-pct" class="banner__pct" hidden>0%</span>
+    </div>
+
+    <!-- Error Banner: shown on start/stop failures -->
+    <div id="error-banner" class="banner banner--error" hidden>
+      <span class="banner__text" id="error-message"></span>
+      <button class="banner__dismiss" id="dismiss-error" aria-label="Dismiss error">&#215;</button>
+    </div>
+
+    <!-- Header -->
     <header>
       <h1>Voitex</h1>
-      <span id="status-badge" class="badge idle">Idle</span>
+      <span id="status-badge" class="badge badge--idle" role="status" aria-live="polite">Idle</span>
     </header>
 
+    <!-- Mic Controls -->
     <section id="controls">
-      <button id="toggle-btn" class="btn-record">
-        <span class="mic-icon">&#127908;</span>
-        <span id="toggle-label">Start Listening</span>
-      </button>
-    </section>
-
-    <section id="audio-level">
-      <div class="level-bar">
-        <div id="level-fill" class="level-fill"></div>
+      <div class="mic-wrapper" id="mic-wrapper">
+        <div class="mic-ring" id="mic-ring"></div>
+        <button
+          id="mic-btn"
+          class="mic-btn mic-btn--idle"
+          aria-label="Start recording"
+          aria-pressed="false"
+        >
+          <svg class="mic-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
+            <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+            <line x1="12" y1="19" x2="12" y2="23"/>
+            <line x1="8" y1="23" x2="16" y2="23"/>
+          </svg>
+        </button>
       </div>
     </section>
 
-    <section id="transcription">
-      <h2>Last Transcription</h2>
-      <p id="transcription-text" class="transcription-text">No transcription yet.</p>
+    <!-- Waveform + Level -->
+    <section id="visualization" hidden>
+      <canvas id="waveform-canvas" width="380" height="60" aria-hidden="true"></canvas>
+      <div class="level-bar">
+        <div id="level-fill"></div>
+      </div>
     </section>
 
-    <footer>
-      <span class="model-info" id="model-info">Model: small.en</span>
-    </footer>
-  </div>
+    <!-- Session Stats -->
+    <div id="session-stats">
+      <span id="duration-display" hidden>0:00</span>
+      <span id="word-count" hidden>0 words</span>
+      <span id="proc-time" hidden></span>
+    </div>
 
+    <!-- Transcription -->
+    <section id="transcription">
+      <div class="section-header">
+        <h2>Transcription</h2>
+        <button class="btn-icon" id="copy-transcription" aria-label="Copy transcription" title="Copy" disabled>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
+            <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+          </svg>
+        </button>
+      </div>
+      <div id="transcription-output" class="transcription-output">
+        <span class="placeholder">No transcription yet.</span>
+      </div>
+    </section>
+
+    <!-- History -->
+    <section id="history-section">
+      <button class="btn-history-toggle" id="history-toggle" aria-expanded="false">
+        History
+        <span class="history-count" id="history-count" hidden>0</span>
+        <svg class="toggle-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <polyline points="6 9 12 15 18 9"/>
+        </svg>
+      </button>
+      <ul id="history-list" class="history-list" hidden></ul>
+    </section>
+
+    <!-- Settings -->
+    <section id="settings-section">
+      <button class="btn-settings-toggle" id="settings-toggle" aria-expanded="false">
+        Settings
+        <svg class="toggle-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <polyline points="6 9 12 15 18 9"/>
+        </svg>
+      </button>
+      <div id="settings-panel" class="settings-panel" hidden>
+        <div class="settings-group">
+          <label class="settings-label">STT Model</label>
+          <div id="model-list" class="model-list"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Footer -->
+    <footer>
+      <span id="hotkey-display" class="hotkey-badge">ctrl+shift+space</span>
+      <span id="output-mode-display" class="output-mode-badge">keyboard</span>
+      <span id="model-info" class="model-info">Model: small.en</span>
+    </footer>
+
+    <!-- Toast notifications -->
+    <div id="toast-container" class="toast-container" aria-live="polite"></div>
+
+  </div>
   <script src="main.js"></script>
 </body>
 </html>

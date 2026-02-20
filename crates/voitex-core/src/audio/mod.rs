@@ -1,5 +1,6 @@
 #[cfg(feature = "audio")]
 pub mod capture;
+pub mod silence;
 pub mod vad;
 
 /// Holds captured PCM audio samples (16kHz mono f32).
@@ -10,13 +11,45 @@ pub struct AudioBuffer {
     pub sample_rate: u32,
 }
 
+impl Default for AudioBuffer {
+    fn default() -> Self {
+        Self {
+            samples: Vec::new(),
+            sample_rate: Self::SAMPLE_RATE,
+        }
+    }
+}
+
 impl AudioBuffer {
     pub const SAMPLE_RATE: u32 = 16_000;
 
     pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Build from raw multi-channel audio at a native rate, downmixing and
+    /// resampling to 16 kHz mono.
+    #[cfg(feature = "audio")]
+    pub fn from_raw(raw: &[f32], native_rate: u32, native_channels: u16) -> Self {
+        let mono = if native_channels > 1 {
+            let ch = native_channels as usize;
+            raw.chunks_exact(ch)
+                .map(|frame| frame.iter().sum::<f32>() / ch as f32)
+                .collect::<Vec<f32>>()
+        } else {
+            raw.to_vec()
+        };
+
+        let target_rate = Self::SAMPLE_RATE;
+        let resampled = if native_rate != target_rate {
+            capture::resample(&mono, native_rate, target_rate)
+        } else {
+            mono
+        };
+
         Self {
-            samples: Vec::new(),
-            sample_rate: Self::SAMPLE_RATE,
+            samples: resampled,
+            sample_rate: target_rate,
         }
     }
 

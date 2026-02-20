@@ -1,39 +1,55 @@
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
+use anyhow::Context;
+use tauri::Emitter;
 use tauri::{
+    Manager, State,
+    image::Image,
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    Manager, State,
 };
-#[cfg(feature = "full")]
-use tauri::Emitter;
+use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 use voitex_core::config::Settings;
-#[cfg(feature = "full")]
-use voitex_core::stt::models::ModelManager;
+use voitex_core::stt::engine::SttEngine;
+use voitex_core::stt::models::{Backend, ModelManager, SttModel};
+use voitex_core::stt::runtime;
 
-// --- Audio worker (runs AudioCapture on a dedicated thread) ---
+// --- Audio worker (runs AudioCapture on a dedicated thread with silence monitoring) ---
 
-#[cfg(feature = "full")]
 mod audio_worker {
+    use std::sync::Mutex;
     use std::sync::mpsc;
-    use voitex_core::audio::{capture::AudioCapture, AudioBuffer};
+    use std::time::{Duration, Instant};
+    use voitex_core::audio::AudioBuffer;
+    use voitex_core::audio::capture::AudioCapture;
+    use voitex_core::audio::silence::{PhraseDetector, PhraseState, compute_rms, downmix_to_mono};
 
-    pub enum Cmd {
-        Start,
+    enum Cmd {
+        StartStreaming {
+            rms_threshold: f32,
+            phrase_pause: Duration,
+            session_timeout: Duration,
+        },
         Stop,
+    }
+
+    pub enum AudioResult {
+        Started,
+        StartFailed(String),
+        PhraseReady(AudioBuffer),
+        StreamingDone,
     }
 
     pub struct Handle {
         cmd_tx: mpsc::Sender<Cmd>,
-        result_rx: Mutex<mpsc::Receiver<Result<AudioBuffer, String>>>,
+        result_rx: Mutex<mpsc::Receiver<AudioResult>>,
     }
-
-    use std::sync::Mutex;
 
     impl Handle {
         pub fn spawn() -> Self {
             let (cmd_tx, cmd_rx) = mpsc::channel::<Cmd>();
-            let (result_tx, result_rx) = mpsc::channel::<Result<AudioBuffer, String>>();
+            let (result_tx, result_rx) = mpsc::channel::<AudioResult>();
 
             std::thread::spawn(move || {
                 let mut capture = match AudioCapture::new() {
@@ -46,14 +62,161 @@ mod audio_worker {
 
                 while let Ok(cmd) = cmd_rx.recv() {
                     match cmd {
-                        Cmd::Start => {
+                        Cmd::StartStreaming {
+                            rms_threshold,
+                            phrase_pause,
+                            session_timeout,
+                        } => {
                             if let Err(e) = capture.start() {
-                                let _ = result_tx.send(Err(e.to_string()));
+                                let _ = result_tx.send(AudioResult::StartFailed(e.to_string()));
+                                continue;
+                            }
+                            let _ = result_tx.send(AudioResult::Started);
+
+                            let live_buf = capture.live_buffer();
+                            let native_rate = capture.native_rate();
+                            let native_channels = capture.native_channels();
+                            let mut analyzed_up_to = 0usize;
+                            let mut phrase_start_idx = 0usize;
+
+                            // ── Calibration phase: measure ambient noise ──
+                            let calibration_duration = Duration::from_millis(500);
+                            let calibration_start = Instant::now();
+                            let mut ambient_rms_samples = Vec::new();
+
+                            tracing::info!("Calibrating noise floor ({} ch, {}Hz)...", native_channels, native_rate);
+                            while calibration_start.elapsed() < calibration_duration {
+                                std::thread::sleep(Duration::from_millis(50));
+                                let buf = live_buf.lock().unwrap_or_else(|e| e.into_inner());
+                                if buf.len() > analyzed_up_to {
+                                    let mono = downmix_to_mono(&buf[analyzed_up_to..], native_channels);
+                                    let chunk_rms = compute_rms(&mono);
+                                    if chunk_rms > 0.0 {
+                                        ambient_rms_samples.push(chunk_rms);
+                                    }
+                                    analyzed_up_to = buf.len();
+                                }
+                            }
+
+                            let ambient_rms = if ambient_rms_samples.is_empty() {
+                                0.0
+                            } else {
+                                ambient_rms_samples.iter().sum::<f32>() / ambient_rms_samples.len() as f32
+                            };
+
+                            // If config threshold > 0, use it directly; otherwise auto-calibrate
+                            let calibrated_threshold = if rms_threshold > 0.0 {
+                                rms_threshold
+                            } else {
+                                (ambient_rms * 3.0).max(0.0001)
+                            };
+                            tracing::info!(
+                                "Calibrated: ambient RMS = {:.6}, threshold = {:.6} (config = {:.6}, mode = {})",
+                                ambient_rms, calibrated_threshold, rms_threshold,
+                                if rms_threshold > 0.0 { "manual" } else { "auto" }
+                            );
+
+                            let mut detector =
+                                PhraseDetector::new(calibrated_threshold, phrase_pause, session_timeout);
+
+                            loop {
+                                // Check for manual Stop
+                                if let Ok(Cmd::Stop) = cmd_rx.try_recv() {
+                                    // Drain any remaining audio as a final phrase
+                                    let remaining = {
+                                        let buf =
+                                            live_buf.lock().unwrap_or_else(|e| e.into_inner());
+                                        if buf.len() > phrase_start_idx {
+                                            Some(buf[phrase_start_idx..].to_vec())
+                                        } else {
+                                            None
+                                        }
+                                    };
+                                    if let Some(raw) = remaining {
+                                        let audio = AudioBuffer::from_raw(
+                                            &raw,
+                                            native_rate,
+                                            native_channels,
+                                        );
+                                        if !audio.samples.is_empty() {
+                                            let _ = result_tx.send(AudioResult::PhraseReady(audio));
+                                        }
+                                    }
+                                    let _ = capture.stop();
+                                    let _ = result_tx.send(AudioResult::StreamingDone);
+                                    break;
+                                }
+
+                                // Read new samples, downmix to mono, feed to phrase detector
+                                let state = {
+                                    let buf = live_buf.lock().unwrap_or_else(|e| e.into_inner());
+                                    if buf.len() > analyzed_up_to {
+                                        let mono = downmix_to_mono(&buf[analyzed_up_to..], native_channels);
+                                        let st = detector.feed(&mono);
+                                        analyzed_up_to = buf.len();
+                                        st
+                                    } else {
+                                        detector.state()
+                                    }
+                                };
+
+                                match state {
+                                    PhraseState::PhraseComplete => {
+                                        // Drain the phrase audio
+                                        let raw = {
+                                            let buf =
+                                                live_buf.lock().unwrap_or_else(|e| e.into_inner());
+                                            buf[phrase_start_idx..analyzed_up_to].to_vec()
+                                        };
+                                        phrase_start_idx = analyzed_up_to;
+
+                                        let audio = AudioBuffer::from_raw(
+                                            &raw,
+                                            native_rate,
+                                            native_channels,
+                                        );
+                                        if !audio.samples.is_empty() {
+                                            let _ = result_tx.send(AudioResult::PhraseReady(audio));
+                                        }
+
+                                        detector.reset_phrase();
+                                    }
+                                    PhraseState::SessionTimeout => {
+                                        // Drain any remaining audio
+                                        let remaining = {
+                                            let buf =
+                                                live_buf.lock().unwrap_or_else(|e| e.into_inner());
+                                            if buf.len() > phrase_start_idx {
+                                                Some(buf[phrase_start_idx..].to_vec())
+                                            } else {
+                                                None
+                                            }
+                                        };
+                                        if let Some(raw) = remaining {
+                                            let audio = AudioBuffer::from_raw(
+                                                &raw,
+                                                native_rate,
+                                                native_channels,
+                                            );
+                                            if !audio.samples.is_empty() {
+                                                let _ =
+                                                    result_tx.send(AudioResult::PhraseReady(audio));
+                                            }
+                                        }
+                                        tracing::info!("Streaming session timeout — no speech");
+                                        let _ = capture.stop();
+                                        let _ = result_tx.send(AudioResult::StreamingDone);
+                                        break;
+                                    }
+                                    _ => {}
+                                }
+
+                                std::thread::sleep(Duration::from_millis(50));
                             }
                         }
+
                         Cmd::Stop => {
-                            let result = capture.stop().map_err(|e| e.to_string());
-                            let _ = result_tx.send(result);
+                            tracing::debug!("Stop received outside monitoring loop, ignoring");
                         }
                     }
                 }
@@ -65,129 +228,606 @@ mod audio_worker {
             }
         }
 
-        pub fn start(&self) -> Result<(), String> {
-            self.cmd_tx.send(Cmd::Start).map_err(|e| e.to_string())
+        /// Start streaming mode. Blocks until audio capture is ready.
+        pub fn start_streaming(
+            &self,
+            rms_threshold: f32,
+            phrase_pause: Duration,
+            session_timeout: Duration,
+        ) -> Result<(), String> {
+            self.cmd_tx
+                .send(Cmd::StartStreaming {
+                    rms_threshold,
+                    phrase_pause,
+                    session_timeout,
+                })
+                .map_err(|e| format!("Audio worker channel closed: {}", e))?;
+
+            let rx = self.result_rx.lock().unwrap_or_else(|e| e.into_inner());
+            match rx.recv_timeout(Duration::from_secs(5)) {
+                Ok(AudioResult::Started) => Ok(()),
+                Ok(AudioResult::StartFailed(e)) => Err(e),
+                Ok(_) => Err("Unexpected response from audio worker".to_string()),
+                Err(e) => Err(format!("Audio worker response timeout: {}", e)),
+            }
         }
 
-        pub fn stop(&self) -> Result<AudioBuffer, String> {
+        /// Request the worker to stop recording. Non-blocking.
+        pub fn request_stop(&self) -> Result<(), String> {
             self.cmd_tx
                 .send(Cmd::Stop)
-                .map_err(|e| e.to_string())?;
-            self.result_rx
-                .lock()
-                .map_err(|e| e.to_string())?
-                .recv()
-                .map_err(|e| e.to_string())?
+                .map_err(|e| format!("Audio worker channel closed: {}", e))
+        }
+
+        /// Blocking receive for the next streaming result.
+        pub fn recv_result(&self) -> Result<AudioResult, String> {
+            let rx = self.result_rx.lock().unwrap_or_else(|e| e.into_inner());
+            rx.recv_timeout(Duration::from_secs(120))
+                .map_err(|e| format!("Audio worker recv timeout: {}", e))
         }
     }
 }
 
 /// Shared application state managed by Tauri.
 struct AppState {
-    #[cfg(feature = "full")]
     audio: audio_worker::Handle,
-    #[cfg(feature = "full")]
-    engine: voitex_core::stt::engine::SttEngine,
+    engine: Arc<Mutex<Option<SttEngine>>>,
     recording: Mutex<bool>,
     settings: Mutex<Settings>,
 }
 
 #[derive(serde::Serialize, Clone)]
-struct TranscriptionEvent {
-    text: String,
-    processing_time_ms: u64,
+struct RecordingStateEvent {
+    recording: bool,
+    processing: bool,
 }
+
+#[derive(serde::Serialize, Clone)]
+struct ModelDownloadProgress {
+    percent: u8,
+    message: String,
+    done: bool,
+    error: Option<String>,
+}
+
+#[derive(serde::Serialize, Clone)]
+struct ModelInfo {
+    id: String,
+    name: String,
+    backend: String,
+    size_mb: u32,
+    description: String,
+    downloaded: bool,
+    active: bool,
+}
+
+#[derive(serde::Serialize, Clone)]
+struct ModelChangedEvent {
+    model_id: String,
+    model_name: String,
+    ready: bool,
+}
+
+/// Emit a `recording-state` event to all windows (main + widget).
+fn emit_recording_state(app: &tauri::AppHandle, recording: bool, processing: bool) {
+    let _ = app.emit(
+        "recording-state",
+        RecordingStateEvent {
+            recording,
+            processing,
+        },
+    );
+}
+
+// ─── Tauri Commands ──────────────────────────────────────────────────────────
 
 /// Tauri command: get the current app status.
 #[tauri::command]
 fn get_status(state: State<'_, AppState>) -> serde_json::Value {
     let recording = *state.recording.lock().unwrap_or_else(|e| e.into_inner());
     let settings = state.settings.lock().unwrap_or_else(|e| e.into_inner());
+    let model_ready = state
+        .engine
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .is_some();
 
     serde_json::json!({
         "recording": recording,
         "model": settings.model.name(),
-        "mode": if recording { "listening" } else { "idle" }
+        "model_id": settings.model.id(),
+        "model_ready": model_ready,
+        "mode": if recording { "listening" } else { "idle" },
+        "hotkey": settings.hotkey,
+        "output_mode": settings.output_mode,
     })
 }
 
-/// Tauri command: start listening for voice input.
+/// Tauri command: toggle recording on/off. Used by widget, main window, and hotkey.
 #[tauri::command]
-fn start_listening(state: State<'_, AppState>) -> Result<(), String> {
-    #[cfg(feature = "full")]
-    {
-        let mut recording = state.recording.lock().map_err(|e| e.to_string())?;
-        if *recording {
-            return Err("Already recording".into());
-        }
-        state.audio.start()?;
-        *recording = true;
-        tracing::info!("Audio capture started from Tauri app");
-        Ok(())
-    }
-
-    #[cfg(not(feature = "full"))]
-    {
-        let _ = state;
-        Err("Built without 'full' feature — audio capture not available".into())
-    }
-}
-
-/// Tauri command: stop listening, transcribe, and emit result.
-#[tauri::command]
-fn stop_listening(
-    app: tauri::AppHandle,
-    state: State<'_, AppState>,
-) -> Result<TranscriptionEvent, String> {
-    #[cfg(feature = "full")]
-    {
-        *state.recording.lock().map_err(|e| e.to_string())? = false;
-        let audio = state.audio.stop()?;
-
-        if audio.samples.is_empty() {
-            return Ok(TranscriptionEvent {
-                text: String::new(),
-                processing_time_ms: 0,
-            });
-        }
-
-        let result = state
-            .engine
-            .transcribe(&audio.samples)
-            .map_err(|e| e.to_string())?;
-
-        tracing::info!(
-            "Transcribed in {}ms: {}",
-            result.processing_time_ms,
-            result.text
-        );
-
-        let event = TranscriptionEvent {
-            text: result.text,
-            processing_time_ms: result.processing_time_ms,
-        };
-
-        let _ = app.emit("transcription", &event);
-
-        Ok(event)
-    }
-
-    #[cfg(not(feature = "full"))]
-    {
-        let _ = (app, state);
-        Err("Built without 'full' feature — transcription not available".into())
-    }
+fn toggle_recording(app: tauri::AppHandle) -> Result<(), String> {
+    handle_toggle(&app);
+    Ok(())
 }
 
 /// Tauri command: get the current configuration.
 #[tauri::command]
 fn get_config(state: State<'_, AppState>) -> Result<serde_json::Value, String> {
-    let settings = state.settings.lock().map_err(|e| e.to_string())?;
+    let settings = state.settings.lock().unwrap_or_else(|e| e.into_inner());
     serde_json::to_value(&*settings).map_err(|e| e.to_string())
 }
 
+/// Tauri command: manually trigger model download (fallback if auto-download failed).
+#[tauri::command]
+async fn download_model(app: tauri::AppHandle, state: State<'_, AppState>) -> Result<(), String> {
+    {
+        let guard = state.engine.lock().unwrap_or_else(|e| e.into_inner());
+        if guard.is_some() {
+            return Ok(());
+        }
+    }
+
+    let model = state
+        .settings
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .model;
+    let engine_ref = Arc::clone(&state.engine);
+
+    spawn_download_and_init(app, engine_ref, model);
+    Ok(())
+}
+
+/// Tauri command: list all available models with their status.
+#[tauri::command]
+fn list_models(state: State<'_, AppState>) -> Result<Vec<ModelInfo>, String> {
+    let model_mgr = ModelManager::new(ModelManager::default_dir().map_err(|e| e.to_string())?);
+
+    let settings = state.settings.lock().unwrap_or_else(|e| e.into_inner());
+    let active_model = settings.model;
+
+    let models: Vec<ModelInfo> = SttModel::all()
+        .iter()
+        .map(|model| ModelInfo {
+            id: model.id().to_string(),
+            name: model.name().to_string(),
+            backend: model.backend().to_string(),
+            size_mb: model.size_mb(),
+            description: model.description().to_string(),
+            downloaded: model_mgr.is_downloaded(*model),
+            active: *model == active_model,
+        })
+        .collect();
+
+    Ok(models)
+}
+
+/// Tauri command: change the active STT model.
+#[tauri::command]
+async fn change_model(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    model_id: String,
+) -> Result<(), String> {
+    let model =
+        SttModel::from_name(&model_id).ok_or_else(|| format!("Unknown model '{}'", model_id))?;
+
+    // Check if already active
+    {
+        let settings = state.settings.lock().unwrap_or_else(|e| e.into_inner());
+        if settings.model == model {
+            let engine_guard = state.engine.lock().unwrap_or_else(|e| e.into_inner());
+            if engine_guard.is_some() {
+                return Ok(());
+            }
+        }
+    }
+
+    // Clear current engine
+    {
+        let mut guard = state.engine.lock().unwrap_or_else(|e| e.into_inner());
+        *guard = None;
+    }
+
+    // Emit loading state
+    let _ = app.emit(
+        "model-changed",
+        ModelChangedEvent {
+            model_id: model.id().to_string(),
+            model_name: model.name().to_string(),
+            ready: false,
+        },
+    );
+
+    // Update settings
+    {
+        let mut settings = state.settings.lock().unwrap_or_else(|e| e.into_inner());
+        settings.model = model;
+        if let Ok(path) = Settings::default_path()
+            && let Err(e) = settings.save(&path)
+        {
+            tracing::error!("Failed to save settings: {}", e);
+        }
+    }
+
+    let engine_ref = Arc::clone(&state.engine);
+    spawn_download_and_init(app, engine_ref, model);
+
+    Ok(())
+}
+
+// ─── Model Download & Init ───────────────────────────────────────────────────
+
+/// Spawn a background task that downloads the model, inits the engine, and emits progress events.
+fn spawn_download_and_init(
+    app: tauri::AppHandle,
+    engine: Arc<Mutex<Option<SttEngine>>>,
+    model: SttModel,
+) {
+    let app_handle = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let result = download_and_init_model(&app_handle, &engine, model).await;
+        if let Err(e) = result {
+            tracing::error!("Model download/init failed: {}", e);
+            let _ = app_handle.emit(
+                "model-download-progress",
+                ModelDownloadProgress {
+                    percent: 0,
+                    message: format!("Download failed: {}", e),
+                    done: false,
+                    error: Some(e.to_string()),
+                },
+            );
+        }
+    });
+}
+
+/// Download the model (with progress events) and initialize the STT engine.
+async fn download_and_init_model(
+    app: &tauri::AppHandle,
+    engine: &Arc<Mutex<Option<SttEngine>>>,
+    model: SttModel,
+) -> anyhow::Result<()> {
+    let model_mgr = ModelManager::new(
+        ModelManager::default_dir().context("Failed to determine models directory")?,
+    );
+
+    // For ONNX Runtime-based backends, ensure the runtime DLL is available
+    if model.backend() == Backend::Parakeet && !runtime::is_downloaded() {
+        let _ = app.emit(
+            "model-download-progress",
+            ModelDownloadProgress {
+                percent: 0,
+                message: "Downloading ONNX Runtime...".to_string(),
+                done: false,
+                error: None,
+            },
+        );
+
+        let app_ref = app.clone();
+        runtime::download_with_progress(|downloaded, total| {
+            let percent = total
+                .map(|t| {
+                    if t > 0 {
+                        ((downloaded * 100) / t).min(100) as u8
+                    } else {
+                        0
+                    }
+                })
+                .unwrap_or(0);
+
+            let _ = app_ref.emit(
+                "model-download-progress",
+                ModelDownloadProgress {
+                    percent,
+                    message: format!("Downloading ONNX Runtime... {}%", percent),
+                    done: false,
+                    error: None,
+                },
+            );
+        })
+        .await
+        .context("ONNX Runtime download failed")?;
+    }
+
+    // Download model files if not already present
+    if !model_mgr.is_downloaded(model) {
+        let _ = app.emit(
+            "model-download-progress",
+            ModelDownloadProgress {
+                percent: 0,
+                message: format!("Downloading {}...", model.name()),
+                done: false,
+                error: None,
+            },
+        );
+
+        let app_ref = app.clone();
+        model_mgr
+            .download_with_progress(model, move |downloaded, total| {
+                let percent = total
+                    .map(|t| {
+                        if t > 0 {
+                            ((downloaded * 100) / t).min(100) as u8
+                        } else {
+                            0
+                        }
+                    })
+                    .unwrap_or(0);
+
+                let _ = app_ref.emit(
+                    "model-download-progress",
+                    ModelDownloadProgress {
+                        percent,
+                        message: format!("Downloading {}... {}%", model.name(), percent),
+                        done: false,
+                        error: None,
+                    },
+                );
+            })
+            .await
+            .context("Model download failed")?;
+    }
+
+    let _ = app.emit(
+        "model-download-progress",
+        ModelDownloadProgress {
+            percent: 100,
+            message: "Loading model...".to_string(),
+            done: false,
+            error: None,
+        },
+    );
+
+    let model_path = model_mgr.model_path(model);
+    let path_str = model_path
+        .to_str()
+        .context("Invalid model path (non-UTF-8)")?
+        .to_string();
+
+    let backend = model.backend();
+
+    // SttEngine init is CPU-intensive; run on a blocking thread
+    let stt = tokio::task::spawn_blocking(move || match backend {
+        Backend::Whisper => SttEngine::new_whisper(&path_str, 0),
+        Backend::Parakeet => SttEngine::new_parakeet(&path_str),
+    })
+    .await
+    .context("Engine init task panicked")?
+    .context("Failed to initialize STT engine")?;
+
+    {
+        let mut guard = engine.lock().unwrap_or_else(|e| e.into_inner());
+        *guard = Some(stt);
+    }
+
+    let _ = app.emit(
+        "model-download-progress",
+        ModelDownloadProgress {
+            percent: 100,
+            message: "Model ready".to_string(),
+            done: true,
+            error: None,
+        },
+    );
+
+    let _ = app.emit(
+        "model-changed",
+        ModelChangedEvent {
+            model_id: model.id().to_string(),
+            model_name: model.name().to_string(),
+            ready: true,
+        },
+    );
+
+    tracing::info!("Model {} downloaded and engine initialized", model.name());
+    Ok(())
+}
+
+// ─── Output ──────────────────────────────────────────────────────────────────
+
+/// Output text by typing it directly into the focused application (streaming mode).
+/// Uses enigo.text() with a trailing space for word separation.
+fn output_text_streaming(text: &str) -> anyhow::Result<()> {
+    use enigo::{Keyboard, Settings as EnigoSettings};
+
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return Ok(());
+    }
+
+    let mut enigo =
+        enigo::Enigo::new(&EnigoSettings::default()).context("Failed to create Enigo")?;
+    let with_space = format!("{} ", trimmed);
+    enigo.text(&with_space)?;
+    Ok(())
+}
+
+/// Transcribe an audio buffer and return the text, or None if empty/error.
+fn transcribe_chunk(
+    app: &tauri::AppHandle,
+    audio: &voitex_core::audio::AudioBuffer,
+) -> Option<String> {
+    if audio.samples.is_empty() {
+        return None;
+    }
+
+    let state = app.state::<AppState>();
+    let mut engine_guard = state.engine.lock().unwrap_or_else(|e| e.into_inner());
+    let engine = engine_guard.as_mut()?;
+
+    match engine.transcribe(&audio.samples) {
+        Ok(result) if !result.text.is_empty() => {
+            tracing::info!(
+                "Phrase transcribed in {}ms: {}",
+                result.processing_time_ms,
+                result.text
+            );
+            Some(result.text)
+        }
+        Ok(_) => None,
+        Err(e) => {
+            tracing::error!("Phrase transcription failed: {}", e);
+            None
+        }
+    }
+}
+
+// ─── Toggle Recording Logic ──────────────────────────────────────────────────
+
+/// Handle a recording toggle (start or stop). Called from hotkey and Tauri command.
+fn handle_toggle(app: &tauri::AppHandle) {
+    let state = app.state::<AppState>();
+    let mut recording = state.recording.lock().unwrap_or_else(|e| e.into_inner());
+
+    if *recording {
+        // ── Manual stop ──────────────────────────────────────────────────
+        *recording = false;
+        drop(recording);
+
+        tracing::info!("Toggle: manual stop");
+
+        if let Err(e) = state.audio.request_stop() {
+            tracing::error!("Failed to send stop command: {}", e);
+            emit_recording_state(app, false, false);
+            let _ = app.emit(
+                "hotkey-error",
+                serde_json::json!({ "error": format!("Failed to stop recording: {}", e) }),
+            );
+        }
+        // The streaming_worker thread will handle cleanup via StreamingDone
+    } else {
+        // ── Start streaming ──────────────────────────────────────────────
+        // Guard: engine not loaded
+        {
+            let engine = state.engine.lock().unwrap_or_else(|e| e.into_inner());
+            if engine.is_none() {
+                drop(recording);
+                tracing::debug!("Toggle: engine not loaded yet");
+                let _ = app.emit(
+                    "hotkey-error",
+                    serde_json::json!({ "error": "Model not loaded yet" }),
+                );
+                return;
+            }
+        }
+
+        // Set recording immediately to prevent double-toggle
+        *recording = true;
+        drop(recording);
+
+        tracing::info!("Toggle: start streaming");
+        emit_recording_state(app, true, false);
+
+        let app_handle = app.clone();
+        std::thread::spawn(move || {
+            streaming_worker(&app_handle);
+        });
+    }
+}
+
+/// Background thread: streaming mode — detect phrases, transcribe each, type into focused field.
+fn streaming_worker(app: &tauri::AppHandle) {
+    let state = app.state::<AppState>();
+
+    let (rms_threshold, phrase_pause, session_timeout) = {
+        let settings = state.settings.lock().unwrap_or_else(|e| e.into_inner());
+        (
+            settings.silence_rms_threshold,
+            Duration::from_secs_f32(settings.phrase_pause_secs),
+            Duration::from_secs_f32(settings.session_timeout_secs),
+        )
+    };
+
+    // Start streaming (blocks until audio capture is ready)
+    if let Err(e) = state
+        .audio
+        .start_streaming(rms_threshold, phrase_pause, session_timeout)
+    {
+        tracing::error!("Failed to start streaming: {}", e);
+        *state.recording.lock().unwrap_or_else(|e| e.into_inner()) = false;
+        emit_recording_state(app, false, false);
+        let _ = app.emit(
+            "hotkey-error",
+            serde_json::json!({ "error": format!("Failed to start recording: {}", e) }),
+        );
+        return;
+    }
+
+    // Loop: receive PhraseReady / StreamingDone
+    loop {
+        match state.audio.recv_result() {
+            Ok(audio_worker::AudioResult::PhraseReady(audio)) => {
+                // Brief "processing" flash while transcribing
+                emit_recording_state(app, true, true);
+
+                let text = transcribe_chunk(app, &audio);
+
+                if let Some(ref text) = text {
+                    if let Err(e) = output_text_streaming(text) {
+                        tracing::error!("Failed to type streaming text: {}", e);
+                        let _ = app.emit(
+                            "hotkey-error",
+                            serde_json::json!({ "error": format!("Failed to type text: {}", e) }),
+                        );
+                    }
+
+                    let _ = app.emit("streaming-phrase", serde_json::json!({ "text": text }));
+                }
+
+                // Back to "listening"
+                let still_recording = *state.recording.lock().unwrap_or_else(|e| e.into_inner());
+                if still_recording {
+                    emit_recording_state(app, true, false);
+                }
+            }
+            Ok(audio_worker::AudioResult::StreamingDone) => {
+                tracing::info!("Streaming session ended");
+                break;
+            }
+            Ok(audio_worker::AudioResult::Started) => {
+                // Shouldn't happen in this loop, but harmless
+            }
+            Ok(audio_worker::AudioResult::StartFailed(e)) => {
+                tracing::error!("Unexpected StartFailed during streaming: {}", e);
+                break;
+            }
+            Err(e) => {
+                tracing::error!("Streaming recv error: {}", e);
+                let _ = app.emit(
+                    "hotkey-error",
+                    serde_json::json!({ "error": format!("Streaming error: {}", e) }),
+                );
+                break;
+            }
+        }
+    }
+
+    // Cleanup
+    *state.recording.lock().unwrap_or_else(|e| e.into_inner()) = false;
+    emit_recording_state(app, false, false);
+    let _ = app.emit("streaming-done", serde_json::json!({}));
+}
+
+// ─── Hotkey Handler ──────────────────────────────────────────────────────────
+
+/// Handle a global hotkey event. Toggle mode: press to start/stop, release ignored.
+fn handle_hotkey_event(app: &tauri::AppHandle, shortcut_state: ShortcutState) {
+    match shortcut_state {
+        ShortcutState::Pressed => handle_toggle(app),
+        ShortcutState::Released => {} // Toggle mode — release is ignored
+    }
+}
+
+// ─── Tray & App Setup ────────────────────────────────────────────────────────
+
+/// 1x1 transparent PNG used as fallback tray icon.
+fn fallback_icon() -> Image<'static> {
+    Image::new_owned(vec![0, 0, 0, 0], 1, 1)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
-pub fn run() {
+pub fn run() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
@@ -195,62 +835,90 @@ pub fn run() {
         )
         .init();
 
-    let config_path = Settings::default_path().expect("Failed to determine config path");
-    let settings = Settings::load(&config_path).expect("Failed to load settings");
+    let config_path = Settings::default_path().context("Failed to determine config path")?;
+    let settings = Settings::load(&config_path).context("Failed to load settings")?;
 
-    #[cfg(feature = "full")]
-    let app_state = {
-        let model = settings.model;
-        let model_mgr = ModelManager::new(
-            ModelManager::default_dir().expect("Failed to determine models directory"),
-        );
+    let model = settings.model;
+    let model_mgr = ModelManager::new(
+        ModelManager::default_dir().context("Failed to determine models directory")?,
+    );
 
+    let model_already_downloaded = model_mgr.is_downloaded(model);
+
+    // For Parakeet, also need the ONNX Runtime DLL
+    let ort_ready = model.backend() != Backend::Parakeet || runtime::is_downloaded();
+
+    // If model exists (and runtime DLL for Parakeet), init engine immediately
+    let engine = if model_already_downloaded && ort_ready {
         let model_path = model_mgr.model_path(model);
-        if !model_mgr.is_downloaded(model) {
-            tracing::warn!(
-                "Model {} not downloaded. Run `voitex models --download {}` first.",
-                model.name(),
-                model.name()
-            );
+        let path_str = model_path
+            .to_str()
+            .context("Invalid model path (non-UTF-8)")?;
+
+        let result = match model.backend() {
+            Backend::Whisper => SttEngine::new_whisper(path_str, 0),
+            Backend::Parakeet => SttEngine::new_parakeet(path_str),
+        };
+
+        match result {
+            Ok(e) => Some(e),
+            Err(e) => {
+                tracing::error!("Failed to initialize STT engine: {}", e);
+                None
+            }
         }
-
-        let engine = voitex_core::stt::engine::SttEngine::new(
-            model_path.to_str().expect("Invalid model path"),
-            0,
-        )
-        .expect("Failed to initialize STT engine");
-
-        let audio = audio_worker::Handle::spawn();
-
-        AppState {
-            audio,
-            engine,
-            recording: Mutex::new(false),
-            settings: Mutex::new(settings),
-        }
+    } else {
+        tracing::info!(
+            "Model {} not ready, will auto-download on startup",
+            model.name()
+        );
+        None
     };
 
-    #[cfg(not(feature = "full"))]
+    // Need to auto-download if model or runtime is missing
+    let need_auto_download = !model_already_downloaded || !ort_ready;
+
+    let engine = Arc::new(Mutex::new(engine));
+    let audio = audio_worker::Handle::spawn();
+
+    let hotkey_str = settings.hotkey.clone();
+
     let app_state = AppState {
+        audio,
+        engine: Arc::clone(&engine),
         recording: Mutex::new(false),
         settings: Mutex::new(settings),
     };
 
     tauri::Builder::default()
+        .plugin(
+            tauri_plugin_global_shortcut::Builder::new()
+                .with_handler(move |app, _shortcut, event| {
+                    handle_hotkey_event(app, event.state);
+                })
+                .build(),
+        )
         .manage(app_state)
         .invoke_handler(tauri::generate_handler![
             get_status,
-            start_listening,
-            stop_listening,
+            toggle_recording,
             get_config,
+            download_model,
+            list_models,
+            change_model,
         ])
-        .setup(|app| {
+        .setup(move |app| {
             let show_i = MenuItem::with_id(app, "show", "Show", true, None::<&str>)?;
             let quit_i = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
             let menu = Menu::with_items(app, &[&show_i, &quit_i])?;
 
+            let icon = app.default_window_icon().cloned().unwrap_or_else(|| {
+                tracing::warn!("No default window icon found, using fallback");
+                fallback_icon()
+            });
+
             let _tray = TrayIconBuilder::new()
-                .icon(app.default_window_icon().cloned().unwrap())
+                .icon(icon)
                 .menu(&menu)
                 .show_menu_on_left_click(false)
                 .tooltip("Voitex - Voice to Text")
@@ -284,9 +952,32 @@ pub fn run() {
                 })
                 .build(app)?;
 
+            // Register global hotkey (toggle mode)
+            let shortcut: tauri_plugin_global_shortcut::Shortcut = hotkey_str
+                .parse()
+                .map_err(|e| anyhow::anyhow!("Failed to parse hotkey '{}': {:?}", hotkey_str, e))?;
+
+            // Unregister first in case a previous instance left it registered
+            // (e.g. after a force-kill that skipped cleanup)
+            let _ = app.global_shortcut().unregister(shortcut);
+
+            app.global_shortcut().register(shortcut).map_err(|e| {
+                anyhow::anyhow!("Failed to register hotkey '{}': {:?}", hotkey_str, e)
+            })?;
+
+            tracing::info!("Registered global hotkey: {}", hotkey_str);
+
+            // Auto-download model (and ORT runtime if needed) if not ready
+            if need_auto_download {
+                let engine_ref = Arc::clone(&engine);
+                spawn_download_and_init(app.handle().clone(), engine_ref, model);
+            }
+
             tracing::info!("Voitex app started");
             Ok(())
         })
         .run(tauri::generate_context!())
-        .expect("error while running Voitex");
+        .context("error while running Voitex")?;
+
+    Ok(())
 }

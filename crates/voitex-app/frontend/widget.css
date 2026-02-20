@@ -1,0 +1,141 @@
+/* ─── Widget Variables ───────────────────────────────────────────────────── */
+:root {
+  --color-idle: #4a9eff;
+  --color-record: #e53e3e;
+  --color-processing: #d97706;
+  --color-text: #e8eaf0;
+  --color-text-muted: #9ca3af;
+  --widget-bg: rgba(26, 29, 39, 0.85);
+  --widget-border: rgba(255, 255, 255, 0.08);
+}
+
+/* ─── Keyframes ─────────────────────────────────────────────────────────── */
+@keyframes pulse-ring {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(229, 62, 62, 0.4); }
+  50%      { box-shadow: 0 0 0 6px rgba(229, 62, 62, 0); }
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+
+/* ─── Reset ─────────────────────────────────────────────────────────────── */
+*, *::before, *::after {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html, body {
+  background: transparent;
+  overflow: hidden;
+  user-select: none;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+
+/* ─── Widget Pill ───────────────────────────────────────────────────────── */
+.widget {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 120px;
+  height: 48px;
+  padding: 6px 12px 6px 6px;
+  border-radius: 24px;
+  background: var(--widget-bg);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid var(--widget-border);
+  cursor: grab;
+  transition: border-color 0.25s ease, background 0.25s ease;
+}
+
+.widget:active {
+  cursor: grabbing;
+}
+
+/* ─── Mic Button ────────────────────────────────────────────────────────── */
+.widget__btn {
+  flex-shrink: 0;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  border: 2px solid var(--color-idle);
+  background: rgba(74, 158, 255, 0.1);
+  color: var(--color-idle);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: border-color 0.2s, background 0.2s, color 0.2s;
+}
+
+.widget__btn:focus-visible {
+  outline: 2px solid var(--color-idle);
+  outline-offset: 2px;
+}
+
+.widget__icon {
+  width: 18px;
+  height: 18px;
+  pointer-events: none;
+}
+
+/* ─── Label ─────────────────────────────────────────────────────────────── */
+.widget__label {
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--color-text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  transition: color 0.2s;
+}
+
+/* ─── States ────────────────────────────────────────────────────────────── */
+
+/* Idle */
+.widget--idle .widget__btn {
+  border-color: var(--color-idle);
+  background: rgba(74, 158, 255, 0.1);
+  color: var(--color-idle);
+}
+
+.widget--idle .widget__label {
+  color: var(--color-text-muted);
+}
+
+/* Recording */
+.widget--recording {
+  border-color: rgba(229, 62, 62, 0.3);
+}
+
+.widget--recording .widget__btn {
+  border-color: var(--color-record);
+  background: rgba(229, 62, 62, 0.15);
+  color: var(--color-record);
+  animation: pulse-ring 1.5s ease-in-out infinite;
+}
+
+.widget--recording .widget__label {
+  color: var(--color-record);
+}
+
+/* Processing */
+.widget--processing {
+  border-color: rgba(217, 119, 6, 0.3);
+}
+
+.widget--processing .widget__btn {
+  border-color: var(--color-processing);
+  background: rgba(217, 119, 6, 0.1);
+  color: var(--color-processing);
+  animation: none;
+}
+
+.widget--processing .widget__label {
+  color: var(--color-processing);
+}

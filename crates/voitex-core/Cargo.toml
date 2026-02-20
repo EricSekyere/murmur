@@ -8,14 +8,16 @@ description = "Core library for Voitex voice-to-text tool"
 
 [features]
 default = ["audio", "keyboard"]
-# Enable all features (requires cmake + libclang for whisper.cpp, ONNX Runtime for VAD)
-full = ["audio", "stt", "vad", "keyboard"]
+# Enable all features (requires cmake + libclang for whisper.cpp, ONNX Runtime for VAD + Parakeet)
+full = ["audio", "stt", "vad", "keyboard", "parakeet"]
 # Audio capture via CPAL
 audio = ["dep:cpal"]
 # Speech-to-text via whisper.cpp (requires cmake + libclang)
 stt = ["dep:whisper-rs"]
 # Voice activity detection via ONNX Runtime
-vad = ["dep:ort"]
+vad = ["dep:ort", "dep:zip", "dep:flate2", "dep:tar"]
+# Parakeet STT backend via ONNX Runtime (also needs ort directly for init_from)
+parakeet = ["dep:parakeet-rs", "dep:ort", "dep:zip", "dep:flate2", "dep:tar"]
 # Keystroke simulation
 keyboard = ["dep:enigo"]
 
@@ -26,8 +28,18 @@ cpal = { version = "0.15", optional = true }
 # STT (optional — needs cmake + libclang to build whisper.cpp)
 whisper-rs = { version = "0.15", optional = true }
 
-# VAD (optional — needs ONNX Runtime)
-ort = { version = "2.0.0-rc.11", optional = true }
+# VAD (optional — needs ONNX Runtime, load-dynamic avoids MSVC STL version issues)
+ort = { version = "2.0.0-rc.11", optional = true, features = ["load-dynamic"] }
+
+# Parakeet STT (optional — uses ONNX Runtime)
+parakeet-rs = { workspace = true, optional = true, features = ["load-dynamic"] }
+
+# ZIP extraction (optional — for downloading ONNX Runtime DLL on Windows)
+zip = { workspace = true, optional = true }
+
+# TGZ extraction (optional — for downloading ONNX Runtime on macOS/Linux)
+flate2 = { workspace = true, optional = true }
+tar = { workspace = true, optional = true }
 
 # Output
 enigo = { version = "0.6", optional = true }

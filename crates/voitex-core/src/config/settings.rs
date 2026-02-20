@@ -1,5 +1,5 @@
 use crate::output::OutputMode;
-use crate::stt::models::WhisperModel;
+use crate::stt::models::SttModel;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -11,13 +11,13 @@ pub struct Settings {
     #[serde(default = "default_hotkey")]
     pub hotkey: String,
 
-    /// Which Whisper model to use.
+    /// Which STT model to use.
     #[serde(default = "default_model")]
-    pub model: WhisperModel,
+    pub model: SttModel,
 
     /// How to output transcribed text.
-    #[serde(default = "default_output_mode")]
-    pub output_mode: OutputModeSetting,
+    #[serde(default)]
+    pub output_mode: OutputMode,
 
     /// VAD speech probability threshold (0.0 - 1.0).
     #[serde(default = "default_vad_threshold")]
@@ -26,45 +26,54 @@ pub struct Settings {
     /// Preferred audio input device name (None = system default).
     #[serde(default)]
     pub audio_device: Option<String>,
-}
 
-/// Serializable output mode (serde-friendly version of OutputMode).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum OutputModeSetting {
-    Keyboard,
-    Clipboard,
-    Stdout,
-}
+    /// RMS threshold below which audio is considered silence (0.0 - 1.0).
+    #[serde(default = "default_silence_rms_threshold")]
+    pub silence_rms_threshold: f32,
 
-impl From<OutputModeSetting> for OutputMode {
-    fn from(s: OutputModeSetting) -> Self {
-        match s {
-            OutputModeSetting::Keyboard => OutputMode::Keyboard,
-            OutputModeSetting::Clipboard => OutputMode::Clipboard,
-            OutputModeSetting::Stdout => OutputMode::Stdout,
-        }
-    }
+    /// Seconds of silence after speech before auto-stop triggers.
+    #[serde(default = "default_silence_timeout_secs")]
+    pub silence_timeout_secs: f32,
+
+    /// Seconds of silence pause that ends a phrase during streaming mode.
+    #[serde(default = "default_phrase_pause_secs")]
+    pub phrase_pause_secs: f32,
+
+    /// Seconds of total inactivity before a streaming session ends.
+    #[serde(default = "default_session_timeout_secs")]
+    pub session_timeout_secs: f32,
 }
 
 fn default_hotkey() -> String {
     if cfg!(target_os = "macos") {
         "super+shift+space".to_string()
     } else {
-        "ctrl+shift+space".to_string()
+        "f9".to_string()
     }
 }
 
-fn default_model() -> WhisperModel {
-    WhisperModel::SmallEn
-}
-
-fn default_output_mode() -> OutputModeSetting {
-    OutputModeSetting::Keyboard
+fn default_model() -> SttModel {
+    SttModel::WhisperSmallEn
 }
 
 fn default_vad_threshold() -> f32 {
     0.5
+}
+
+fn default_silence_rms_threshold() -> f32 {
+    0.0 // 0.0 = auto-calibrate from ambient noise
+}
+
+fn default_silence_timeout_secs() -> f32 {
+    2.5
+}
+
+fn default_phrase_pause_secs() -> f32 {
+    1.0
+}
+
+fn default_session_timeout_secs() -> f32 {
+    5.0
 }
 
 impl Default for Settings {
@@ -72,9 +81,13 @@ impl Default for Settings {
         Self {
             hotkey: default_hotkey(),
             model: default_model(),
-            output_mode: default_output_mode(),
+            output_mode: OutputMode::default(),
             vad_threshold: default_vad_threshold(),
             audio_device: None,
+            silence_rms_threshold: default_silence_rms_threshold(),
+            silence_timeout_secs: default_silence_timeout_secs(),
+            phrase_pause_secs: default_phrase_pause_secs(),
+            session_timeout_secs: default_session_timeout_secs(),
         }
     }
 }
@@ -98,7 +111,10 @@ impl Settings {
             tracing::info!("Loaded config from {}", path.display());
             Ok(settings)
         } else {
-            tracing::info!("No config file found, creating defaults at {}", path.display());
+            tracing::info!(
+                "No config file found, creating defaults at {}",
+                path.display()
+            );
             let settings = Self::default();
             settings.save(path)?;
             Ok(settings)
@@ -124,9 +140,47 @@ impl Settings {
                 self.vad_threshold
             );
         }
-        if self.hotkey.trim().is_empty() {
+
+        if !(0.0..=1.0).contains(&self.silence_rms_threshold) {
+            anyhow::bail!(
+                "silence_rms_threshold must be between 0.0 and 1.0, got {}",
+                self.silence_rms_threshold
+            );
+        }
+
+        if self.silence_timeout_secs <= 0.0 {
+            anyhow::bail!(
+                "silence_timeout_secs must be > 0.0, got {}",
+                self.silence_timeout_secs
+            );
+        }
+
+        if self.phrase_pause_secs <= 0.0 {
+            anyhow::bail!(
+                "phrase_pause_secs must be > 0.0, got {}",
+                self.phrase_pause_secs
+            );
+        }
+
+        if self.session_timeout_secs <= 0.0 {
+            anyhow::bail!(
+                "session_timeout_secs must be > 0.0, got {}",
+                self.session_timeout_secs
+            );
+        }
+
+        let hotkey = self.hotkey.trim();
+        if hotkey.is_empty() {
             anyhow::bail!("hotkey cannot be empty");
         }
+        if hotkey.contains('+') {
+            for part in hotkey.split('+') {
+                if part.trim().is_empty() {
+                    anyhow::bail!("hotkey has empty part in '{}'", hotkey);
+                }
+            }
+        }
+
         Ok(())
     }
 }

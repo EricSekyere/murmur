@@ -1,7 +1,6 @@
 use anyhow::{Context, Result};
 use global_hotkey::{
-    GlobalHotKeyEvent, GlobalHotKeyManager as GhkManager, HotKeyState,
-    hotkey::HotKey,
+    GlobalHotKeyEvent, GlobalHotKeyManager as GhkManager, HotKeyState, hotkey::HotKey,
 };
 use std::sync::mpsc;
 
@@ -66,5 +65,14 @@ impl HotkeyManager {
     /// Get the registered hotkey ID.
     pub fn hotkey_id(&self) -> u32 {
         self.hotkey.id()
+    }
+}
+
+impl Drop for HotkeyManager {
+    fn drop(&mut self) {
+        GlobalHotKeyEvent::set_event_handler(None::<fn(GlobalHotKeyEvent)>);
+        if let Err(e) = self._manager.unregister(self.hotkey) {
+            tracing::warn!("Failed to unregister hotkey on drop: {:?}", e);
+        }
     }
 }

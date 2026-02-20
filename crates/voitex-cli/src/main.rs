@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use voitex_core::config::Settings;
 use voitex_core::output::OutputMode;
-use voitex_core::stt::models::{ModelManager, WhisperModel};
+use voitex_core::stt::models::{Backend, ModelManager, SttModel};
 
 #[derive(Parser)]
 #[command(name = "voitex")]
@@ -25,7 +25,7 @@ enum Commands {
         #[arg(long)]
         clipboard: bool,
 
-        /// Whisper model to use (base-en, small-en, medium-en, large-v3-turbo).
+        /// STT model to use (e.g. whisper-small-en, parakeet-tdt-06b-v2).
         #[arg(long, short)]
         model: Option<String>,
     },
@@ -45,13 +45,13 @@ enum Commands {
         hotkey: Option<String>,
     },
 
-    /// Manage Whisper models.
+    /// Manage STT models.
     Models {
         /// List available and downloaded models.
         #[arg(long)]
         list: bool,
 
-        /// Download a model (base-en, small-en, medium-en, large-v3-turbo).
+        /// Download a model (e.g. whisper-small-en, parakeet-tdt-06b-v2).
         #[arg(long)]
         download: Option<String>,
     },
@@ -95,15 +95,17 @@ async fn cmd_listen(stdout: bool, clipboard: bool, model_name: Option<String>) -
     } else if clipboard {
         OutputMode::Clipboard
     } else {
-        settings.output_mode.into()
+        settings.output_mode
     };
 
     // Determine which model to use
     let model = match model_name {
-        Some(name) => WhisperModel::from_name(&name).ok_or_else(|| {
+        Some(name) => SttModel::from_name(&name).ok_or_else(|| {
+            let available: Vec<&str> = SttModel::all().iter().map(|m| m.id()).collect();
             anyhow::anyhow!(
-                "Unknown model '{}'. Available: base-en, small-en, medium-en, large-v3-turbo",
-                name
+                "Unknown model '{}'. Available: {}",
+                name,
+                available.join(", ")
             )
         })?,
         None => settings.model,
@@ -118,11 +120,16 @@ async fn cmd_listen(stdout: bool, clipboard: bool, model_name: Option<String>) -
 
     let model_path = model_mgr.model_path(model);
 
-    // Initialize STT engine
-    let stt_engine = voitex_core::stt::engine::SttEngine::new(
-        model_path.to_str().context("Invalid model path")?,
-        0, // auto-detect threads
-    )?;
+    // Initialize STT engine based on backend
+    let mut stt_engine = match model.backend() {
+        Backend::Whisper => voitex_core::stt::engine::SttEngine::new_whisper(
+            model_path.to_str().context("Invalid model path")?,
+            0,
+        )?,
+        Backend::Parakeet => voitex_core::stt::engine::SttEngine::new_parakeet(
+            model_path.to_str().context("Invalid model path")?,
+        )?,
+    };
 
     // Initialize audio capture
     let mut capture = voitex_core::audio::capture::AudioCapture::new()?;
@@ -228,24 +235,28 @@ async fn cmd_models(list: bool, download: Option<String>) -> Result<()> {
         let manager = ModelManager::new(dir);
         let downloaded = manager.list_downloaded();
 
-        for model in WhisperModel::all() {
+        for model in SttModel::all() {
             let status = if downloaded.contains(model) {
                 "downloaded"
             } else {
                 "not downloaded"
             };
             println!(
-                "  {} ({} MB) [{}]",
+                "  {} [{}] ({} MB) [{}] - {}",
                 model.name(),
+                model.backend(),
                 model.size_mb(),
-                status
+                status,
+                model.description()
             );
         }
     } else if let Some(model_name) = download {
-        let model = WhisperModel::from_name(&model_name).ok_or_else(|| {
+        let model = SttModel::from_name(&model_name).ok_or_else(|| {
+            let available: Vec<&str> = SttModel::all().iter().map(|m| m.id()).collect();
             anyhow::anyhow!(
-                "Unknown model '{}'. Available: base-en, small-en, medium-en, large-v3-turbo",
-                model_name
+                "Unknown model '{}'. Available: {}",
+                model_name,
+                available.join(", ")
             )
         })?;
         let dir = ModelManager::default_dir()?;

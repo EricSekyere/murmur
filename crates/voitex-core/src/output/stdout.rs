@@ -2,6 +2,7 @@ use anyhow::Result;
 use std::io::Write;
 
 /// Outputs text to stdout for CLI piping.
+#[derive(Default)]
 pub struct StdoutOutput;
 
 impl StdoutOutput {

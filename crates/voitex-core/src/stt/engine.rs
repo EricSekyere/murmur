@@ -1,6 +1,6 @@
-use anyhow::Result;
-#[cfg(feature = "stt")]
+#[cfg(any(feature = "stt", feature = "parakeet"))]
 use anyhow::Context;
+use anyhow::Result;
 use std::time::Instant;
 
 #[cfg(feature = "stt")]
@@ -27,21 +27,30 @@ pub struct Segment {
     pub end_cs: i64,
 }
 
-/// Whisper-based speech-to-text engine.
+/// Speech-to-text engine supporting multiple backends.
 pub struct SttEngine {
-    #[cfg(feature = "stt")]
-    ctx: WhisperContext,
-    #[cfg(feature = "stt")]
-    n_threads: i32,
+    inner: EngineInner,
     model_path: String,
 }
 
+enum EngineInner {
+    #[cfg(feature = "stt")]
+    Whisper { ctx: WhisperContext, n_threads: i32 },
+    #[cfg(feature = "parakeet")]
+    Parakeet {
+        engine: Box<parakeet_rs::ParakeetTDT>,
+    },
+    /// Stub backend when no STT features are enabled.
+    #[allow(dead_code)]
+    Stub,
+}
+
 impl SttEngine {
-    /// Create a new STT engine with the given model file.
+    /// Create a new STT engine with a Whisper model file.
     ///
     /// `n_threads` controls how many CPU threads to use for inference.
     /// Pass 0 to auto-detect (uses 4 or available cores, whichever is less).
-    pub fn new(model_path: &str, n_threads: i32) -> Result<Self> {
+    pub fn new_whisper(model_path: &str, n_threads: i32) -> Result<Self> {
         let n_threads = if n_threads <= 0 {
             std::thread::available_parallelism()
                 .map(|n| n.get().min(4) as i32)
@@ -54,34 +63,75 @@ impl SttEngine {
         {
             whisper_rs::install_logging_hooks();
 
-            let ctx = WhisperContext::new_with_params(model_path, WhisperContextParameters::default())
-                .context("Failed to load whisper model")?;
+            let ctx =
+                WhisperContext::new_with_params(model_path, WhisperContextParameters::default())
+                    .context("Failed to load whisper model")?;
 
             tracing::info!(
-                "STT engine loaded model: {} ({} threads)",
+                "Whisper engine loaded model: {} ({} threads)",
                 model_path,
                 n_threads
             );
 
             Ok(Self {
-                ctx,
+                inner: EngineInner::Whisper { ctx, n_threads },
                 model_path: model_path.to_string(),
-                n_threads,
             })
         }
 
         #[cfg(not(feature = "stt"))]
         {
             let _ = n_threads;
-            tracing::warn!("STT feature not enabled, engine is a no-op stub");
+            tracing::warn!("STT feature not enabled, whisper engine is a no-op stub");
             Ok(Self {
+                inner: EngineInner::Stub,
                 model_path: model_path.to_string(),
             })
         }
     }
 
+    /// Create a new STT engine with a Parakeet model directory.
+    ///
+    /// The directory must contain: encoder-model.onnx, decoder_joint-model.onnx, vocab.txt
+    ///
+    /// Automatically initializes the ONNX Runtime environment (loads DLL) on first call.
+    pub fn new_parakeet(model_dir: &str) -> Result<Self> {
+        #[cfg(feature = "parakeet")]
+        {
+            // Ensure ONNX Runtime DLL is loaded before creating any sessions
+            super::runtime::init_ort().context("Failed to initialize ONNX Runtime for Parakeet")?;
+
+            let engine = parakeet_rs::ParakeetTDT::from_pretrained(model_dir, None)
+                .map_err(|e| anyhow::anyhow!("Failed to load Parakeet model: {}", e))?;
+
+            tracing::info!("Parakeet engine loaded model from: {}", model_dir);
+
+            Ok(Self {
+                inner: EngineInner::Parakeet {
+                    engine: Box::new(engine),
+                },
+                model_path: model_dir.to_string(),
+            })
+        }
+
+        #[cfg(not(feature = "parakeet"))]
+        {
+            let _ = model_dir;
+            tracing::warn!("Parakeet feature not enabled, engine is a no-op stub");
+            Ok(Self {
+                inner: EngineInner::Stub,
+                model_path: model_dir.to_string(),
+            })
+        }
+    }
+
+    /// Backward-compatible constructor (delegates to new_whisper).
+    pub fn new(model_path: &str, n_threads: i32) -> Result<Self> {
+        Self::new_whisper(model_path, n_threads)
+    }
+
     /// Transcribe raw PCM audio samples (16kHz mono f32) to text.
-    pub fn transcribe(&self, samples: &[f32]) -> Result<TranscriptionResult> {
+    pub fn transcribe(&mut self, samples: &[f32]) -> Result<TranscriptionResult> {
         if samples.is_empty() {
             return Ok(TranscriptionResult {
                 text: String::new(),
@@ -92,71 +142,111 @@ impl SttEngine {
 
         let start = Instant::now();
 
-        #[cfg(feature = "stt")]
-        {
-            let mut state = self.ctx.create_state().context("Failed to create whisper state")?;
-
-            let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
-            params.set_n_threads(self.n_threads);
-            params.set_language(Some("en"));
-            params.set_translate(false);
-            params.set_print_special(false);
-            params.set_print_progress(false);
-            params.set_print_realtime(false);
-            params.set_print_timestamps(false);
-            params.set_single_segment(false);
-            params.set_no_timestamps(false);
-            params.set_suppress_blank(true);
-            params.set_suppress_nst(true);
-
-            state
-                .full(params, samples)
-                .map_err(|e| anyhow::anyhow!("Whisper transcription failed: {:?}", e))?;
-
-            let n_segments = state.full_n_segments();
-            let mut segments = Vec::new();
-            let mut full_text = String::new();
-
-            for i in 0..n_segments {
-                if let Some(seg) = state.get_segment(i) {
-                    let text = seg.to_str_lossy()
-                        .map_err(|e| anyhow::anyhow!("Failed to read segment text: {:?}", e))?
-                        .into_owned();
-
-                    segments.push(Segment {
-                        text: text.clone(),
-                        start_cs: seg.start_timestamp(),
-                        end_cs: seg.end_timestamp(),
-                    });
-                    full_text.push_str(&text);
-                }
+        match &mut self.inner {
+            #[cfg(feature = "stt")]
+            EngineInner::Whisper { ctx, n_threads } => {
+                Self::transcribe_whisper(ctx, *n_threads, samples, start)
             }
+            #[cfg(feature = "parakeet")]
+            EngineInner::Parakeet { engine } => Self::transcribe_parakeet(engine, samples, start),
+            EngineInner::Stub => {
+                tracing::warn!("No STT backend enabled, returning empty transcription");
+                Ok(TranscriptionResult {
+                    text: String::new(),
+                    processing_time_ms: start.elapsed().as_millis() as u64,
+                    segments: Vec::new(),
+                })
+            }
+        }
+    }
 
-            let elapsed = start.elapsed();
-            tracing::debug!(
-                "Transcribed {} samples in {}ms -> {} segments",
-                samples.len(),
-                elapsed.as_millis(),
-                segments.len()
-            );
+    #[cfg(feature = "stt")]
+    fn transcribe_whisper(
+        ctx: &WhisperContext,
+        n_threads: i32,
+        samples: &[f32],
+        start: Instant,
+    ) -> Result<TranscriptionResult> {
+        let mut state = ctx
+            .create_state()
+            .context("Failed to create whisper state")?;
 
-            Ok(TranscriptionResult {
-                text: full_text.trim().to_string(),
-                processing_time_ms: elapsed.as_millis() as u64,
-                segments,
-            })
+        let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
+        params.set_n_threads(n_threads);
+        params.set_language(Some("en"));
+        params.set_translate(false);
+        params.set_print_special(false);
+        params.set_print_progress(false);
+        params.set_print_realtime(false);
+        params.set_print_timestamps(false);
+        params.set_single_segment(false);
+        params.set_no_timestamps(false);
+        params.set_suppress_blank(true);
+        params.set_suppress_nst(true);
+
+        state
+            .full(params, samples)
+            .map_err(|e| anyhow::anyhow!("Whisper transcription failed: {:?}", e))?;
+
+        let n_segments = state.full_n_segments();
+        let mut segments = Vec::new();
+        let mut full_text = String::new();
+
+        for i in 0..n_segments {
+            if let Some(seg) = state.get_segment(i) {
+                let text = seg
+                    .to_str_lossy()
+                    .map_err(|e| anyhow::anyhow!("Failed to read segment text: {:?}", e))?
+                    .into_owned();
+
+                segments.push(Segment {
+                    text: text.clone(),
+                    start_cs: seg.start_timestamp(),
+                    end_cs: seg.end_timestamp(),
+                });
+                full_text.push_str(&text);
+            }
         }
 
-        #[cfg(not(feature = "stt"))]
-        {
-            let _ = samples;
-            tracing::warn!("STT feature not enabled, returning empty transcription");
-            Ok(TranscriptionResult {
-                text: String::new(),
-                processing_time_ms: start.elapsed().as_millis() as u64,
-                segments: Vec::new(),
-            })
-        }
+        let elapsed = start.elapsed();
+        tracing::debug!(
+            "Whisper transcribed {} samples in {}ms -> {} segments",
+            samples.len(),
+            elapsed.as_millis(),
+            segments.len()
+        );
+
+        Ok(TranscriptionResult {
+            text: full_text.trim().to_string(),
+            processing_time_ms: elapsed.as_millis() as u64,
+            segments,
+        })
+    }
+
+    #[cfg(feature = "parakeet")]
+    fn transcribe_parakeet(
+        engine: &mut parakeet_rs::ParakeetTDT,
+        samples: &[f32],
+        start: Instant,
+    ) -> Result<TranscriptionResult> {
+        use parakeet_rs::Transcriber;
+
+        let result = engine
+            .transcribe_samples(samples.to_vec(), 16000, 1, None)
+            .map_err(|e| anyhow::anyhow!("Parakeet transcription failed: {}", e))?;
+
+        let elapsed = start.elapsed();
+        tracing::debug!(
+            "Parakeet transcribed {} samples in {}ms",
+            samples.len(),
+            elapsed.as_millis(),
+        );
+
+        Ok(TranscriptionResult {
+            text: result.text.trim().to_string(),
+            processing_time_ms: elapsed.as_millis() as u64,
+            segments: Vec::new(),
+        })
     }
 
     /// Get the path to the loaded model.
