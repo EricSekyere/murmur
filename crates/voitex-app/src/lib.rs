@@ -626,20 +626,45 @@ async fn download_and_init_model(
 
 // ─── Output ──────────────────────────────────────────────────────────────────
 
-/// Output text by typing it directly into the focused application (streaming mode).
-/// Uses enigo.text() with a trailing space for word separation.
+/// Output text into the focused application via clipboard paste (streaming mode).
+///
+/// Saves the current clipboard, sets our text, simulates Ctrl+V, then restores
+/// the original clipboard. This works in terminals like Warp where simulated
+/// keystrokes are swallowed by the custom input editor.
 fn output_text_streaming(text: &str) -> anyhow::Result<()> {
-    use enigo::{Keyboard, Settings as EnigoSettings};
+    use enigo::{Direction, Key, Keyboard, Settings as EnigoSettings};
 
     let trimmed = text.trim();
     if trimmed.is_empty() {
         return Ok(());
     }
 
+    let mut clipboard =
+        arboard::Clipboard::new().context("Failed to open clipboard")?;
+    let prev = clipboard.get_text().ok();
+
+    let with_space = format!("{} ", trimmed);
+    clipboard
+        .set_text(&with_space)
+        .context("Failed to set clipboard text")?;
+
     let mut enigo =
         enigo::Enigo::new(&EnigoSettings::default()).context("Failed to create Enigo")?;
-    let with_space = format!("{} ", trimmed);
-    enigo.text(&with_space)?;
+
+    // Small delay to let clipboard settle
+    std::thread::sleep(std::time::Duration::from_millis(30));
+
+    // Ctrl+V paste
+    enigo.key(Key::Control, Direction::Press)?;
+    enigo.key(Key::Unicode('v'), Direction::Click)?;
+    enigo.key(Key::Control, Direction::Release)?;
+
+    // Small delay then restore previous clipboard
+    std::thread::sleep(std::time::Duration::from_millis(50));
+    if let Some(prev_text) = prev {
+        let _ = clipboard.set_text(&prev_text);
+    }
+
     Ok(())
 }
 
