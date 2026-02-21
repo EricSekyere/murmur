@@ -2,6 +2,10 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::Context;
+use murmur_core::config::Settings;
+use murmur_core::stt::engine::SttEngine;
+use murmur_core::stt::models::{Backend, ModelManager, SttModel};
+use murmur_core::stt::runtime;
 use tauri::Emitter;
 use tauri::{
     Manager, State,
@@ -10,20 +14,16 @@ use tauri::{
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
 };
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
-use voitex_core::config::Settings;
-use voitex_core::stt::engine::SttEngine;
-use voitex_core::stt::models::{Backend, ModelManager, SttModel};
-use voitex_core::stt::runtime;
 
 // --- Audio worker (runs AudioCapture on a dedicated thread with silence monitoring) ---
 
 mod audio_worker {
+    use murmur_core::audio::AudioBuffer;
+    use murmur_core::audio::capture::AudioCapture;
+    use murmur_core::audio::silence::{PhraseDetector, PhraseState, compute_rms, downmix_to_mono};
     use std::sync::Mutex;
     use std::sync::mpsc;
     use std::time::{Duration, Instant};
-    use voitex_core::audio::AudioBuffer;
-    use voitex_core::audio::capture::AudioCapture;
-    use voitex_core::audio::silence::{PhraseDetector, PhraseState, compute_rms, downmix_to_mono};
 
     enum Cmd {
         StartStreaming {
@@ -84,12 +84,17 @@ mod audio_worker {
                             let calibration_start = Instant::now();
                             let mut ambient_rms_samples = Vec::new();
 
-                            tracing::info!("Calibrating noise floor ({} ch, {}Hz)...", native_channels, native_rate);
+                            tracing::info!(
+                                "Calibrating noise floor ({} ch, {}Hz)...",
+                                native_channels,
+                                native_rate
+                            );
                             while calibration_start.elapsed() < calibration_duration {
                                 std::thread::sleep(Duration::from_millis(50));
                                 let buf = live_buf.lock().unwrap_or_else(|e| e.into_inner());
                                 if buf.len() > analyzed_up_to {
-                                    let mono = downmix_to_mono(&buf[analyzed_up_to..], native_channels);
+                                    let mono =
+                                        downmix_to_mono(&buf[analyzed_up_to..], native_channels);
                                     let chunk_rms = compute_rms(&mono);
                                     if chunk_rms > 0.0 {
                                         ambient_rms_samples.push(chunk_rms);
@@ -101,7 +106,8 @@ mod audio_worker {
                             let ambient_rms = if ambient_rms_samples.is_empty() {
                                 0.0
                             } else {
-                                ambient_rms_samples.iter().sum::<f32>() / ambient_rms_samples.len() as f32
+                                ambient_rms_samples.iter().sum::<f32>()
+                                    / ambient_rms_samples.len() as f32
                             };
 
                             // If config threshold > 0, use it directly; otherwise auto-calibrate
@@ -112,12 +118,21 @@ mod audio_worker {
                             };
                             tracing::info!(
                                 "Calibrated: ambient RMS = {:.6}, threshold = {:.6} (config = {:.6}, mode = {})",
-                                ambient_rms, calibrated_threshold, rms_threshold,
-                                if rms_threshold > 0.0 { "manual" } else { "auto" }
+                                ambient_rms,
+                                calibrated_threshold,
+                                rms_threshold,
+                                if rms_threshold > 0.0 {
+                                    "manual"
+                                } else {
+                                    "auto"
+                                }
                             );
 
-                            let mut detector =
-                                PhraseDetector::new(calibrated_threshold, phrase_pause, session_timeout);
+                            let mut detector = PhraseDetector::new(
+                                calibrated_threshold,
+                                phrase_pause,
+                                session_timeout,
+                            );
 
                             loop {
                                 // Check for manual Stop
@@ -151,7 +166,10 @@ mod audio_worker {
                                 let state = {
                                     let buf = live_buf.lock().unwrap_or_else(|e| e.into_inner());
                                     if buf.len() > analyzed_up_to {
-                                        let mono = downmix_to_mono(&buf[analyzed_up_to..], native_channels);
+                                        let mono = downmix_to_mono(
+                                            &buf[analyzed_up_to..],
+                                            native_channels,
+                                        );
                                         let st = detector.feed(&mono);
                                         analyzed_up_to = buf.len();
                                         st
@@ -639,8 +657,7 @@ fn output_text_streaming(text: &str) -> anyhow::Result<()> {
         return Ok(());
     }
 
-    let mut clipboard =
-        arboard::Clipboard::new().context("Failed to open clipboard")?;
+    let mut clipboard = arboard::Clipboard::new().context("Failed to open clipboard")?;
     let prev = clipboard.get_text().ok();
 
     let with_space = format!("{} ", trimmed);
@@ -671,8 +688,8 @@ fn output_text_streaming(text: &str) -> anyhow::Result<()> {
 /// Transcribe an audio buffer and return the text, or None if empty/error.
 fn transcribe_chunk(
     app: &tauri::AppHandle,
-    audio: &voitex_core::audio::AudioBuffer,
-) -> Option<String> {
+    audio: &murmur_core::audio::AudioBuffer,
+) -> Option<(String, u64)> {
     if audio.samples.is_empty() {
         return None;
     }
@@ -688,7 +705,7 @@ fn transcribe_chunk(
                 result.processing_time_ms,
                 result.text
             );
-            Some(result.text)
+            Some((result.text, result.processing_time_ms))
         }
         Ok(_) => None,
         Err(e) => {
@@ -786,9 +803,9 @@ fn streaming_worker(app: &tauri::AppHandle) {
                 // Brief "processing" flash while transcribing
                 emit_recording_state(app, true, true);
 
-                let text = transcribe_chunk(app, &audio);
+                let result = transcribe_chunk(app, &audio);
 
-                if let Some(ref text) = text {
+                if let Some((ref text, processing_time_ms)) = result {
                     if let Err(e) = output_text_streaming(text) {
                         tracing::error!("Failed to type streaming text: {}", e);
                         let _ = app.emit(
@@ -797,7 +814,7 @@ fn streaming_worker(app: &tauri::AppHandle) {
                         );
                     }
 
-                    let _ = app.emit("streaming-phrase", serde_json::json!({ "text": text }));
+                    let _ = app.emit("streaming-phrase", serde_json::json!({ "text": text, "processing_time_ms": processing_time_ms }));
                 }
 
                 // Back to "listening"
@@ -860,6 +877,7 @@ pub fn run() -> anyhow::Result<()> {
         )
         .init();
 
+    Settings::migrate_from_voitex();
     let config_path = Settings::default_path().context("Failed to determine config path")?;
     let settings = Settings::load(&config_path).context("Failed to load settings")?;
 
@@ -946,7 +964,7 @@ pub fn run() -> anyhow::Result<()> {
                 .icon(icon)
                 .menu(&menu)
                 .show_menu_on_left_click(false)
-                .tooltip("Voitex - Voice to Text")
+                .tooltip("Murmur - Voice to Text")
                 .on_menu_event(|app, event| match event.id.as_ref() {
                     "quit" => {
                         app.exit(0);
@@ -998,11 +1016,11 @@ pub fn run() -> anyhow::Result<()> {
                 spawn_download_and_init(app.handle().clone(), engine_ref, model);
             }
 
-            tracing::info!("Voitex app started");
+            tracing::info!("Murmur app started");
             Ok(())
         })
         .run(tauri::generate_context!())
-        .context("error while running Voitex")?;
+        .context("error while running Murmur")?;
 
     Ok(())
 }

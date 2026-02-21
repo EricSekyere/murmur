@@ -31,4 +31,4 @@ desktop.ini
 .env.local
 
 # Tauri
-/crates/voitex-app/gen/
+/crates/murmur-app/gen/

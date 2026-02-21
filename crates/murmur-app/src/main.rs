@@ -2,8 +2,8 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
-    if let Err(e) = voitex_app_lib::run() {
-        eprintln!("Voitex fatal error: {:#}", e);
+    if let Err(e) = murmur_app_lib::run() {
+        eprintln!("Murmur fatal error: {:#}", e);
         std::process::exit(1);
     }
 }

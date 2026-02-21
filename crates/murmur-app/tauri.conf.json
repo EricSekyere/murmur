@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Voitex",
+  "productName": "Murmur",
   "version": "0.1.0",
-  "identifier": "com.voitex.app",
+  "identifier": "com.murmur.app",
   "build": {
     "frontendDist": "./frontend"
   },
@@ -10,10 +10,10 @@
     "windows": [
       {
         "label": "main",
-        "title": "Voitex",
+        "title": "Murmur",
         "width": 420,
-        "height": 640,
-        "resizable": false,
+        "height": 720,
+        "resizable": true,
         "visible": false
       },
       {
@@ -36,7 +36,7 @@
     "trayIcon": {
       "iconPath": "icons/icon.png",
       "iconAsTemplate": true,
-      "tooltip": "Voitex - Voice to Text"
+      "tooltip": "Murmur - Voice to Text"
     },
     "security": {
       "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'"

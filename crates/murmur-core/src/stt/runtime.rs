@@ -62,7 +62,7 @@ fn download_url() -> String {
 pub fn ort_dir() -> Result<PathBuf> {
     let dir = dirs::data_dir()
         .ok_or_else(|| anyhow::anyhow!("Could not determine data directory"))?
-        .join("voitex")
+        .join("murmur")
         .join("onnxruntime");
     Ok(dir)
 }

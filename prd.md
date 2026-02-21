@@ -1,12 +1,12 @@
-# Voitex - Product Requirements Document
+# Murmur - Product Requirements Document
 
 ## 1.0 Executive Summary
 
-**Product Name:** Voitex
+**Product Name:** Murmur
 **Version:** 1.0 PRD
 **Date:** February 18, 2026
 
-**Objective:** Build an open-source, privacy-first, cross-platform voice-to-text desktop tool designed for developers and general users. Voitex will accurately transcribe technical jargon, integrate natively with AI coding agents (Cursor, Claude Code, Gemini, etc.), map spoken directory references to real file paths, and work equally well for non-coding tasks like documentation, email, and chat.
+**Objective:** Build an open-source, privacy-first, cross-platform voice-to-text desktop tool designed for developers and general users. Murmur will accurately transcribe technical jargon, integrate natively with AI coding agents (Cursor, Claude Code, Gemini, etc.), map spoken directory references to real file paths, and work equally well for non-coding tasks like documentation, email, and chat.
 
 **Problem Statement:**
 Current voice dictation tools fall into two camps: (1) General-purpose tools (macOS Dictation, Windows Speech Recognition) that mangle technical terms -- turning "async await" into "a sink a weight" and "kubectl" into "cube cuddle"; and (2) Developer-specific tools (Wispr Flow, SuperWhisper, Willow Voice) that are proprietary, subscription-based, and often macOS-only.
@@ -19,7 +19,7 @@ No open-source tool today offers:
 - Fully offline, local-first processing with zero cloud dependency
 
 **Value Proposition:**
-Voitex will enable developers to compose prompts for AI agents, write documentation, and communicate 3-4x faster than typing (150+ WPM speech vs 40 WPM average typing). It eliminates the context-switch tax of stopping to type, reduces RSI risk, and keeps proprietary code entirely on-device.
+Murmur will enable developers to compose prompts for AI agents, write documentation, and communicate 3-4x faster than typing (150+ WPM speech vs 40 WPM average typing). It eliminates the context-switch tax of stopping to type, reduces RSI risk, and keeps proprietary code entirely on-device.
 
 ---
 
@@ -37,9 +37,9 @@ Voitex will enable developers to compose prompts for AI agents, write documentat
 | **VS Code Speech** | Free extension | macOS, Windows, Linux | Yes | Low | VS Code only | Free | VS Code only, no code awareness |
 | **WhisperFlow (OSS)** | Library | Any (Python) | Yes | None | None (library only) | Free | Library only, no desktop app, no code awareness |
 
-### 2.2 Voitex Differentiation
+### 2.2 Murmur Differentiation
 
-| Capability | Wispr Flow | SuperWhisper | Talon | **Voitex** |
+| Capability | Wispr Flow | SuperWhisper | Talon | **Murmur** |
 |-----------|------------|--------------|-------|-----------|
 | Open source | No | No | No | **Yes** |
 | Windows + macOS | Yes | No | Yes | **Yes** |
@@ -100,7 +100,7 @@ Voitex will enable developers to compose prompts for AI agents, write documentat
 
 ```
 +------------------------------------------------------------------+
-|                        VOITEX CORE (Rust)                        |
+|                        MURMUR CORE (Rust)                        |
 |                                                                  |
 |  +------------------+    +------------------+    +-----------+   |
 |  | Audio Capture    |    | STT Engine       |    | Output    |   |
@@ -145,7 +145,7 @@ The previous PRD stated "Python is the unequivocal choice." **This is wrong for 
 | **ML ecosystem** | Far larger (PyTorch, HuggingFace) | Growing (ONNX Runtime, whisper-rs, candle) | **Python** |
 | **Prototyping speed** | Faster iteration | Slower iteration, stricter compiler | **Python** |
 
-**Decision:** Rust for the core engine (audio, VAD, STT, input simulation, CLI). Python only as an optional sidecar for experimental ML features. This matches the architecture of successful tools: SuperWhisper uses whisper.cpp (C++), Vibe uses Rust+Tauri+whisper-rs.
+**Decision:** Rust for the core engine (audio, VAD, STT, input simulation, CLI). Python only as an optional sidecar for experimental ML features. This matches the architecture of successful tools: SuperWhisper uses whisper.cpp (C++), Murmur uses Rust+Tauri+whisper-rs.
 
 ### 5.3 Core Technology Stack
 
@@ -204,24 +204,24 @@ The previous PRD stated "Python is the unequivocal choice." **This is wrong for 
 ### 5.4 Integration Architecture with Coding Agents
 
 #### Universal Method: OS-Level Input Simulation
-Works with **any** application. Voitex types characters into the focused window via `enigo`.
+Works with **any** application. Murmur types characters into the focused window via `enigo`.
 - **Pros:** Zero integration work per agent, universal
 - **Cons:** Focus-dependent, can't access agent context, timing sensitivity
 
 #### Cursor / VS Code: Extension API
-A lightweight VS Code extension that communicates with the Voitex core process via local WebSocket.
+A lightweight VS Code extension that communicates with the Murmur core process via local WebSocket.
 - Extension receives transcribed text and inserts it at cursor position
-- Extension provides workspace context (open file, project root) back to Voitex for directory mapping
+- Extension provides workspace context (open file, project root) back to Murmur for directory mapping
 - Can target specific UI elements (chat panel, editor, terminal)
 
 #### Claude Code: Multiple Strategies
-1. **stdin piping:** `voitex --stream | claude` -- pipe continuous transcription to Claude Code's stdin
-2. **MCP Server:** Voitex runs as an MCP (Model Context Protocol) server. Claude Code connects to it and can request voice input as a tool.
+1. **stdin piping:** `murmur --stream | claude` -- pipe continuous transcription to Claude Code's stdin
+2. **MCP Server:** Murmur runs as an MCP (Model Context Protocol) server. Claude Code connects to it and can request voice input as a tool.
 3. **OS-level simulation** as fallback
 
 #### Gemini / GLM / Other Agents
 - **Gemini Live API:** Direct audio streaming for real-time voice interaction (optional cloud mode)
-- **HTTP/WebSocket:** Voitex exposes a local API that any agent can connect to
+- **HTTP/WebSocket:** Murmur exposes a local API that any agent can connect to
 - **Clipboard + paste simulation** as universal fallback
 
 ```
@@ -239,7 +239,7 @@ Integration Priority:
 This is a key differentiator. The system works in three layers:
 
 **Layer 1 - Project Indexing:**
-On activation (or when the working directory changes), Voitex walks the project directory tree and builds an in-memory index of all files and directories. It uses `notify` (file watcher) to keep this index updated. `.gitignore` patterns are respected.
+On activation (or when the working directory changes), Murmur walks the project directory tree and builds an in-memory index of all files and directories. It uses `notify` (file watcher) to keep this index updated. `.gitignore` patterns are respected.
 
 **Layer 2 - Alias Resolution:**
 A configurable alias table maps common spoken forms to path segments:
@@ -266,7 +266,7 @@ Phonetic matching (Soundex/Metaphone) handles pronunciation variations.
 
 ### 5.6 Custom Vocabulary from Codebase
 
-Voitex uses tree-sitter to parse source files and extract:
+Murmur uses tree-sitter to parse source files and extract:
 - Function/method names
 - Class/struct names
 - Variable names (exported/public)
@@ -328,14 +328,14 @@ All dependencies must be compatible with **MIT or Apache 2.0**. No GPL dependenc
 - **Deliverable:** Speak -> text appears in any focused application
 
 #### Epic 1.4: CLI Interface
-- Build CLI with clap: `voitex listen`, `voitex config`, `voitex models`
+- Build CLI with clap: `murmur listen`, `murmur config`, `murmur models`
 - Implement `--stdout` mode for piping to other tools
 - Implement `--clipboard` mode for clipboard output
 - Add model management commands (download, list, select)
-- **Deliverable:** `voitex listen --stdout | claude` works
+- **Deliverable:** `murmur listen --stdout | claude` works
 
 #### Epic 1.5: Basic Config
-- TOML config file (~/.voitex/config.toml)
+- TOML config file (~/.murmur/config.toml)
 - Configurable: hotkey, model, output mode, audio device
 - **Deliverable:** User can customize basic settings
 
@@ -361,7 +361,7 @@ All dependencies must be compatible with **MIT or Apache 2.0**. No GPL dependenc
 
 #### Epic 2.2: Custom Vocabulary
 - Implement developer dictionary (500+ common programming terms)
-- Support user-defined terms in config (~/.voitex/vocabulary.json)
+- Support user-defined terms in config (~/.murmur/vocabulary.json)
 - Implement whisper.cpp prompt biasing with vocabulary terms
 - Add symbol expansion: "arrow function" -> "=>", "triple equals" -> "==="
 - **Deliverable:** "async await" never becomes "a sink a weight"
@@ -412,18 +412,18 @@ All dependencies must be compatible with **MIT or Apache 2.0**. No GPL dependenc
 - **Deliverable:** "go to source components header" -> `src/components/Header.tsx`
 
 #### Epic 3.2: VS Code / Cursor Extension
-- TypeScript extension that connects to Voitex core via local WebSocket
-- Provides workspace context to Voitex (project root, open files, active file)
+- TypeScript extension that connects to Murmur core via local WebSocket
+- Provides workspace context to Murmur (project root, open files, active file)
 - Inserts text at cursor position in editor
 - Targets Cursor AI chat panel when appropriate
-- Status bar indicator showing Voitex connection state
+- Status bar indicator showing Murmur connection state
 - **Deliverable:** Voice-to-Cursor with full project awareness
 
 #### Epic 3.3: Claude Code MCP Integration
-- Implement MCP server in Voitex (stdio transport)
+- Implement MCP server in Murmur (stdio transport)
 - Expose tools: `voice_listen` (start recording), `voice_transcribe` (return text)
 - Expose resources: `project_files` (file index), `voice_history` (recent transcriptions)
-- Claude Code config: `claude mcp add voitex -- voitex mcp-server`
+- Claude Code config: `claude mcp add murmur -- murmur mcp-server`
 - **Deliverable:** Claude Code can request voice input as a tool
 
 #### Epic 3.4: Advanced Code Formatting
@@ -434,7 +434,7 @@ All dependencies must be compatible with **MIT or Apache 2.0**. No GPL dependenc
 - **Deliverable:** Natural voice-to-code formatting
 
 #### Epic 3.5: Local WebSocket API
-- Voitex exposes `ws://localhost:PORT/voitex` for any agent to connect
+- Murmur exposes `ws://localhost:PORT/murmur` for any agent to connect
 - JSON message protocol: `{type: "transcription", text: "...", mode: "coding"}`
 - Enable integration with Gemini, GLM, or any tool that can open a WebSocket
 - **Deliverable:** Universal integration point for any AI agent
@@ -462,7 +462,7 @@ All dependencies must be compatible with **MIT or Apache 2.0**. No GPL dependenc
 #### Epic 4.2: Advanced VAD
 - Implement "continuous mode" (always listening, auto-segment by pauses)
 - Configurable silence threshold and segment duration
-- Wake word support ("Hey Voitex" -> start recording)
+- Wake word support ("Hey Murmur" -> start recording)
 - Background noise adaptation
 - **Deliverable:** Hands-free continuous dictation option
 
@@ -470,7 +470,7 @@ All dependencies must be compatible with **MIT or Apache 2.0**. No GPL dependenc
 - Enable Whisper multilingual models
 - Language auto-detection
 - Mixed-language support (English + code in any spoken language)
-- **Deliverable:** Non-English developers can use Voitex
+- **Deliverable:** Non-English developers can use Murmur
 
 #### Epic 4.4: Installer & Distribution
 - macOS: .dmg with code signing and notarization

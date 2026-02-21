@@ -1,11 +1,11 @@
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
-use voitex_core::config::Settings;
-use voitex_core::output::OutputMode;
-use voitex_core::stt::models::{Backend, ModelManager, SttModel};
+use murmur_core::config::Settings;
+use murmur_core::output::OutputMode;
+use murmur_core::stt::models::{Backend, ModelManager, SttModel};
 
 #[derive(Parser)]
-#[command(name = "voitex")]
+#[command(name = "murmur")]
 #[command(about = "Voice-to-text for developers", long_about = None)]
 #[command(version)]
 struct Cli {
@@ -66,6 +66,7 @@ async fn main() -> Result<()> {
         )
         .init();
 
+    murmur_core::config::Settings::migrate_from_voitex();
     let cli = Cli::parse();
 
     match cli.command {
@@ -122,24 +123,24 @@ async fn cmd_listen(stdout: bool, clipboard: bool, model_name: Option<String>) -
 
     // Initialize STT engine based on backend
     let mut stt_engine = match model.backend() {
-        Backend::Whisper => voitex_core::stt::engine::SttEngine::new_whisper(
+        Backend::Whisper => murmur_core::stt::engine::SttEngine::new_whisper(
             model_path.to_str().context("Invalid model path")?,
             0,
         )?,
-        Backend::Parakeet => voitex_core::stt::engine::SttEngine::new_parakeet(
+        Backend::Parakeet => murmur_core::stt::engine::SttEngine::new_parakeet(
             model_path.to_str().context("Invalid model path")?,
         )?,
     };
 
     // Initialize audio capture
-    let mut capture = voitex_core::audio::capture::AudioCapture::new()?;
+    let mut capture = murmur_core::audio::capture::AudioCapture::new()?;
 
     // Register global hotkey
-    let hotkey_mgr = voitex_core::hotkey::HotkeyManager::new(&settings.hotkey)?;
+    let hotkey_mgr = murmur_core::hotkey::HotkeyManager::new(&settings.hotkey)?;
     let hotkey_rx = hotkey_mgr.events();
 
     println!(
-        "Voitex listening (hotkey: {}, model: {}, output: {:?})",
+        "Murmur listening (hotkey: {}, model: {}, output: {:?})",
         settings.hotkey,
         model.name(),
         output_mode
@@ -152,12 +153,12 @@ async fn cmd_listen(stdout: bool, clipboard: bool, model_name: Option<String>) -
     // Main event loop
     loop {
         match hotkey_rx.recv() {
-            Ok(voitex_core::hotkey::HotkeyEvent::Pressed) => {
+            Ok(murmur_core::hotkey::HotkeyEvent::Pressed) => {
                 tracing::info!("Hotkey pressed — recording...");
                 println!("Recording...");
                 capture.start()?;
             }
-            Ok(voitex_core::hotkey::HotkeyEvent::Released) => {
+            Ok(murmur_core::hotkey::HotkeyEvent::Released) => {
                 tracing::info!("Hotkey released — transcribing...");
                 let audio = capture.stop()?;
 
@@ -194,14 +195,14 @@ async fn cmd_listen(stdout: bool, clipboard: bool, model_name: Option<String>) -
 fn output_text(text: &str, mode: OutputMode) -> Result<()> {
     match mode {
         OutputMode::Stdout => {
-            voitex_core::output::stdout::StdoutOutput::new().write(text)?;
+            murmur_core::output::stdout::StdoutOutput::new().write(text)?;
         }
         OutputMode::Clipboard => {
-            voitex_core::output::clipboard::ClipboardOutput::new()?.copy(text)?;
+            murmur_core::output::clipboard::ClipboardOutput::new()?.copy(text)?;
             println!("Copied to clipboard: {}", text);
         }
         OutputMode::Keyboard => {
-            voitex_core::output::keyboard::KeyboardOutput::new()?.type_text(text)?;
+            murmur_core::output::keyboard::KeyboardOutput::new()?.type_text(text)?;
         }
     }
     Ok(())

@@ -1,5 +1,5 @@
-# Voitex default configuration
-# Copy to ~/.voitex/config.toml (or %APPDATA%/voitex/config.toml on Windows) to customize.
+# Murmur default configuration
+# Copy to ~/.murmur/config.toml (or %APPDATA%/murmur/config.toml on Windows) to customize.
 
 # Global hotkey for push-to-talk.
 # macOS default: "super+shift+space"

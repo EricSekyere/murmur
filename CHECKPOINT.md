@@ -1,4 +1,4 @@
-# Voitex — Project Checkpoint
+# Murmur — Project Checkpoint
 
 **Date:** 2026-02-18
 **Phase:** 1 — Foundation (Hardened)
@@ -8,7 +8,7 @@
 ## Project Structure
 
 ```
-voitex/
+murmur/
 ├── Cargo.toml                  # Workspace root (3 crates)
 ├── CLAUDE.md                   # Project conventions + feature flags
 ├── .gitignore
@@ -17,7 +17,7 @@ voitex/
 ├── resources/icon.png          # Placeholder icon
 │
 ├── crates/
-│   ├── voitex-core/            # Shared library
+│   ├── murmur-core/            # Shared library
 │   │   └── src/
 │   │       ├── lib.rs          # Re-exports all modules
 │   │       ├── audio/
@@ -36,10 +36,10 @@ voitex/
 │   │       │   └── settings.rs # TOML config load/save with validation (hotkey format check)
 │   │       └── hotkey.rs       # Global hotkey with Drop cleanup
 │   │
-│   ├── voitex-cli/             # CLI binary ("voitex")
+│   ├── murmur-cli/             # CLI binary ("murmur")
 │   │   └── src/main.rs         # clap: listen, config, models (fully wired)
 │   │
-│   └── voitex-app/             # Tauri v2 desktop app
+│   └── murmur-app/             # Tauri v2 desktop app
 │       ├── tauri.conf.json     # Tray icon + popup window
 │       ├── capabilities/default.json
 │       ├── icons/              # PNG + ICO placeholders
@@ -62,9 +62,9 @@ voitex/
 | `cargo check --workspace`                          | Pass (0 warnings)    |
 | `cargo clippy --workspace`                         | Pass (0 warnings)    |
 | `cargo check --workspace --features full`          | Requires cmake/libclang |
-| `cargo run -p voitex-cli -- --help`                | Works                |
-| `cargo run -p voitex-cli -- config --show`         | Works                |
-| `cargo run -p voitex-cli -- models --list`         | Works                |
+| `cargo run -p murmur-cli -- --help`                | Works                |
+| `cargo run -p murmur-cli -- config --show`         | Works                |
+| `cargo run -p murmur-cli -- models --list`         | Works                |
 | Git                                                | Clean                |
 
 ---
@@ -110,7 +110,7 @@ voitex/
 
 ---
 
-## Feature Flags (voitex-core)
+## Feature Flags (murmur-core)
 
 | Feature    | Dependencies | Default | Status                              |
 |------------|-------------|---------|-------------------------------------|
@@ -133,7 +133,7 @@ voitex/
 
 ## Next Steps (Phase 2: Code Intelligence)
 
-1. End-to-end test with cmake/libclang: download model, run `voitex listen`, speak, verify output
+1. End-to-end test with cmake/libclang: download model, run `murmur listen`, speak, verify output
 2. Wire up Silero VAD (download ONNX model, integrate into capture pipeline)
 3. Voice commands (new line, code block, etc.)
 4. Custom vocabulary from codebase (tree-sitter)

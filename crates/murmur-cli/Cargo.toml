@@ -1,21 +1,21 @@
 [package]
-name = "voitex-cli"
+name = "murmur-cli"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
-description = "CLI interface for Voitex voice-to-text tool"
+description = "CLI interface for Murmur voice-to-text tool"
 
 [features]
 default = []
-full = ["voitex-core/full"]
+full = ["murmur-core/full"]
 
 [[bin]]
-name = "voitex"
+name = "murmur"
 path = "src/main.rs"
 
 [dependencies]
-voitex-core.workspace = true
+murmur-core.workspace = true
 clap = { version = "4", features = ["derive"] }
 toml.workspace = true
 tokio.workspace = true

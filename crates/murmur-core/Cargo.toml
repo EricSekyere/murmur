@@ -1,10 +1,10 @@
 [package]
-name = "voitex-core"
+name = "murmur-core"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
-description = "Core library for Voitex voice-to-text tool"
+description = "Core library for Murmur voice-to-text tool"
 
 [features]
 default = ["audio", "keyboard"]

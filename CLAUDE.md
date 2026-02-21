@@ -1,13 +1,13 @@
-# Voitex
+# Murmur
 
 Voice-to-text desktop tool for developers. See `prd.md` for full requirements, `CHECKPOINT.md` for current progress.
 
 ## Project Structure
 
 - **Cargo workspace** with three crates:
-  - `crates/voitex-core` — shared library (audio, STT, output, config, hotkeys)
-  - `crates/voitex-cli` — CLI binary using clap
-  - `crates/voitex-app` — Tauri v2 desktop app (system tray + popup)
+  - `crates/murmur-core` — shared library (audio, STT, output, config, hotkeys)
+  - `crates/murmur-cli` — CLI binary using clap
+  - `crates/murmur-app` — Tauri v2 desktop app (system tray + popup)
 
 ## Tech Stack
 
@@ -20,7 +20,7 @@ Voice-to-text desktop tool for developers. See `prd.md` for full requirements, `
 - global-hotkey for system-wide hotkeys
 - Targets: macOS (Apple Silicon + Intel) and Windows (x64)
 
-## Feature Flags (voitex-core)
+## Feature Flags (murmur-core)
 
 | Feature    | Dep        | Default | Notes                                |
 |------------|------------|---------|--------------------------------------|
@@ -39,10 +39,10 @@ Voice-to-text desktop tool for developers. See `prd.md` for full requirements, `
 
 ## Conventions
 
-- **Error handling:** `anyhow::Result` in binaries, `thiserror` in voitex-core
+- **Error handling:** `anyhow::Result` in binaries, `thiserror` in murmur-core
 - **Logging:** `tracing` crate only (not `println!` or `log`)
 - **Async:** tokio (multi-threaded)
-- **Config:** TOML via serde, stored in `dirs::config_dir()/voitex/`
+- **Config:** TOML via serde, stored in `dirs::config_dir()/murmur/`
 - **Licensing:** All deps must be MIT or Apache 2.0 (no GPL)
 - **Formatting:** `cargo fmt` before committing, `cargo clippy -- -D warnings` in CI
 - **No `unwrap()`/`expect()` in production code** — propagate with `?` and `.context()`
@@ -52,15 +52,15 @@ Voice-to-text desktop tool for developers. See `prd.md` for full requirements, `
 - **Single Responsibility:** Each module (`audio::capture`, `stt::engine`, etc.) has one purpose.
 - **Open/Closed:** Use traits (e.g., `OutputStrategy`) to extend behaviour without modifying existing code.
 - **Dependency Inversion:** High-level modules depend on abstractions (traits), not concrete types. Inject via constructors.
-- **DRY:** Share common logic in `voitex-core`. Prefer functions/generics over macros.
+- **DRY:** Share common logic in `murmur-core`. Prefer functions/generics over macros.
 - **KISS:** Prefer straightforward solutions. Avoid premature abstraction — wait until duplication actually appears.
 - **YAGNI:** Don't build for hypothetical futures. Feature flags keep heavy deps optional until needed.
 
 ## Coding Standards
 
 ### Error Handling
-- **voitex-core:** Define domain error enums with `thiserror`.
-- **voitex-cli / voitex-app:** Use `anyhow::Result`. Add context with `.context()` / `.with_context()`.
+- **murmur-core:** Define domain error enums with `thiserror`.
+- **murmur-cli / murmur-app:** Use `anyhow::Result`. Add context with `.context()` / `.with_context()`.
 - **No `unwrap()`/`expect()` in production code** (tests and truly unrecoverable panics excepted).
 
 ### Logging
@@ -98,8 +98,8 @@ Voice-to-text desktop tool for developers. See `prd.md` for full requirements, `
 ```
 cargo check --workspace                          # check default features
 cargo check --workspace --features full          # check with STT/VAD
-cargo run -p voitex-cli -- --help                # CLI help
-cargo run -p voitex-app                          # launch Tauri app
+cargo run -p murmur-cli -- --help                # CLI help
+cargo run -p murmur-app                          # launch Tauri app
 cargo fmt --all && cargo clippy --workspace      # lint
 ```
 

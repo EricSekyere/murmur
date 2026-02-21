@@ -218,11 +218,11 @@ impl ModelManager {
         Self { models_dir }
     }
 
-    /// Get the default models directory (data_dir/voitex/models/).
+    /// Get the default models directory (data_dir/murmur/models/).
     pub fn default_dir() -> Result<PathBuf> {
         let dir = dirs::data_dir()
             .ok_or_else(|| anyhow::anyhow!("Could not determine data directory"))?
-            .join("voitex")
+            .join("murmur")
             .join("models");
         Ok(dir)
     }

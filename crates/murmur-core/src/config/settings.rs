@@ -93,12 +93,39 @@ impl Default for Settings {
 }
 
 impl Settings {
-    /// Get the default config file path (~/.voitex/config.toml).
+    /// Get the default config file path (~/.murmur/config.toml).
     pub fn default_path() -> Result<PathBuf> {
         let dir = dirs::config_dir()
             .ok_or_else(|| anyhow::anyhow!("Could not determine config directory"))?
-            .join("voitex");
+            .join("murmur");
         Ok(dir.join("config.toml"))
+    }
+
+    /// Migrate config directory from legacy "voitex" name if it exists.
+    ///
+    /// If the old `voitex` config directory exists and the new `murmur` directory
+    /// does not, renames the directory so existing settings carry over seamlessly.
+    pub fn migrate_from_voitex() {
+        let Some(config_base) = dirs::config_dir() else {
+            return;
+        };
+        let old_dir = config_base.join("voitex");
+        let new_dir = config_base.join("murmur");
+        if old_dir.exists() && !new_dir.exists() {
+            match std::fs::rename(&old_dir, &new_dir) {
+                Ok(()) => tracing::info!(
+                    "Migrated config directory from {} to {}",
+                    old_dir.display(),
+                    new_dir.display()
+                ),
+                Err(e) => tracing::warn!(
+                    "Failed to migrate config directory from {} to {}: {}",
+                    old_dir.display(),
+                    new_dir.display(),
+                    e
+                ),
+            }
+        }
     }
 
     /// Load settings from a TOML file, falling back to defaults.
