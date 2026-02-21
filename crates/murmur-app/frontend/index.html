@@ -29,6 +29,7 @@
     <!-- Header -->
     <header>
       <h1>Murmur</h1>
+      <span id="dev-mode-badge" class="badge badge--dev" hidden>DEV</span>
       <span id="status-badge" class="badge badge--idle" role="status" aria-live="polite">Idle</span>
     </header>
 
@@ -178,6 +179,18 @@
         <div class="settings-group">
           <label class="settings-label">STT Model</label>
           <div id="model-list" class="model-list"></div>
+        </div>
+        <div class="settings-group settings-group--devmode">
+          <div class="settings-row">
+            <div class="settings-row__text">
+              <label class="settings-label" for="developer-mode-toggle">Developer Mode</label>
+              <span class="settings-hint">Post-processes transcription for programming: corrects tech terms, expands spoken symbols, removes fillers, and enables casing commands (camel, snake, pascal, kebab, upper).</span>
+            </div>
+            <label class="toggle-switch">
+              <input type="checkbox" id="developer-mode-toggle">
+              <span class="toggle-switch__slider"></span>
+            </label>
+          </div>
         </div>
       </div>
     </section>

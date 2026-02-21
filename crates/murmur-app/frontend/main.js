@@ -53,6 +53,8 @@ const settingsPanel     = document.getElementById('settings-panel');
 const modelList         = document.getElementById('model-list');
 const analyticsToggle   = document.getElementById('analytics-toggle');
 const analyticsPanel    = document.getElementById('analytics-panel');
+const devModeBadge      = document.getElementById('dev-mode-badge');
+const developerModeToggle = document.getElementById('developer-mode-toggle');
 
 // ─── State Machine ───────────────────────────────────────────────────────────
 const STATE_CONFIG = {
@@ -355,24 +357,29 @@ function showToast(message, type = 'success', durationMs = 3000) {
 listen('recording-state', (event) => {
   const { recording, processing } = event.payload;
   if (recording) {
-    transcriptionHandled = false;
-    // Clear previous transcription so old text doesn't persist
-    transcriptionOutput.innerHTML = '';
-    lastTranscription = '';
-    copyTranscription.disabled = true;
-    wordCount.hidden = true;
-    procTime.hidden = true;
-    currentSession = {
-      startTime: Date.now(),
-      endTime: null,
-      phraseCount: 0,
-      wordCount: 0,
-      phraseTimestamps: [],
-      processingTimes: [],
-    };
+    // Only reset UI on a fresh recording start — not on processing updates
+    // during streaming (which would clear accumulated transcription text).
+    if (uiState !== 'recording' && uiState !== 'processing') {
+      transcriptionHandled = false;
+      transcriptionOutput.innerHTML = '';
+      lastTranscription = '';
+      copyTranscription.disabled = true;
+      wordCount.hidden = true;
+      procTime.hidden = true;
+      currentSession = {
+        startTime: Date.now(),
+        endTime: null,
+        phraseCount: 0,
+        wordCount: 0,
+        phraseTimestamps: [],
+        processingTimes: [],
+      };
+      startDurationTimer();
+      startVisualization();
+    }
+    // Stay in 'recording' even during phrase processing so mic button
+    // remains clickable for the user to stop.
     applyState('recording');
-    startDurationTimer();
-    startVisualization();
   } else if (processing) {
     applyState('processing');
     stopDurationTimer();
@@ -472,12 +479,32 @@ historyToggle.addEventListener('click', () => {
 });
 
 // ─── Settings Toggle ─────────────────────────────────────────────────────────
-settingsToggle.addEventListener('click', () => {
+settingsToggle.addEventListener('click', async () => {
   const expanded = settingsToggle.getAttribute('aria-expanded') === 'true';
   settingsToggle.setAttribute('aria-expanded', String(!expanded));
   settingsPanel.hidden = expanded;
   if (!expanded) {
     loadModelList();
+    try {
+      const enabled = await invoke('get_developer_mode');
+      developerModeToggle.checked = enabled;
+      devModeBadge.hidden = !enabled;
+    } catch (err) {
+      console.error('Failed to get developer mode:', err);
+    }
+  }
+});
+
+// ─── Developer Mode Toggle ───────────────────────────────────────────────────
+developerModeToggle.addEventListener('change', async () => {
+  const enabled = developerModeToggle.checked;
+  try {
+    await invoke('set_developer_mode', { enabled });
+    devModeBadge.hidden = !enabled;
+    showToast(enabled ? 'Developer mode enabled' : 'Developer mode disabled', 'success');
+  } catch (err) {
+    developerModeToggle.checked = !enabled;
+    showToast(`Failed to set developer mode: ${err}`, 'error');
   }
 });
 
@@ -888,6 +915,10 @@ async function init() {
     }
     if (status.output_mode) {
       outputModeDisplay.textContent = status.output_mode;
+    }
+    if (status.developer_mode) {
+      developerModeToggle.checked = true;
+      devModeBadge.hidden = false;
     }
   } catch (err) {
     console.error('Failed to get status:', err);

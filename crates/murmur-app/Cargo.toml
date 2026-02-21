@@ -27,6 +27,4 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 anyhow.workspace = true
 tauri-plugin-global-shortcut = "2"
-enigo = "0.6"
-arboard = "3"
 rdev = "0.5"

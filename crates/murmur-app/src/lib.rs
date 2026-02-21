@@ -5,6 +5,7 @@ use anyhow::Context;
 use murmur_core::config::Settings;
 use murmur_core::stt::engine::SttEngine;
 use murmur_core::stt::models::{Backend, ModelManager, SttModel};
+use murmur_core::stt::postprocess::PostProcessor;
 use murmur_core::stt::runtime;
 use tauri::Emitter;
 use tauri::{
@@ -110,11 +111,14 @@ mod audio_worker {
                                     / ambient_rms_samples.len() as f32
                             };
 
-                            // If config threshold > 0, use it directly; otherwise auto-calibrate
+                            // If config threshold > 0, use it directly; otherwise auto-calibrate.
+                            // Multiplier of 1.5x above ambient keeps sensitivity high for
+                            // normal speech while filtering out background noise.
+                            // Cap at 0.015 so even in noisy rooms, regular speech is detected.
                             let calibrated_threshold = if rms_threshold > 0.0 {
                                 rms_threshold
                             } else {
-                                (ambient_rms * 3.0).max(0.0001)
+                                (ambient_rms * 1.5).clamp(0.0001, 0.015)
                             };
                             tracing::info!(
                                 "Calibrated: ambient RMS = {:.6}, threshold = {:.6} (config = {:.6}, mode = {})",
@@ -344,7 +348,20 @@ fn emit_recording_state(app: &tauri::AppHandle, recording: bool, processing: boo
 #[tauri::command]
 fn get_status(state: State<'_, AppState>) -> serde_json::Value {
     let recording = *state.recording.lock().unwrap_or_else(|e| e.into_inner());
-    let settings = state.settings.lock().unwrap_or_else(|e| e.into_inner());
+
+    // Read settings and drop the lock before acquiring engine lock
+    // to avoid ABBA deadlock with transcribe_chunk (which locks engine first).
+    let (model_name, model_id, hotkey, output_mode, developer_mode) = {
+        let settings = state.settings.lock().unwrap_or_else(|e| e.into_inner());
+        (
+            settings.model.name().to_string(),
+            settings.model.id().to_string(),
+            settings.hotkey.clone(),
+            settings.output_mode,
+            settings.developer_mode,
+        )
+    };
+
     let model_ready = state
         .engine
         .lock()
@@ -353,12 +370,13 @@ fn get_status(state: State<'_, AppState>) -> serde_json::Value {
 
     serde_json::json!({
         "recording": recording,
-        "model": settings.model.name(),
-        "model_id": settings.model.id(),
+        "model": model_name,
+        "model_id": model_id,
         "model_ready": model_ready,
         "mode": if recording { "listening" } else { "idle" },
-        "hotkey": settings.hotkey,
-        "output_mode": settings.output_mode,
+        "hotkey": hotkey,
+        "output_mode": output_mode,
+        "developer_mode": developer_mode,
     })
 }
 
@@ -472,6 +490,28 @@ async fn change_model(
     let engine_ref = Arc::clone(&state.engine);
     spawn_download_and_init(app, engine_ref, model);
 
+    Ok(())
+}
+
+/// Tauri command: get developer mode state.
+#[tauri::command]
+fn get_developer_mode(state: State<'_, AppState>) -> bool {
+    state
+        .settings
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .developer_mode
+}
+
+/// Tauri command: set developer mode on/off and persist to config.
+#[tauri::command]
+fn set_developer_mode(state: State<'_, AppState>, enabled: bool) -> Result<(), String> {
+    let mut settings = state.settings.lock().unwrap_or_else(|e| e.into_inner());
+    settings.developer_mode = enabled;
+    if let Ok(path) = Settings::default_path() {
+        settings.save(&path).map_err(|e| e.to_string())?;
+    }
+    tracing::info!("Developer mode {}", if enabled { "enabled" } else { "disabled" });
     Ok(())
 }
 
@@ -645,43 +685,34 @@ async fn download_and_init_model(
 
 // ─── Output ──────────────────────────────────────────────────────────────────
 
-/// Output text into the focused application via clipboard paste (streaming mode).
+/// Output transcribed text according to the configured output mode.
 ///
-/// Saves the current clipboard, sets our text, simulates Ctrl+V, then restores
-/// the original clipboard. This works in terminals like Warp where simulated
-/// keystrokes are swallowed by the custom input editor.
-fn output_text_streaming(text: &str) -> anyhow::Result<()> {
-    use enigo::{Direction, Key, Keyboard, Settings as EnigoSettings};
-
+/// - `Keyboard`: simulates keystrokes via enigo to type into the focused app.
+/// - `Clipboard`: copies text to the system clipboard (user pastes manually).
+/// - `Stdout`: no-op in the desktop app (text is emitted via events to the UI).
+fn output_text(text: &str, mode: murmur_core::output::OutputMode) -> anyhow::Result<()> {
     let trimmed = text.trim();
     if trimmed.is_empty() {
         return Ok(());
     }
 
-    let mut clipboard = arboard::Clipboard::new().context("Failed to open clipboard")?;
-    let prev = clipboard.get_text().ok();
-
-    let with_space = format!("{} ", trimmed);
-    clipboard
-        .set_text(&with_space)
-        .context("Failed to set clipboard text")?;
-
-    let mut enigo =
-        enigo::Enigo::new(&EnigoSettings::default()).context("Failed to create Enigo")?;
-
-    // Small delay to let clipboard settle
-    std::thread::sleep(std::time::Duration::from_millis(50));
-
-    // Ctrl+V paste
-    enigo.key(Key::Control, Direction::Press)?;
-    enigo.key(Key::Unicode('v'), Direction::Click)?;
-    enigo.key(Key::Control, Direction::Release)?;
-
-    // Wait for the target app to read the clipboard before restoring.
-    // Too short a delay causes the app to paste the old clipboard content.
-    std::thread::sleep(std::time::Duration::from_millis(250));
-    if let Some(prev_text) = prev {
-        let _ = clipboard.set_text(&prev_text);
+    match mode {
+        murmur_core::output::OutputMode::Keyboard => {
+            let mut kb = murmur_core::output::keyboard::KeyboardOutput::new()
+                .context("Failed to create keyboard output")?;
+            let with_space = format!("{} ", trimmed);
+            kb.type_text(&with_space)
+                .context("Failed to type text via keyboard")?;
+        }
+        murmur_core::output::OutputMode::Clipboard => {
+            let mut cb = murmur_core::output::clipboard::ClipboardOutput::new()
+                .context("Failed to open clipboard")?;
+            cb.copy(trimmed).context("Failed to copy text to clipboard")?;
+        }
+        murmur_core::output::OutputMode::Stdout => {
+            // In the desktop app, stdout output is a no-op.
+            // Text is delivered to the UI via the streaming-phrase event.
+        }
     }
 
     Ok(())
@@ -697,17 +728,40 @@ fn transcribe_chunk(
     }
 
     let state = app.state::<AppState>();
+
+    let developer_mode = state
+        .settings
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .developer_mode;
+
     let mut engine_guard = state.engine.lock().unwrap_or_else(|e| e.into_inner());
     let engine = engine_guard.as_mut()?;
 
     match engine.transcribe(&audio.samples) {
         Ok(result) if !result.text.is_empty() => {
-            tracing::info!(
-                "Phrase transcribed in {}ms: {}",
-                result.processing_time_ms,
+            let text = if developer_mode {
+                let processed = PostProcessor::process(&result.text);
+                tracing::info!(
+                    "Phrase transcribed in {}ms (dev mode): raw={:?} processed={:?}",
+                    result.processing_time_ms,
+                    result.text,
+                    processed
+                );
+                processed
+            } else {
+                tracing::info!(
+                    "Phrase transcribed in {}ms: {}",
+                    result.processing_time_ms,
+                    result.text
+                );
                 result.text
-            );
-            Some((result.text, result.processing_time_ms))
+            };
+            if text.is_empty() {
+                None
+            } else {
+                Some((text, result.processing_time_ms))
+            }
         }
         Ok(_) => None,
         Err(e) => {
@@ -786,12 +840,13 @@ fn handle_toggle(app: &tauri::AppHandle) {
 fn streaming_worker(app: &tauri::AppHandle) {
     let state = app.state::<AppState>();
 
-    let (rms_threshold, phrase_pause, session_timeout) = {
+    let (rms_threshold, phrase_pause, session_timeout, output_mode) = {
         let settings = state.settings.lock().unwrap_or_else(|e| e.into_inner());
         (
             settings.silence_rms_threshold,
             Duration::from_secs_f32(settings.phrase_pause_secs),
             Duration::from_secs_f32(settings.session_timeout_secs),
+            settings.output_mode,
         )
     };
 
@@ -814,17 +869,24 @@ fn streaming_worker(app: &tauri::AppHandle) {
     loop {
         match state.audio.recv_result() {
             Ok(audio_worker::AudioResult::PhraseReady(audio)) => {
+                tracing::info!(
+                    "Phrase ready: {} samples ({:.1}s of audio)",
+                    audio.samples.len(),
+                    audio.samples.len() as f32 / 16000.0
+                );
+
                 // Brief "processing" flash while transcribing
                 emit_recording_state(app, true, true);
 
                 let result = transcribe_chunk(app, &audio);
+                tracing::info!("Transcription result: {:?}", result.as_ref().map(|(t, ms)| (t.as_str(), ms)));
 
                 if let Some((ref text, processing_time_ms)) = result {
-                    if let Err(e) = output_text_streaming(text) {
-                        tracing::error!("Failed to type streaming text: {}", e);
+                    if let Err(e) = output_text(text, output_mode) {
+                        tracing::error!("Failed to output text: {}", e);
                         let _ = app.emit(
                             "hotkey-error",
-                            serde_json::json!({ "error": format!("Failed to type text: {}", e) }),
+                            serde_json::json!({ "error": format!("Failed to output text: {}", e) }),
                         );
                     }
 
@@ -974,6 +1036,8 @@ pub fn run() -> anyhow::Result<()> {
             download_model,
             list_models,
             change_model,
+            get_developer_mode,
+            set_developer_mode,
         ])
         .setup(move |app| {
             let show_i = MenuItem::with_id(app, "show", "Show", true, None::<&str>)?;

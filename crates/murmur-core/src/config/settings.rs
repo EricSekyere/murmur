@@ -42,6 +42,11 @@ pub struct Settings {
     /// Seconds of total inactivity before a streaming session ends.
     #[serde(default = "default_session_timeout_secs")]
     pub session_timeout_secs: f32,
+
+    /// Developer mode: post-processes transcription for programming terms,
+    /// symbols, filler removal, and casing formatters.
+    #[serde(default)]
+    pub developer_mode: bool,
 }
 
 fn default_hotkey() -> String {
@@ -88,6 +93,7 @@ impl Default for Settings {
             silence_timeout_secs: default_silence_timeout_secs(),
             phrase_pause_secs: default_phrase_pause_secs(),
             session_timeout_secs: default_session_timeout_secs(),
+            developer_mode: false,
         }
     }
 }
