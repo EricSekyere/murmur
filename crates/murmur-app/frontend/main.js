@@ -356,6 +356,12 @@ listen('recording-state', (event) => {
   const { recording, processing } = event.payload;
   if (recording) {
     transcriptionHandled = false;
+    // Clear previous transcription so old text doesn't persist
+    transcriptionOutput.innerHTML = '';
+    lastTranscription = '';
+    copyTranscription.disabled = true;
+    wordCount.hidden = true;
+    procTime.hidden = true;
     currentSession = {
       startTime: Date.now(),
       endTime: null,

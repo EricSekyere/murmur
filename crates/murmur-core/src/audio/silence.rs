@@ -173,7 +173,9 @@ impl PhraseDetector {
                 if is_speech {
                     self.state = PhraseState::InSpeech;
                     self.silence_start = None;
-                } else if self.last_speech.elapsed() >= self.session_timeout {
+                } else if !self.session_timeout.is_zero()
+                    && self.last_speech.elapsed() >= self.session_timeout
+                {
                     self.state = PhraseState::SessionTimeout;
                 }
             }

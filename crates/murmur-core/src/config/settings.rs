@@ -73,7 +73,7 @@ fn default_phrase_pause_secs() -> f32 {
 }
 
 fn default_session_timeout_secs() -> f32 {
-    5.0
+    0.0 // 0.0 = disabled (no auto-stop; recording ends via manual action only)
 }
 
 impl Default for Settings {
@@ -189,9 +189,9 @@ impl Settings {
             );
         }
 
-        if self.session_timeout_secs <= 0.0 {
+        if self.session_timeout_secs < 0.0 {
             anyhow::bail!(
-                "session_timeout_secs must be > 0.0, got {}",
+                "session_timeout_secs must be >= 0.0 (0 = disabled), got {}",
                 self.session_timeout_secs
             );
         }

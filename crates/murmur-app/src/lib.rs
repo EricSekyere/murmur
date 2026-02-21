@@ -1,5 +1,5 @@
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::Context;
 use murmur_core::config::Settings;
@@ -292,6 +292,7 @@ struct AppState {
     engine: Arc<Mutex<Option<SttEngine>>>,
     recording: Mutex<bool>,
     settings: Mutex<Settings>,
+    last_toggle: Mutex<Instant>,
 }
 
 #[derive(serde::Serialize, Clone)]
@@ -669,15 +670,16 @@ fn output_text_streaming(text: &str) -> anyhow::Result<()> {
         enigo::Enigo::new(&EnigoSettings::default()).context("Failed to create Enigo")?;
 
     // Small delay to let clipboard settle
-    std::thread::sleep(std::time::Duration::from_millis(30));
+    std::thread::sleep(std::time::Duration::from_millis(50));
 
     // Ctrl+V paste
     enigo.key(Key::Control, Direction::Press)?;
     enigo.key(Key::Unicode('v'), Direction::Click)?;
     enigo.key(Key::Control, Direction::Release)?;
 
-    // Small delay then restore previous clipboard
-    std::thread::sleep(std::time::Duration::from_millis(50));
+    // Wait for the target app to read the clipboard before restoring.
+    // Too short a delay causes the app to paste the old clipboard content.
+    std::thread::sleep(std::time::Duration::from_millis(250));
     if let Some(prev_text) = prev {
         let _ = clipboard.set_text(&prev_text);
     }
@@ -717,9 +719,21 @@ fn transcribe_chunk(
 
 // ─── Toggle Recording Logic ──────────────────────────────────────────────────
 
-/// Handle a recording toggle (start or stop). Called from hotkey and Tauri command.
+/// Handle a recording toggle (start or stop). Called from hotkey, Tauri command, and mouse-click listener.
+/// Includes debounce to prevent double-toggles when multiple input sources fire for the same action.
 fn handle_toggle(app: &tauri::AppHandle) {
     let state = app.state::<AppState>();
+
+    // Debounce: ignore toggles within 500ms of the last one
+    {
+        let mut last = state.last_toggle.lock().unwrap_or_else(|e| e.into_inner());
+        let now = Instant::now();
+        if now.duration_since(*last) < Duration::from_millis(500) {
+            return;
+        }
+        *last = now;
+    }
+
     let mut recording = state.recording.lock().unwrap_or_else(|e| e.into_inner());
 
     if *recording {
@@ -931,6 +945,7 @@ pub fn run() -> anyhow::Result<()> {
         engine: Arc::clone(&engine),
         recording: Mutex::new(false),
         settings: Mutex::new(settings),
+        last_toggle: Mutex::new(Instant::now() - Duration::from_secs(10)),
     };
 
     tauri::Builder::default()
@@ -942,6 +957,16 @@ pub fn run() -> anyhow::Result<()> {
                 .build(),
         )
         .manage(app_state)
+        .on_window_event(|window, event| {
+            // Hide the main window on close instead of destroying it,
+            // so it can be re-shown from the tray icon.
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event
+                && window.label() == "main"
+            {
+                api.prevent_close();
+                let _ = window.hide();
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             get_status,
             toggle_recording,
@@ -1015,6 +1040,29 @@ pub fn run() -> anyhow::Result<()> {
                 let engine_ref = Arc::clone(&engine);
                 spawn_download_and_init(app.handle().clone(), engine_ref, model);
             }
+
+            // Global mouse-click listener: any click stops an active recording session.
+            let app_for_mouse = app.handle().clone();
+            std::thread::spawn(move || {
+                if let Err(e) = rdev::listen(move |event| {
+                    if let rdev::EventType::ButtonPress(
+                        rdev::Button::Left | rdev::Button::Right | rdev::Button::Middle,
+                    ) = event.event_type
+                    {
+                        let state = app_for_mouse.state::<AppState>();
+                        let is_recording = state
+                            .recording
+                            .try_lock()
+                            .map(|g| *g)
+                            .unwrap_or(false);
+                        if is_recording {
+                            handle_toggle(&app_for_mouse);
+                        }
+                    }
+                }) {
+                    tracing::error!("Global mouse listener failed: {:?}", e);
+                }
+            });
 
             tracing::info!("Murmur app started");
             Ok(())
