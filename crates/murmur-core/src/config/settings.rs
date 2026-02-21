@@ -53,7 +53,7 @@ fn default_hotkey() -> String {
     if cfg!(target_os = "macos") {
         "super+shift+space".to_string()
     } else {
-        "f9".to_string()
+        "ctrl+q".to_string()
     }
 }
 

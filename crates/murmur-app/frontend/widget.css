@@ -1,18 +1,22 @@
-/* ─── Widget Variables ───────────────────────────────────────────────────── */
+/* ─── Fonts ─────────────────────────────────────────────────────────────── */
+@import url('https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600;700&display=swap');
+
+/* ─── Widget Variables ──────────────────────────────────────────────────── */
 :root {
-  --color-idle: #4a9eff;
-  --color-record: #e53e3e;
-  --color-processing: #d97706;
-  --color-text: #e8eaf0;
-  --color-text-muted: #9ca3af;
-  --widget-bg: rgba(26, 29, 39, 0.85);
+  --color-accent: #8b5cf6;
+  --color-record: #ef4444;
+  --color-processing: #f59e0b;
+  --color-text: #e2e4ec;
+  --color-text-muted: #8b90a0;
+  --widget-bg: rgba(14, 16, 24, 0.8);
   --widget-border: rgba(255, 255, 255, 0.08);
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 /* ─── Keyframes ─────────────────────────────────────────────────────────── */
-@keyframes pulse-ring {
-  0%, 100% { box-shadow: 0 0 0 0 rgba(229, 62, 62, 0.4); }
-  50%      { box-shadow: 0 0 0 6px rgba(229, 62, 62, 0); }
+@keyframes pulse-glow {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.35), 0 0 12px rgba(239, 68, 68, 0.15); }
+  50%      { box-shadow: 0 0 0 5px rgba(239, 68, 68, 0), 0 0 20px rgba(239, 68, 68, 0.25); }
 }
 
 @keyframes spin {
@@ -31,7 +35,8 @@ html, body {
   background: transparent;
   overflow: hidden;
   user-select: none;
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  font-family: "Instrument Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  -webkit-font-smoothing: antialiased;
 }
 
 /* ─── Widget Pill ───────────────────────────────────────────────────────── */
@@ -44,11 +49,12 @@ html, body {
   padding: 6px 12px 6px 6px;
   border-radius: 24px;
   background: var(--widget-bg);
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
   border: 1px solid var(--widget-border);
   cursor: grab;
-  transition: border-color 0.25s ease, background 0.25s ease;
+  transition: border-color 0.3s var(--ease-out), background 0.3s var(--ease-out), box-shadow 0.3s var(--ease-out);
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
 }
 
 .widget:active {
@@ -61,18 +67,18 @@ html, body {
   width: 36px;
   height: 36px;
   border-radius: 50%;
-  border: 2px solid var(--color-idle);
-  background: rgba(74, 158, 255, 0.1);
-  color: var(--color-idle);
+  border: 2px solid var(--color-accent);
+  background: rgba(139, 92, 246, 0.1);
+  color: var(--color-accent);
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: border-color 0.2s, background 0.2s, color 0.2s;
+  transition: border-color 0.2s, background 0.2s, color 0.2s, box-shadow 0.2s;
 }
 
 .widget__btn:focus-visible {
-  outline: 2px solid var(--color-idle);
+  outline: 2px solid var(--color-accent);
   outline-offset: 2px;
 }
 
@@ -84,24 +90,24 @@ html, body {
 
 /* ─── Label ─────────────────────────────────────────────────────────────── */
 .widget__label {
-  font-size: 0.72rem;
+  font-size: 0.7rem;
   font-weight: 600;
   text-transform: uppercase;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.06em;
   color: var(--color-text-muted);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  transition: color 0.2s;
+  transition: color 0.25s var(--ease-out);
 }
 
 /* ─── States ────────────────────────────────────────────────────────────── */
 
 /* Idle */
 .widget--idle .widget__btn {
-  border-color: var(--color-idle);
-  background: rgba(74, 158, 255, 0.1);
-  color: var(--color-idle);
+  border-color: var(--color-accent);
+  background: rgba(139, 92, 246, 0.1);
+  color: var(--color-accent);
 }
 
 .widget--idle .widget__label {
@@ -110,14 +116,15 @@ html, body {
 
 /* Recording */
 .widget--recording {
-  border-color: rgba(229, 62, 62, 0.3);
+  border-color: rgba(239, 68, 68, 0.25);
+  box-shadow: 0 4px 24px rgba(239, 68, 68, 0.15);
 }
 
 .widget--recording .widget__btn {
   border-color: var(--color-record);
-  background: rgba(229, 62, 62, 0.15);
+  background: rgba(239, 68, 68, 0.15);
   color: var(--color-record);
-  animation: pulse-ring 1.5s ease-in-out infinite;
+  animation: pulse-glow 1.6s ease-in-out infinite;
 }
 
 .widget--recording .widget__label {
@@ -126,12 +133,12 @@ html, body {
 
 /* Processing */
 .widget--processing {
-  border-color: rgba(217, 119, 6, 0.3);
+  border-color: rgba(245, 158, 11, 0.25);
 }
 
 .widget--processing .widget__btn {
   border-color: var(--color-processing);
-  background: rgba(217, 119, 6, 0.1);
+  background: rgba(245, 158, 11, 0.1);
   color: var(--color-processing);
   animation: none;
 }

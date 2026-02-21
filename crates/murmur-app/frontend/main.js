@@ -34,7 +34,7 @@ const statusBadge       = document.getElementById('status-badge');
 const micWrapper        = document.getElementById('mic-wrapper');
 const micBtn            = document.getElementById('mic-btn');
 const visualization     = document.getElementById('visualization');
-const waveformCanvas    = document.getElementById('waveform-canvas');
+const voiceBarsContainer = document.getElementById('voice-bars');
 const levelFill         = document.getElementById('level-fill');
 const durationDisplay   = document.getElementById('duration-display');
 const wordCount         = document.getElementById('word-count');
@@ -651,24 +651,33 @@ listen('model-changed', (event) => {
   }
 });
 
-// ─── Web Audio Visualization ─────────────────────────────────────────────────
-const canvasCtx = waveformCanvas.getContext('2d');
+// ─── Voice Bars Visualization ────────────────────────────────────────────────
+const NUM_BARS = 32;
+const BAR_HEIGHT_MAX = 48;
+let voiceBars = [];
 
-function drawIdleCanvas() {
-  const w = waveformCanvas.width;
-  const h = waveformCanvas.height;
-  canvasCtx.clearRect(0, 0, w, h);
-  canvasCtx.strokeStyle = 'rgba(90,98,112,0.4)';
-  canvasCtx.lineWidth = 1;
-  canvasCtx.beginPath();
-  canvasCtx.moveTo(0, h / 2);
-  canvasCtx.lineTo(w, h / 2);
-  canvasCtx.stroke();
+function createVoiceBars() {
+  voiceBarsContainer.innerHTML = '';
+  voiceBars = [];
+  for (let i = 0; i < NUM_BARS; i++) {
+    const bar = document.createElement('div');
+    bar.className = 'voice-bar';
+    voiceBarsContainer.appendChild(bar);
+    voiceBars.push(bar);
+  }
+}
+
+function resetVoiceBars() {
+  for (const bar of voiceBars) {
+    bar.style.height = '3px';
+  }
+  micWrapper.style.removeProperty('--audio-level');
 }
 
 async function startVisualization() {
   visualization.hidden = false;
-  drawIdleCanvas();
+  if (voiceBars.length === 0) createVoiceBars();
+  resetVoiceBars();
 
   try {
     if (!audioContext) {
@@ -691,7 +700,6 @@ async function startVisualization() {
     drawVisualization();
   } catch (err) {
     console.warn('Web Audio unavailable, visualization disabled:', err);
-    drawIdleCanvas();
   }
 }
 
@@ -711,7 +719,7 @@ function stopVisualization() {
   analyserNode = null;
   visualization.hidden = true;
   levelFill.style.width = '0%';
-  drawIdleCanvas();
+  resetVoiceBars();
 }
 
 function drawVisualization() {
@@ -719,29 +727,19 @@ function drawVisualization() {
 
   animationFrameHandle = requestAnimationFrame(drawVisualization);
 
-  const binCount = Math.min(64, analyserNode.frequencyBinCount);
   const freqData = new Uint8Array(analyserNode.frequencyBinCount);
   analyserNode.getByteFrequencyData(freqData);
 
-  const w = waveformCanvas.width;
-  const h = waveformCanvas.height;
-  const barWidth = Math.floor(w / binCount) - 1;
-
-  const bgColor = getComputedStyle(document.documentElement)
-    .getPropertyValue('--color-surface').trim() || '#1a1d27';
-  const barColor = getComputedStyle(document.documentElement)
-    .getPropertyValue('--color-record').trim() || '#e53e3e';
-
-  canvasCtx.fillStyle = bgColor;
-  canvasCtx.fillRect(0, 0, w, h);
-  canvasCtx.fillStyle = barColor;
-
-  for (let i = 0; i < binCount; i++) {
-    const barH = Math.floor((freqData[i] / 255) * h);
-    canvasCtx.fillRect(i * (barWidth + 1), h - barH, barWidth, barH);
+  // Map frequency bins to voice bars
+  const binCount = analyserNode.frequencyBinCount;
+  const step = Math.floor(binCount / NUM_BARS);
+  for (let i = 0; i < NUM_BARS; i++) {
+    const val = freqData[i * step] / 255;
+    const h = Math.max(3, val * BAR_HEIGHT_MAX);
+    voiceBars[i].style.height = `${h}px`;
   }
 
-  // RMS → level bar
+  // RMS for level bar + mic glow
   const timeData = new Uint8Array(analyserNode.fftSize);
   analyserNode.getByteTimeDomainData(timeData);
   let sumSq = 0;
@@ -750,7 +748,9 @@ function drawVisualization() {
     sumSq += v * v;
   }
   const rms = Math.sqrt(sumSq / timeData.length);
-  levelFill.style.width = `${Math.min(100, rms * 300).toFixed(1)}%`;
+  const level = Math.min(1, rms * 3);
+  levelFill.style.width = `${(level * 100).toFixed(1)}%`;
+  micWrapper.style.setProperty('--audio-level', level.toFixed(3));
 }
 
 // ─── Mic Button Click ────────────────────────────────────────────────────────
@@ -905,7 +905,7 @@ function renderAnalytics() {
 
 // ─── Initialize ──────────────────────────────────────────────────────────────
 async function init() {
-  drawIdleCanvas();
+  createVoiceBars();
   renderAnalytics();
   try {
     const status = await invoke('get_status');
