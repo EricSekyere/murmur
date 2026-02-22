@@ -56,6 +56,20 @@ const analyticsPanel    = document.getElementById('analytics-panel');
 const devModeBadge      = document.getElementById('dev-mode-badge');
 const developerModeToggle = document.getElementById('developer-mode-toggle');
 
+// Settings controls
+const hotkeyInput       = document.getElementById('hotkey-input');
+const hotkeySave        = document.getElementById('hotkey-save');
+const outputModeSelect  = document.getElementById('output-mode-select');
+const audioDeviceSelect = document.getElementById('audio-device-select');
+const phrasePauseRange  = document.getElementById('phrase-pause-range');
+const phrasePauseValue  = document.getElementById('phrase-pause-value');
+const sessionTimeoutRange = document.getElementById('session-timeout-range');
+const sessionTimeoutValue = document.getElementById('session-timeout-value');
+const clickToStopToggle = document.getElementById('click-to-stop-toggle');
+const showWidgetToggle  = document.getElementById('show-widget-toggle');
+const micQuality        = document.getElementById('mic-quality');
+const micQualityText    = document.getElementById('mic-quality-text');
+
 // ─── State Machine ───────────────────────────────────────────────────────────
 const STATE_CONFIG = {
   idle: {
@@ -485,12 +499,31 @@ settingsToggle.addEventListener('click', async () => {
   settingsPanel.hidden = expanded;
   if (!expanded) {
     loadModelList();
+    loadAudioDevices();
     try {
-      const enabled = await invoke('get_developer_mode');
-      developerModeToggle.checked = enabled;
-      devModeBadge.hidden = !enabled;
+      const status = await invoke('get_status');
+      if (status.hotkey) hotkeyInput.value = status.hotkey;
+      if (status.output_mode) outputModeSelect.value = status.output_mode;
+      if (status.phrase_pause_secs != null) {
+        phrasePauseRange.value = status.phrase_pause_secs;
+        phrasePauseValue.textContent = `${parseFloat(status.phrase_pause_secs).toFixed(1)}s`;
+      }
+      if (status.session_timeout_secs != null) {
+        sessionTimeoutRange.value = status.session_timeout_secs;
+        sessionTimeoutValue.textContent = `${status.session_timeout_secs}s`;
+      }
+      if (status.click_to_stop != null) {
+        clickToStopToggle.checked = status.click_to_stop;
+      }
+      if (status.show_widget != null) {
+        showWidgetToggle.checked = status.show_widget;
+      }
+      if (status.developer_mode) {
+        developerModeToggle.checked = true;
+        devModeBadge.hidden = false;
+      }
     } catch (err) {
-      console.error('Failed to get developer mode:', err);
+      console.error('Failed to get settings:', err);
     }
   }
 });
@@ -505,6 +538,136 @@ developerModeToggle.addEventListener('change', async () => {
   } catch (err) {
     developerModeToggle.checked = !enabled;
     showToast(`Failed to set developer mode: ${err}`, 'error');
+  }
+});
+
+// ─── Hotkey Capture ──────────────────────────────────────────────────────────
+let capturedHotkey = '';
+
+hotkeyInput.addEventListener('keydown', (e) => {
+  e.preventDefault();
+  const parts = [];
+  if (e.ctrlKey)  parts.push('ctrl');
+  if (e.altKey)   parts.push('alt');
+  if (e.shiftKey) parts.push('shift');
+  if (e.metaKey)  parts.push('super');
+
+  const key = e.key.toLowerCase();
+  // Ignore standalone modifier keys
+  if (['control', 'alt', 'shift', 'meta'].includes(key)) return;
+
+  parts.push(key === ' ' ? 'space' : key);
+  capturedHotkey = parts.join('+');
+  hotkeyInput.value = capturedHotkey;
+  hotkeySave.disabled = false;
+});
+
+hotkeySave.addEventListener('click', async () => {
+  if (!capturedHotkey) return;
+  hotkeySave.disabled = true;
+  try {
+    await invoke('update_settings', { hotkey: capturedHotkey });
+    hotkeyDisplay.textContent = capturedHotkey;
+    showToast('Hotkey updated', 'success');
+  } catch (err) {
+    showToast(`Hotkey failed: ${err}`, 'error');
+  }
+  capturedHotkey = '';
+});
+
+// ─── Output Mode ─────────────────────────────────────────────────────────────
+outputModeSelect.addEventListener('change', async () => {
+  const mode = outputModeSelect.value;
+  try {
+    await invoke('update_settings', { outputMode: mode });
+    outputModeDisplay.textContent = mode;
+    showToast(`Output: ${mode}`, 'success');
+  } catch (err) {
+    showToast(`Failed: ${err}`, 'error');
+  }
+});
+
+// ─── Audio Device ────────────────────────────────────────────────────────────
+async function loadAudioDevices() {
+  try {
+    const devices = await invoke('list_audio_devices');
+    audioDeviceSelect.innerHTML = '';
+    for (const d of devices) {
+      const opt = document.createElement('option');
+      opt.value = d;
+      opt.textContent = d;
+      audioDeviceSelect.appendChild(opt);
+    }
+  } catch (err) {
+    console.warn('Failed to list audio devices:', err);
+  }
+}
+
+// ─── Phrase Pause Slider ─────────────────────────────────────────────────────
+phrasePauseRange.addEventListener('input', () => {
+  phrasePauseValue.textContent = `${parseFloat(phrasePauseRange.value).toFixed(1)}s`;
+});
+
+phrasePauseRange.addEventListener('change', async () => {
+  const val = parseFloat(phrasePauseRange.value);
+  try {
+    await invoke('update_settings', { phrasePauseSecs: val });
+  } catch (err) {
+    showToast(`Failed: ${err}`, 'error');
+  }
+});
+
+// ─── Session Timeout Slider ──────────────────────────────────────────────────
+sessionTimeoutRange.addEventListener('input', () => {
+  sessionTimeoutValue.textContent = `${sessionTimeoutRange.value}s`;
+});
+
+sessionTimeoutRange.addEventListener('change', async () => {
+  const val = parseInt(sessionTimeoutRange.value, 10);
+  try {
+    await invoke('update_settings', { sessionTimeoutSecs: val });
+  } catch (err) {
+    showToast(`Failed: ${err}`, 'error');
+  }
+});
+
+// ─── Click to Stop Toggle ────────────────────────────────────────────────────
+clickToStopToggle.addEventListener('change', async () => {
+  const enabled = clickToStopToggle.checked;
+  try {
+    await invoke('update_settings', { clickToStop: enabled });
+  } catch (err) {
+    clickToStopToggle.checked = !enabled;
+    showToast(`Failed: ${err}`, 'error');
+  }
+});
+
+// ─── Show Widget Toggle ──────────────────────────────────────────────────────
+showWidgetToggle.addEventListener('change', async () => {
+  const visible = showWidgetToggle.checked;
+  try {
+    await invoke('set_widget_visible', { visible });
+  } catch (err) {
+    showWidgetToggle.checked = !visible;
+    showToast(`Failed: ${err}`, 'error');
+  }
+});
+
+// ─── Audio Level Events ──────────────────────────────────────────────────────
+listen('audio-level', (event) => {
+  const level = event.payload;
+  if (typeof level !== 'number') return;
+
+  micQuality.hidden = false;
+  if (level > 0.15) {
+    micQualityText.textContent = 'Good signal';
+    micQuality.className = 'mic-quality mic-quality--good';
+  } else if (level > 0.05) {
+    micQualityText.textContent = 'Fair signal';
+    micQuality.className = 'mic-quality mic-quality--fair';
+  } else {
+    micQualityText.textContent = 'Low signal';
+    micQuality.className = 'mic-quality mic-quality--low';
   }
 });
 
@@ -719,6 +882,7 @@ function stopVisualization() {
   analyserNode = null;
   visualization.hidden = true;
   levelFill.style.width = '0%';
+  micQuality.hidden = true;
   resetVoiceBars();
 }
 

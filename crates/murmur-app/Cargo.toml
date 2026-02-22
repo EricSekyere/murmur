@@ -28,3 +28,4 @@ tracing-subscriber.workspace = true
 anyhow.workspace = true
 tauri-plugin-global-shortcut = "2"
 rdev = "0.5"
+cpal = "0.15"

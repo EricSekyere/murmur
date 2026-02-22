@@ -67,6 +67,9 @@
           <div class="level-bar">
             <div id="level-fill"></div>
           </div>
+          <div class="mic-quality" id="mic-quality" hidden>
+            <span id="mic-quality-text">Listening...</span>
+          </div>
         </div>
 
         <!-- Session Stats -->
@@ -185,10 +188,111 @@
           </svg>
         </button>
         <div id="settings-panel" class="settings-panel" hidden>
+          <!-- Hotkey -->
+          <div class="settings-group">
+            <div class="settings-row">
+              <div class="settings-row__text">
+                <label class="settings-label" for="hotkey-input">Hotkey</label>
+                <span class="settings-hint">Press your desired key combo below.</span>
+              </div>
+              <div class="hotkey-capture">
+                <input type="text" id="hotkey-input" class="settings-input settings-input--hotkey" readonly placeholder="Press keys...">
+                <button id="hotkey-save" class="btn-small" disabled>Save</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Output Mode -->
+          <div class="settings-group">
+            <div class="settings-row">
+              <div class="settings-row__text">
+                <label class="settings-label">Output Mode</label>
+                <span class="settings-hint">How transcribed text is delivered.</span>
+              </div>
+              <select id="output-mode-select" class="settings-select">
+                <option value="keyboard">Keyboard</option>
+                <option value="clipboard">Clipboard</option>
+                <option value="stdout">Display Only</option>
+              </select>
+            </div>
+          </div>
+
+          <!-- Audio Device -->
+          <div class="settings-group">
+            <div class="settings-row">
+              <div class="settings-row__text">
+                <label class="settings-label">Audio Device</label>
+                <span class="settings-hint">Microphone input source.</span>
+              </div>
+              <select id="audio-device-select" class="settings-select">
+                <option value="">System Default</option>
+              </select>
+            </div>
+          </div>
+
+          <!-- Phrase Pause -->
+          <div class="settings-group">
+            <div class="settings-row">
+              <div class="settings-row__text">
+                <label class="settings-label" for="phrase-pause-range">Phrase Pause</label>
+                <span class="settings-hint">Silence duration that ends a phrase.</span>
+              </div>
+              <div class="settings-slider-wrap">
+                <input type="range" id="phrase-pause-range" min="0.5" max="5.0" step="0.1" value="1.8">
+                <span id="phrase-pause-value" class="settings-slider-val">1.8s</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Session Timeout -->
+          <div class="settings-group">
+            <div class="settings-row">
+              <div class="settings-row__text">
+                <label class="settings-label" for="session-timeout-range">Session Timeout</label>
+                <span class="settings-hint">Total silence before session auto-stops.</span>
+              </div>
+              <div class="settings-slider-wrap">
+                <input type="range" id="session-timeout-range" min="5" max="120" step="5" value="10">
+                <span id="session-timeout-value" class="settings-slider-val">10s</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Click to Stop -->
+          <div class="settings-group">
+            <div class="settings-row">
+              <div class="settings-row__text">
+                <label class="settings-label" for="click-to-stop-toggle">Click to Stop</label>
+                <span class="settings-hint">Stop recording on any mouse click.</span>
+              </div>
+              <label class="toggle-switch">
+                <input type="checkbox" id="click-to-stop-toggle">
+                <span class="toggle-switch__slider"></span>
+              </label>
+            </div>
+          </div>
+
+          <!-- Show Widget -->
+          <div class="settings-group">
+            <div class="settings-row">
+              <div class="settings-row__text">
+                <label class="settings-label" for="show-widget-toggle">Floating Widget</label>
+                <span class="settings-hint">Show the always-on-top mini control.</span>
+              </div>
+              <label class="toggle-switch">
+                <input type="checkbox" id="show-widget-toggle" checked>
+                <span class="toggle-switch__slider"></span>
+              </label>
+            </div>
+          </div>
+
+          <!-- STT Model -->
           <div class="settings-group">
             <label class="settings-label">STT Model</label>
             <div id="model-list" class="model-list"></div>
           </div>
+
+          <!-- Developer Mode -->
           <div class="settings-group settings-group--devmode">
             <div class="settings-row">
               <div class="settings-row__text">

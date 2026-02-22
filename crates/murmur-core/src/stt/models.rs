@@ -113,9 +113,20 @@ impl SttModel {
         match self {
             Self::WhisperBaseEn => "Fast, lower accuracy",
             Self::WhisperSmallEn => "Good balance of speed and accuracy",
-            Self::WhisperMediumEn => "Higher accuracy, slower",
-            Self::WhisperLargeV3Turbo => "Best Whisper accuracy, slowest",
-            Self::ParakeetTdt06bV2 => "Best accuracy, native punctuation",
+            Self::WhisperMediumEn => "Higher accuracy, slower. Needs 4 GB+ RAM",
+            Self::WhisperLargeV3Turbo => "Best Whisper accuracy, slowest. Needs 6 GB+ RAM",
+            Self::ParakeetTdt06bV2 => "Best accuracy, native punctuation & capitalization",
+        }
+    }
+
+    /// Estimated RAM usage during inference in MB.
+    pub fn ram_estimate_mb(&self) -> u32 {
+        match self {
+            Self::WhisperBaseEn => 400,
+            Self::WhisperSmallEn => 1000,
+            Self::WhisperMediumEn => 3500,
+            Self::WhisperLargeV3Turbo => 5000,
+            Self::ParakeetTdt06bV2 => 1500,
         }
     }
 

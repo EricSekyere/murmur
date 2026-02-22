@@ -47,6 +47,15 @@ pub struct Settings {
     /// symbols, filler removal, and casing formatters.
     #[serde(default)]
     pub developer_mode: bool,
+
+    /// Stop recording on any mouse click (default: false).
+    /// When disabled, recording only stops via hotkey or mic button.
+    #[serde(default)]
+    pub click_to_stop: bool,
+
+    /// Show the floating widget window (default: true).
+    #[serde(default = "default_true")]
+    pub show_widget: bool,
 }
 
 fn default_hotkey() -> String {
@@ -81,6 +90,10 @@ fn default_session_timeout_secs() -> f32 {
     10.0
 }
 
+fn default_true() -> bool {
+    true
+}
+
 impl Default for Settings {
     fn default() -> Self {
         Self {
@@ -94,6 +107,8 @@ impl Default for Settings {
             phrase_pause_secs: default_phrase_pause_secs(),
             session_timeout_secs: default_session_timeout_secs(),
             developer_mode: false,
+            click_to_stop: false,
+            show_widget: true,
         }
     }
 }

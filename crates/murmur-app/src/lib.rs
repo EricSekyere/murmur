@@ -39,6 +39,8 @@ mod audio_worker {
         Started,
         StartFailed(String),
         PhraseReady(AudioBuffer),
+        /// Periodic RMS level update (0.0 - 1.0 range, sent every ~200ms).
+        AudioLevel(f32),
         StreamingDone,
     }
 
@@ -78,7 +80,7 @@ mod audio_worker {
                             let native_rate = capture.native_rate();
                             let native_channels = capture.native_channels();
                             let mut analyzed_up_to = 0usize;
-                            let mut phrase_start_idx = 0usize;
+                            let mut phrase_start_idx: usize;
 
                             // ── Calibration phase: measure ambient noise ──
                             let calibration_duration = Duration::from_millis(800);
@@ -133,11 +135,16 @@ mod audio_worker {
                                 }
                             );
 
+                            // Start first phrase from post-calibration audio,
+                            // not from sample 0 (which includes calibration silence).
+                            phrase_start_idx = analyzed_up_to;
+
                             let mut detector = PhraseDetector::new(
                                 calibrated_threshold,
                                 phrase_pause,
                                 session_timeout,
                             );
+                            let mut level_tick: u32 = 0;
 
                             loop {
                                 // Check for manual Stop
@@ -168,20 +175,27 @@ mod audio_worker {
                                 }
 
                                 // Read new samples, downmix to mono, feed to phrase detector
-                                let state = {
+                                let (state, chunk_rms) = {
                                     let buf = live_buf.lock().unwrap_or_else(|e| e.into_inner());
                                     if buf.len() > analyzed_up_to {
                                         let mono = downmix_to_mono(
                                             &buf[analyzed_up_to..],
                                             native_channels,
                                         );
+                                        let rms = compute_rms(&mono);
                                         let st = detector.feed(&mono);
                                         analyzed_up_to = buf.len();
-                                        st
+                                        (st, rms)
                                     } else {
-                                        detector.state()
+                                        (detector.state(), 0.0)
                                     }
                                 };
+
+                                // Emit audio level every ~200ms (every 4th tick)
+                                level_tick += 1;
+                                if level_tick.is_multiple_of(4) {
+                                    let _ = result_tx.send(AudioResult::AudioLevel(chunk_rms));
+                                }
 
                                 match state {
                                     PhraseState::PhraseComplete => {
@@ -320,6 +334,7 @@ struct ModelInfo {
     name: String,
     backend: String,
     size_mb: u32,
+    ram_estimate_mb: u32,
     description: String,
     downloaded: bool,
     active: bool,
@@ -352,7 +367,17 @@ fn get_status(state: State<'_, AppState>) -> serde_json::Value {
 
     // Read settings and drop the lock before acquiring engine lock
     // to avoid ABBA deadlock with transcribe_chunk (which locks engine first).
-    let (model_name, model_id, hotkey, output_mode, developer_mode) = {
+    let (
+        model_name,
+        model_id,
+        hotkey,
+        output_mode,
+        developer_mode,
+        phrase_pause_secs,
+        session_timeout_secs,
+        click_to_stop,
+        show_widget,
+    ) = {
         let settings = state.settings.lock().unwrap_or_else(|e| e.into_inner());
         (
             settings.model.name().to_string(),
@@ -360,6 +385,10 @@ fn get_status(state: State<'_, AppState>) -> serde_json::Value {
             settings.hotkey.clone(),
             settings.output_mode,
             settings.developer_mode,
+            settings.phrase_pause_secs,
+            settings.session_timeout_secs,
+            settings.click_to_stop,
+            settings.show_widget,
         )
     };
 
@@ -378,6 +407,10 @@ fn get_status(state: State<'_, AppState>) -> serde_json::Value {
         "hotkey": hotkey,
         "output_mode": output_mode,
         "developer_mode": developer_mode,
+        "phrase_pause_secs": phrase_pause_secs,
+        "session_timeout_secs": session_timeout_secs,
+        "click_to_stop": click_to_stop,
+        "show_widget": show_widget,
     })
 }
 
@@ -431,6 +464,7 @@ fn list_models(state: State<'_, AppState>) -> Result<Vec<ModelInfo>, String> {
             name: model.name().to_string(),
             backend: model.backend().to_string(),
             size_mb: model.size_mb(),
+            ram_estimate_mb: model.ram_estimate_mb(),
             description: model.description().to_string(),
             downloaded: model_mgr.is_downloaded(*model),
             active: *model == active_model,
@@ -513,6 +547,151 @@ fn set_developer_mode(state: State<'_, AppState>, enabled: bool) -> Result<(), S
         settings.save(&path).map_err(|e| e.to_string())?;
     }
     tracing::info!("Developer mode {}", if enabled { "enabled" } else { "disabled" });
+    Ok(())
+}
+
+/// Tauri command: update one or more settings fields and persist to config.
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+fn update_settings(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    hotkey: Option<String>,
+    output_mode: Option<String>,
+    phrase_pause_secs: Option<f32>,
+    session_timeout_secs: Option<f32>,
+    click_to_stop: Option<bool>,
+    show_widget: Option<bool>,
+) -> Result<(), String> {
+    let mut settings = state.settings.lock().unwrap_or_else(|e| e.into_inner());
+
+    // Hotkey: validate, update, re-register
+    if let Some(ref new_hotkey) = hotkey {
+        let trimmed = new_hotkey.trim().to_string();
+        if trimmed.is_empty() {
+            return Err("Hotkey cannot be empty".to_string());
+        }
+        // Validate it parses before accepting
+        let new_shortcut: tauri_plugin_global_shortcut::Shortcut = trimmed
+            .parse()
+            .map_err(|e| format!("Invalid hotkey '{}': {:?}", trimmed, e))?;
+
+        // Unregister old, register new
+        if let Ok(old_shortcut) = settings.hotkey.parse::<tauri_plugin_global_shortcut::Shortcut>()
+        {
+            let _ = app.global_shortcut().unregister(old_shortcut);
+        }
+        app.global_shortcut()
+            .register(new_shortcut)
+            .map_err(|e| format!("Failed to register hotkey '{}': {:?}", trimmed, e))?;
+
+        settings.hotkey = trimmed;
+        tracing::info!("Hotkey updated to: {}", settings.hotkey);
+    }
+
+    if let Some(ref mode_str) = output_mode {
+        let mode = match mode_str.as_str() {
+            "clipboard" => murmur_core::output::OutputMode::Clipboard,
+            "keyboard" => murmur_core::output::OutputMode::Keyboard,
+            "stdout" => murmur_core::output::OutputMode::Stdout,
+            _ => return Err(format!("Unknown output mode: {}", mode_str)),
+        };
+        settings.output_mode = mode;
+        tracing::info!("Output mode updated to: {}", mode_str);
+    }
+
+    if let Some(pp) = phrase_pause_secs {
+        if !(0.3..=10.0).contains(&pp) {
+            return Err(format!(
+                "phrase_pause_secs must be between 0.3 and 10.0, got {}",
+                pp
+            ));
+        }
+        settings.phrase_pause_secs = pp;
+    }
+
+    if let Some(st) = session_timeout_secs {
+        if !(0.0..=300.0).contains(&st) {
+            return Err(format!(
+                "session_timeout_secs must be between 0 and 300, got {}",
+                st
+            ));
+        }
+        settings.session_timeout_secs = st;
+    }
+
+    if let Some(cts) = click_to_stop {
+        settings.click_to_stop = cts;
+    }
+
+    if let Some(sw) = show_widget {
+        settings.show_widget = sw;
+        // Show/hide widget window immediately
+        if let Some(widget) = app.get_webview_window("widget") {
+            if sw {
+                let _ = widget.show();
+            } else {
+                let _ = widget.hide();
+            }
+        }
+    }
+
+    if let Ok(path) = Settings::default_path() {
+        settings.save(&path).map_err(|e| e.to_string())?;
+    }
+
+    Ok(())
+}
+
+/// Tauri command: list available audio input devices.
+#[tauri::command]
+fn list_audio_devices() -> Result<Vec<String>, String> {
+    use cpal::traits::{DeviceTrait, HostTrait};
+    let host = cpal::default_host();
+    let mut names = Vec::new();
+
+    let default_name = host
+        .default_input_device()
+        .and_then(|d| d.name().ok())
+        .unwrap_or_default();
+
+    // Put default device first
+    if !default_name.is_empty() {
+        names.push(default_name.clone());
+    }
+
+    if let Ok(devices) = host.input_devices() {
+        for device in devices {
+            if let Ok(name) = device.name()
+                && name != default_name
+            {
+                names.push(name);
+            }
+        }
+    }
+
+    Ok(names)
+}
+
+/// Tauri command: toggle widget window visibility.
+#[tauri::command]
+fn set_widget_visible(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    visible: bool,
+) -> Result<(), String> {
+    if let Some(widget) = app.get_webview_window("widget") {
+        if visible {
+            let _ = widget.show();
+        } else {
+            let _ = widget.hide();
+        }
+    }
+    let mut settings = state.settings.lock().unwrap_or_else(|e| e.into_inner());
+    settings.show_widget = visible;
+    if let Ok(path) = Settings::default_path() {
+        let _ = settings.save(&path);
+    }
     Ok(())
 }
 
@@ -719,6 +898,77 @@ fn output_text(text: &str, mode: murmur_core::output::OutputMode) -> anyhow::Res
     Ok(())
 }
 
+/// Trim leading and trailing silence from audio samples.
+///
+/// Analyzes audio in 20ms non-overlapping frames, finds the first and last frames
+/// with RMS above a speech threshold, then returns a trimmed slice with a small
+/// pre-roll (200ms) and post-roll (300ms) for natural context.
+fn trim_silence(samples: &[f32], sample_rate: u32) -> Vec<f32> {
+    let frame_size = (sample_rate as usize * 20) / 1000; // 20ms frames
+    if samples.len() < frame_size {
+        return samples.to_vec();
+    }
+
+    const SPEECH_RMS: f32 = 0.005;
+    let num_frames = samples.len() / frame_size;
+
+    let mut first_speech = None;
+    let mut last_speech = None;
+
+    for i in 0..num_frames {
+        let start = i * frame_size;
+        let end = start + frame_size;
+        let frame = &samples[start..end];
+
+        let rms = (frame.iter().map(|s| s * s).sum::<f32>() / frame.len() as f32).sqrt();
+        if rms >= SPEECH_RMS {
+            if first_speech.is_none() {
+                first_speech = Some(i);
+            }
+            last_speech = Some(i);
+        }
+    }
+
+    let (Some(first), Some(last)) = (first_speech, last_speech) else {
+        return samples.to_vec();
+    };
+
+    // Pre-roll: 200ms before speech onset
+    let pre_roll_frames = (sample_rate as usize * 200) / (1000 * frame_size);
+    let start_frame = first.saturating_sub(pre_roll_frames);
+    let start_sample = start_frame * frame_size;
+
+    // Post-roll: 300ms after speech offset
+    let post_roll_frames = (sample_rate as usize * 300) / (1000 * frame_size);
+    let end_frame = (last + post_roll_frames + 1).min(num_frames);
+    let end_sample = (end_frame * frame_size).min(samples.len());
+
+    samples[start_sample..end_sample].to_vec()
+}
+
+/// Normalize very quiet audio so the STT engine can process it effectively.
+///
+/// If peak amplitude is below 0.1 (very quiet mic/distant speaker), scales all
+/// samples so the peak becomes 0.5. Otherwise leaves audio unchanged.
+fn normalize_peak(samples: &[f32]) -> Vec<f32> {
+    let peak = samples
+        .iter()
+        .map(|s| s.abs())
+        .fold(0.0_f32, f32::max);
+
+    if peak < 0.1 && peak > 0.0 {
+        let scale = 0.5 / peak;
+        tracing::debug!(
+            "Normalizing quiet audio: peak {:.4} -> 0.5 (scale {:.2}x)",
+            peak,
+            scale
+        );
+        samples.iter().map(|s| s * scale).collect()
+    } else {
+        samples.to_vec()
+    }
+}
+
 /// Transcribe an audio buffer and return the text, or None if empty/error.
 fn transcribe_chunk(
     app: &tauri::AppHandle,
@@ -730,12 +980,28 @@ fn transcribe_chunk(
 
     // Skip very short chunks that produce garbage/hallucinations
     const MIN_AUDIO_SECS: f32 = 0.5;
-    let duration_secs = audio.samples.len() as f32 / 16000.0;
-    if duration_secs < MIN_AUDIO_SECS {
+    let raw_duration_secs = audio.samples.len() as f32 / 16000.0;
+    if raw_duration_secs < MIN_AUDIO_SECS {
         tracing::debug!(
             "Skipping short audio chunk ({:.2}s < {:.1}s minimum)",
-            duration_secs,
+            raw_duration_secs,
             MIN_AUDIO_SECS
+        );
+        return None;
+    }
+
+    // Preprocessing: trim silence and normalize quiet audio
+    let processed = trim_silence(&audio.samples, 16_000);
+    let processed = normalize_peak(&processed);
+
+    // Re-check minimum length after trimming
+    let duration_secs = processed.len() as f32 / 16000.0;
+    if duration_secs < MIN_AUDIO_SECS {
+        tracing::debug!(
+            "Skipping chunk after trim ({:.2}s < {:.1}s minimum, was {:.2}s raw)",
+            duration_secs,
+            MIN_AUDIO_SECS,
+            raw_duration_secs
         );
         return None;
     }
@@ -762,9 +1028,13 @@ fn transcribe_chunk(
         "you",
         "the end",
         "so",
+        "subtitle",
+        "subtitles by",
+        "music",
+        "applause",
     ];
 
-    match engine.transcribe(&audio.samples) {
+    match engine.transcribe(&processed) {
         Ok(result) if !result.text.is_empty() => {
             let text = if developer_mode {
                 let processed = PostProcessor::process(&result.text);
@@ -790,7 +1060,29 @@ fn transcribe_chunk(
             // Filter known Whisper hallucinations
             let trimmed = text.trim().trim_end_matches('.').to_lowercase();
             if HALLUCINATIONS.contains(&trimmed.as_str()) {
-                tracing::debug!("Filtered hallucination: {:?}", text);
+                tracing::debug!("Filtered hallucination (exact match): {:?}", text);
+                return None;
+            }
+
+            // Filter bracketed/asterisk patterns like "*laughs*", "*music*", "[music]"
+            let stripped = trimmed.trim();
+            if (stripped.starts_with('*') && stripped.ends_with('*'))
+                || (stripped.starts_with('[') && stripped.ends_with(']'))
+            {
+                tracing::debug!("Filtered hallucination (bracketed): {:?}", text);
+                return None;
+            }
+
+            // Length-ratio check: >3s of audio but <=2 words is suspicious
+            // Normal speech produces ~2.5 words/sec
+            let word_count = text.split_whitespace().count();
+            if duration_secs > 3.0 && word_count <= 2 {
+                tracing::debug!(
+                    "Filtered hallucination (length-ratio): {:?} ({} words in {:.1}s)",
+                    text,
+                    word_count,
+                    duration_secs
+                );
                 return None;
             }
 
@@ -936,6 +1228,9 @@ fn streaming_worker(app: &tauri::AppHandle) {
                 tracing::info!("Streaming session ended");
                 break;
             }
+            Ok(audio_worker::AudioResult::AudioLevel(rms)) => {
+                let _ = app.emit("audio-level", serde_json::json!({ "rms": rms }));
+            }
             Ok(audio_worker::AudioResult::Started) => {
                 // Shouldn't happen in this loop, but harmless
             }
@@ -1034,6 +1329,7 @@ pub fn run() -> anyhow::Result<()> {
     let audio = audio_worker::Handle::spawn();
 
     let hotkey_str = settings.hotkey.clone();
+    let show_widget_on_start = settings.show_widget;
 
     let app_state = AppState {
         audio,
@@ -1071,11 +1367,16 @@ pub fn run() -> anyhow::Result<()> {
             change_model,
             get_developer_mode,
             set_developer_mode,
+            update_settings,
+            list_audio_devices,
+            set_widget_visible,
         ])
         .setup(move |app| {
             let show_i = MenuItem::with_id(app, "show", "Show", true, None::<&str>)?;
+            let widget_i =
+                MenuItem::with_id(app, "toggle_widget", "Toggle Widget", true, None::<&str>)?;
             let quit_i = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&show_i, &quit_i])?;
+            let menu = Menu::with_items(app, &[&show_i, &widget_i, &quit_i])?;
 
             let icon = app.default_window_icon().cloned().unwrap_or_else(|| {
                 tracing::warn!("No default window icon found, using fallback");
@@ -1096,6 +1397,15 @@ pub fn run() -> anyhow::Result<()> {
                             let _ = window.unminimize();
                             let _ = window.show();
                             let _ = window.set_focus();
+                        }
+                    }
+                    "toggle_widget" => {
+                        if let Some(widget) = app.get_webview_window("widget") {
+                            if widget.is_visible().unwrap_or(false) {
+                                let _ = widget.hide();
+                            } else {
+                                let _ = widget.show();
+                            }
                         }
                     }
                     _ => {}
@@ -1132,6 +1442,13 @@ pub fn run() -> anyhow::Result<()> {
 
             tracing::info!("Registered global hotkey: {}", hotkey_str);
 
+            // Hide widget if config says so
+            if !show_widget_on_start
+                && let Some(widget) = app.get_webview_window("widget")
+            {
+                let _ = widget.hide();
+            }
+
             // Auto-download model (and ORT runtime if needed) if not ready
             if need_auto_download {
                 let engine_ref = Arc::clone(&engine);
@@ -1139,6 +1456,7 @@ pub fn run() -> anyhow::Result<()> {
             }
 
             // Global mouse-click listener: any click stops an active recording session.
+            // Only active when click_to_stop is enabled in settings (default: off).
             let app_for_mouse = app.handle().clone();
             std::thread::spawn(move || {
                 if let Err(e) = rdev::listen(move |event| {
@@ -1147,6 +1465,14 @@ pub fn run() -> anyhow::Result<()> {
                     ) = event.event_type
                     {
                         let state = app_for_mouse.state::<AppState>();
+                        let click_to_stop = state
+                            .settings
+                            .try_lock()
+                            .map(|s| s.click_to_stop)
+                            .unwrap_or(false);
+                        if !click_to_stop {
+                            return;
+                        }
                         let is_recording = state
                             .recording
                             .try_lock()

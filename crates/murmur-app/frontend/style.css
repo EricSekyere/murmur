@@ -1093,7 +1093,13 @@ header {
   transition: width 0.4s var(--ease-out);
 }
 
-/* ─── Developer Mode ────────────────────────────────────────────────────── */
+/* ─── Settings Controls ────────────────────────────────────────────────── */
+.settings-group + .settings-group {
+  border-top: 1px solid var(--color-border);
+  padding-top: 12px;
+  margin-top: 12px;
+}
+
 .settings-group--devmode {
   border-top: 1px solid var(--color-border);
   padding-top: 12px;
@@ -1120,6 +1126,161 @@ header {
   color: var(--color-text-muted);
   line-height: 1.45;
 }
+
+/* Hotkey Capture */
+.hotkey-capture {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.settings-input {
+  background: var(--color-surface-raised);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  color: var(--color-text);
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  padding: 6px 10px;
+  outline: none;
+  transition: border-color var(--transition-fast);
+}
+
+.settings-input:focus {
+  border-color: var(--color-accent);
+  box-shadow: 0 0 0 2px var(--color-accent-dim);
+}
+
+.settings-input--hotkey {
+  width: 120px;
+  text-align: center;
+  cursor: pointer;
+}
+
+.btn-small {
+  background: var(--color-surface-raised);
+  border: 1px solid var(--color-border);
+  color: var(--color-text-secondary);
+  border-radius: var(--radius-sm);
+  padding: 5px 12px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  font-family: var(--font-sans);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  white-space: nowrap;
+}
+
+.btn-small:hover:not(:disabled) {
+  color: var(--color-text);
+  border-color: var(--color-accent);
+  background: var(--color-accent-dim);
+}
+
+.btn-small:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+
+/* Select Dropdown */
+.settings-select {
+  background: var(--color-surface-raised);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  color: var(--color-text);
+  font-family: var(--font-sans);
+  font-size: 0.78rem;
+  padding: 6px 28px 6px 10px;
+  outline: none;
+  cursor: pointer;
+  appearance: none;
+  -webkit-appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg width='10' height='6' viewBox='0 0 10 6' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M1 1L5 5L9 1' stroke='%238b90a0' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 8px center;
+  min-width: 130px;
+  transition: border-color var(--transition-fast);
+}
+
+.settings-select:focus {
+  border-color: var(--color-accent);
+  box-shadow: 0 0 0 2px var(--color-accent-dim);
+}
+
+.settings-select:hover {
+  border-color: var(--color-border-hover);
+}
+
+.settings-select option {
+  background: var(--color-surface-solid);
+  color: var(--color-text);
+}
+
+/* Range Slider */
+.settings-slider-wrap {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+.settings-slider-wrap input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100px;
+  height: 4px;
+  background: var(--color-surface-raised);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-full);
+  outline: none;
+  cursor: pointer;
+}
+
+.settings-slider-wrap input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--color-accent-light);
+  border: 2px solid var(--color-accent);
+  cursor: pointer;
+  transition: box-shadow var(--transition-fast);
+}
+
+.settings-slider-wrap input[type="range"]::-webkit-slider-thumb:hover {
+  box-shadow: 0 0 8px var(--color-accent-glow);
+}
+
+.settings-slider-wrap input[type="range"]:focus::-webkit-slider-thumb {
+  box-shadow: 0 0 0 3px var(--color-accent-dim);
+}
+
+.settings-slider-val {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--color-accent-light);
+  min-width: 3ch;
+  text-align: right;
+}
+
+/* Mic Quality Indicator */
+.mic-quality {
+  text-align: center;
+  font-size: 0.72rem;
+  font-weight: 500;
+  color: var(--color-text-muted);
+  padding: 2px 0;
+  transition: color var(--transition-fast);
+}
+
+.mic-quality[hidden] { display: none; }
+
+.mic-quality--good { color: var(--color-done); }
+.mic-quality--fair { color: var(--color-processing); }
+.mic-quality--low  { color: var(--color-error); }
 
 /* Toggle Switch */
 .toggle-switch {
@@ -1251,3 +1412,21 @@ footer {
 
 /* ─── Utility ───────────────────────────────────────────────────────────── */
 [hidden] { display: none !important; }
+
+/* ─── Reduced Motion ───────────────────────────────────────────────────── */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+
+  .ambient { animation: none; }
+  .mic-btn--idle { animation: none; }
+  .mic-btn--recording { animation: none; }
+  .mic-wrapper--recording .mic-ring { animation: none; opacity: 0.4; }
+  .mic-wrapper--processing .mic-ring { animation: none; opacity: 0.4; }
+  .mic-wrapper--recording .mic-glow { transition: none; }
+  .voice-bar { transition: none; }
+  #level-fill { transition: none; }
+}

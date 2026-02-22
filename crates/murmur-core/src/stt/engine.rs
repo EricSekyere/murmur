@@ -1,6 +1,7 @@
 #[cfg(any(feature = "stt", feature = "parakeet"))]
 use anyhow::Context;
 use anyhow::Result;
+use std::panic::AssertUnwindSafe;
 use std::time::Instant;
 
 #[cfg(feature = "stt")]
@@ -179,14 +180,42 @@ impl SttEngine {
         params.set_print_progress(false);
         params.set_print_realtime(false);
         params.set_print_timestamps(false);
-        params.set_single_segment(false);
+        params.set_single_segment(true);
+        params.set_no_context(true);
         params.set_no_timestamps(false);
         params.set_suppress_blank(true);
         params.set_suppress_nst(true);
+        // Encourage proper punctuation and capitalization via initial prompt.
+        // Whisper uses this as a style hint for the decoder.
+        params.set_initial_prompt("Use proper punctuation and capitalization.");
+        // Disable temperature fallback retries — each retry on large models
+        // allocates significant memory and can cause OOM/crashes.
+        params.set_temperature(0.0);
+        params.set_temperature_inc(0.0);
 
-        state
-            .full(params, samples)
-            .map_err(|e| anyhow::anyhow!("Whisper transcription failed: {:?}", e))?;
+        // Wrap inference in catch_unwind to prevent whisper.cpp panics from
+        // crashing the entire application (larger models hit more edge cases).
+        let inference_result = std::panic::catch_unwind(AssertUnwindSafe(|| {
+            state.full(params, samples)
+        }));
+
+        match inference_result {
+            Ok(Ok(_)) => {}
+            Ok(Err(e)) => {
+                return Err(anyhow::anyhow!("Whisper transcription failed: {:?}", e));
+            }
+            Err(panic_info) => {
+                let msg = if let Some(s) = panic_info.downcast_ref::<String>() {
+                    s.clone()
+                } else if let Some(s) = panic_info.downcast_ref::<&str>() {
+                    (*s).to_string()
+                } else {
+                    "unknown panic".to_string()
+                };
+                tracing::error!("Whisper inference panicked: {}", msg);
+                return Err(anyhow::anyhow!("Whisper inference panicked: {}", msg));
+            }
+        }
 
         let n_segments = state.full_n_segments();
         let mut segments = Vec::new();
