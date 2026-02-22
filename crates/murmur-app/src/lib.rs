@@ -81,7 +81,7 @@ mod audio_worker {
                             let mut phrase_start_idx = 0usize;
 
                             // ── Calibration phase: measure ambient noise ──
-                            let calibration_duration = Duration::from_millis(500);
+                            let calibration_duration = Duration::from_millis(800);
                             let calibration_start = Instant::now();
                             let mut ambient_rms_samples = Vec::new();
 
@@ -112,13 +112,14 @@ mod audio_worker {
                             };
 
                             // If config threshold > 0, use it directly; otherwise auto-calibrate.
-                            // Multiplier of 1.5x above ambient keeps sensitivity high for
-                            // normal speech while filtering out background noise.
-                            // Cap at 0.015 so even in noisy rooms, regular speech is detected.
+                            // Multiplier of 2.5x above ambient gives a solid margin over
+                            // background noise while still catching normal speech.
+                            // Floor of 0.002 prevents near-zero thresholds in silent rooms;
+                            // cap of 0.025 keeps detection viable in noisier environments.
                             let calibrated_threshold = if rms_threshold > 0.0 {
                                 rms_threshold
                             } else {
-                                (ambient_rms * 1.5).clamp(0.0001, 0.015)
+                                (ambient_rms * 2.5).clamp(0.002, 0.025)
                             };
                             tracing::info!(
                                 "Calibrated: ambient RMS = {:.6}, threshold = {:.6} (config = {:.6}, mode = {})",
@@ -727,6 +728,18 @@ fn transcribe_chunk(
         return None;
     }
 
+    // Skip very short chunks that produce garbage/hallucinations
+    const MIN_AUDIO_SECS: f32 = 0.5;
+    let duration_secs = audio.samples.len() as f32 / 16000.0;
+    if duration_secs < MIN_AUDIO_SECS {
+        tracing::debug!(
+            "Skipping short audio chunk ({:.2}s < {:.1}s minimum)",
+            duration_secs,
+            MIN_AUDIO_SECS
+        );
+        return None;
+    }
+
     let state = app.state::<AppState>();
 
     let developer_mode = state
@@ -737,6 +750,19 @@ fn transcribe_chunk(
 
     let mut engine_guard = state.engine.lock().unwrap_or_else(|e| e.into_inner());
     let engine = engine_guard.as_mut()?;
+
+    // Known Whisper hallucination phrases produced on silence/short clips
+    const HALLUCINATIONS: &[&str] = &[
+        "thank you",
+        "thanks for watching",
+        "thanks for listening",
+        "please subscribe",
+        "see you next time",
+        "bye",
+        "you",
+        "the end",
+        "so",
+    ];
 
     match engine.transcribe(&audio.samples) {
         Ok(result) if !result.text.is_empty() => {
@@ -758,10 +784,17 @@ fn transcribe_chunk(
                 result.text
             };
             if text.is_empty() {
-                None
-            } else {
-                Some((text, result.processing_time_ms))
+                return None;
             }
+
+            // Filter known Whisper hallucinations
+            let trimmed = text.trim().trim_end_matches('.').to_lowercase();
+            if HALLUCINATIONS.contains(&trimmed.as_str()) {
+                tracing::debug!("Filtered hallucination: {:?}", text);
+                return None;
+            }
+
+            Some((text, result.processing_time_ms))
         }
         Ok(_) => None,
         Err(e) => {

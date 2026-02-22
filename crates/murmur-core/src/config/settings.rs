@@ -74,11 +74,11 @@ fn default_silence_timeout_secs() -> f32 {
 }
 
 fn default_phrase_pause_secs() -> f32 {
-    1.0
+    1.8
 }
 
 fn default_session_timeout_secs() -> f32 {
-    0.0 // 0.0 = disabled (no auto-stop; recording ends via manual action only)
+    10.0
 }
 
 impl Default for Settings {
