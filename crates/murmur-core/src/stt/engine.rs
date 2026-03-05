@@ -1,6 +1,7 @@
 #[cfg(any(feature = "stt", feature = "parakeet"))]
 use anyhow::Context;
 use anyhow::Result;
+#[cfg(feature = "stt")]
 use std::panic::AssertUnwindSafe;
 use std::time::Instant;
 
@@ -102,8 +103,16 @@ impl SttEngine {
             // Ensure ONNX Runtime DLL is loaded before creating any sessions
             super::runtime::init_ort().context("Failed to initialize ONNX Runtime for Parakeet")?;
 
-            let engine = parakeet_rs::ParakeetTDT::from_pretrained(model_dir, None)
-                .map_err(|e| anyhow::anyhow!("Failed to load Parakeet model: {}", e))?;
+            // Use DirectML (GPU) on Windows for ~5-10x faster inference.
+            // Falls back to CPU automatically if GPU is unavailable.
+            let config = parakeet_rs::ExecutionConfig::new()
+                .with_execution_provider(parakeet_rs::ExecutionProvider::DirectML);
+
+            tracing::info!("Loading Parakeet model with DirectML GPU acceleration...");
+
+            let engine =
+                parakeet_rs::ParakeetTDT::from_pretrained(model_dir, Some(config))
+                    .map_err(|e| anyhow::anyhow!("Failed to load Parakeet model: {}", e))?;
 
             tracing::info!("Parakeet engine loaded model from: {}", model_dir);
 
@@ -180,7 +189,7 @@ impl SttEngine {
         params.set_print_progress(false);
         params.set_print_realtime(false);
         params.set_print_timestamps(false);
-        params.set_single_segment(true);
+        params.set_single_segment(false);
         params.set_no_context(true);
         params.set_no_timestamps(false);
         params.set_suppress_blank(true);
@@ -188,8 +197,7 @@ impl SttEngine {
         // Encourage proper punctuation and capitalization via initial prompt.
         // Whisper uses this as a style hint for the decoder.
         params.set_initial_prompt("Use proper punctuation and capitalization.");
-        // Disable temperature fallback retries — each retry on large models
-        // allocates significant memory and can cause OOM/crashes.
+        // Disable temperature fallback retries to minimize latency and memory spikes.
         params.set_temperature(0.0);
         params.set_temperature_inc(0.0);
 

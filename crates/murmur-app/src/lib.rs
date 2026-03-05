@@ -25,6 +25,18 @@ mod audio_worker {
     use std::sync::Mutex;
     use std::sync::mpsc;
     use std::time::{Duration, Instant};
+    use tauri::Emitter;
+
+    /// Apply mic gain to raw audio samples, clamping to [-1.0, 1.0].
+    fn apply_mic_gain(samples: &[f32], gain: f32) -> Vec<f32> {
+        if gain <= 1.0 {
+            return samples.to_vec();
+        }
+        samples
+            .iter()
+            .map(|s| (s * gain).clamp(-1.0, 1.0))
+            .collect()
+    }
 
     enum Cmd {
         StartStreaming {
@@ -50,212 +62,298 @@ mod audio_worker {
     }
 
     impl Handle {
-        pub fn spawn() -> Self {
+        pub fn spawn(app_handle: tauri::AppHandle) -> Self {
             let (cmd_tx, cmd_rx) = mpsc::channel::<Cmd>();
             let (result_tx, result_rx) = mpsc::channel::<AudioResult>();
 
             std::thread::spawn(move || {
-                let mut capture = match AudioCapture::new() {
-                    Ok(c) => c,
-                    Err(e) => {
-                        tracing::error!("Failed to create AudioCapture: {}", e);
-                        return;
-                    }
-                };
+                let worker_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    let mut capture = match AudioCapture::new() {
+                        Ok(c) => c,
+                        Err(e) => {
+                            tracing::error!("Failed to create AudioCapture: {}", e);
+                            let _ = result_tx.send(AudioResult::StartFailed(e.to_string()));
+                            return;
+                        }
+                    };
 
-                while let Ok(cmd) = cmd_rx.recv() {
-                    match cmd {
-                        Cmd::StartStreaming {
-                            rms_threshold,
-                            phrase_pause,
-                            session_timeout,
-                        } => {
-                            if let Err(e) = capture.start() {
-                                let _ = result_tx.send(AudioResult::StartFailed(e.to_string()));
-                                continue;
-                            }
-                            let _ = result_tx.send(AudioResult::Started);
-
-                            let live_buf = capture.live_buffer();
-                            let native_rate = capture.native_rate();
-                            let native_channels = capture.native_channels();
-                            let mut analyzed_up_to = 0usize;
-                            let mut phrase_start_idx: usize;
-
-                            // ── Calibration phase: measure ambient noise ──
-                            let calibration_duration = Duration::from_millis(800);
-                            let calibration_start = Instant::now();
-                            let mut ambient_rms_samples = Vec::new();
-
-                            tracing::info!(
-                                "Calibrating noise floor ({} ch, {}Hz)...",
-                                native_channels,
-                                native_rate
-                            );
-                            while calibration_start.elapsed() < calibration_duration {
-                                std::thread::sleep(Duration::from_millis(50));
-                                let buf = live_buf.lock().unwrap_or_else(|e| e.into_inner());
-                                if buf.len() > analyzed_up_to {
-                                    let mono =
-                                        downmix_to_mono(&buf[analyzed_up_to..], native_channels);
-                                    let chunk_rms = compute_rms(&mono);
-                                    if chunk_rms > 0.0 {
-                                        ambient_rms_samples.push(chunk_rms);
-                                    }
-                                    analyzed_up_to = buf.len();
-                                }
-                            }
-
-                            let ambient_rms = if ambient_rms_samples.is_empty() {
-                                0.0
-                            } else {
-                                ambient_rms_samples.iter().sum::<f32>()
-                                    / ambient_rms_samples.len() as f32
-                            };
-
-                            // If config threshold > 0, use it directly; otherwise auto-calibrate.
-                            // Multiplier of 2.5x above ambient gives a solid margin over
-                            // background noise while still catching normal speech.
-                            // Floor of 0.002 prevents near-zero thresholds in silent rooms;
-                            // cap of 0.025 keeps detection viable in noisier environments.
-                            let calibrated_threshold = if rms_threshold > 0.0 {
-                                rms_threshold
-                            } else {
-                                (ambient_rms * 2.5).clamp(0.002, 0.025)
-                            };
-                            tracing::info!(
-                                "Calibrated: ambient RMS = {:.6}, threshold = {:.6} (config = {:.6}, mode = {})",
-                                ambient_rms,
-                                calibrated_threshold,
+                    while let Ok(cmd) = cmd_rx.recv() {
+                        match cmd {
+                            Cmd::StartStreaming {
                                 rms_threshold,
-                                if rms_threshold > 0.0 {
-                                    "manual"
-                                } else {
-                                    "auto"
-                                }
-                            );
-
-                            // Start first phrase from post-calibration audio,
-                            // not from sample 0 (which includes calibration silence).
-                            phrase_start_idx = analyzed_up_to;
-
-                            let mut detector = PhraseDetector::new(
-                                calibrated_threshold,
                                 phrase_pause,
                                 session_timeout,
-                            );
-                            let mut level_tick: u32 = 0;
-
-                            loop {
-                                // Check for manual Stop
-                                if let Ok(Cmd::Stop) = cmd_rx.try_recv() {
-                                    // Drain any remaining audio as a final phrase
-                                    let remaining = {
-                                        let buf =
-                                            live_buf.lock().unwrap_or_else(|e| e.into_inner());
-                                        if buf.len() > phrase_start_idx {
-                                            Some(buf[phrase_start_idx..].to_vec())
-                                        } else {
-                                            None
-                                        }
-                                    };
-                                    if let Some(raw) = remaining {
-                                        let audio = AudioBuffer::from_raw(
-                                            &raw,
-                                            native_rate,
-                                            native_channels,
-                                        );
-                                        if !audio.samples.is_empty() {
-                                            let _ = result_tx.send(AudioResult::PhraseReady(audio));
-                                        }
+                            } => {
+                                // Wrap capture.start() in catch_unwind — CPAL's native
+                                // audio backend (WASAPI) can panic/crash on some drivers.
+                                let start_result = std::panic::catch_unwind(
+                                    std::panic::AssertUnwindSafe(|| capture.start()),
+                                );
+                                match start_result {
+                                    Ok(Err(e)) => {
+                                        let _ = result_tx.send(AudioResult::StartFailed(e.to_string()));
+                                        continue;
                                     }
-                                    let _ = capture.stop();
-                                    let _ = result_tx.send(AudioResult::StreamingDone);
-                                    break;
+                                    Err(panic_info) => {
+                                        let msg = if let Some(s) = panic_info.downcast_ref::<String>() {
+                                            s.clone()
+                                        } else {
+                                            "native audio panic".to_string()
+                                        };
+                                        tracing::error!("Audio capture panicked on start: {}", msg);
+                                        let _ = result_tx.send(AudioResult::StartFailed(msg));
+                                        continue;
+                                    }
+                                    Ok(Ok(())) => {}
                                 }
+                                let _ = result_tx.send(AudioResult::Started);
 
-                                // Read new samples, downmix to mono, feed to phrase detector
-                                let (state, chunk_rms) = {
+                                let live_buf = capture.live_buffer();
+                                let native_rate = capture.native_rate();
+                                let native_channels = capture.native_channels();
+                                let mut analyzed_up_to = 0usize;
+
+                                // ── Calibration phase: measure ambient noise ──
+                                let calibration_duration = Duration::from_millis(300);
+                                let calibration_start = Instant::now();
+                                let mut ambient_rms_samples = Vec::new();
+
+                                tracing::info!(
+                                    "Calibrating noise floor ({} ch, {}Hz)...",
+                                    native_channels,
+                                    native_rate
+                                );
+                                while calibration_start.elapsed() < calibration_duration {
+                                    std::thread::sleep(Duration::from_millis(50));
                                     let buf = live_buf.lock().unwrap_or_else(|e| e.into_inner());
                                     if buf.len() > analyzed_up_to {
-                                        let mono = downmix_to_mono(
-                                            &buf[analyzed_up_to..],
-                                            native_channels,
-                                        );
-                                        let rms = compute_rms(&mono);
-                                        let st = detector.feed(&mono);
+                                        let mono =
+                                            downmix_to_mono(&buf[analyzed_up_to..], native_channels);
+                                        let chunk_rms = compute_rms(&mono);
+                                        if chunk_rms > 0.0 {
+                                            ambient_rms_samples.push(chunk_rms);
+                                        }
                                         analyzed_up_to = buf.len();
-                                        (st, rms)
-                                    } else {
-                                        (detector.state(), 0.0)
                                     }
-                                };
-
-                                // Emit audio level every ~200ms (every 4th tick)
-                                level_tick += 1;
-                                if level_tick.is_multiple_of(4) {
-                                    let _ = result_tx.send(AudioResult::AudioLevel(chunk_rms));
                                 }
 
-                                match state {
-                                    PhraseState::PhraseComplete => {
-                                        // Drain the phrase audio
-                                        let raw = {
-                                            let buf =
-                                                live_buf.lock().unwrap_or_else(|e| e.into_inner());
-                                            buf[phrase_start_idx..analyzed_up_to].to_vec()
-                                        };
-                                        phrase_start_idx = analyzed_up_to;
+                                let ambient_rms = if ambient_rms_samples.is_empty() {
+                                    0.0
+                                } else {
+                                    ambient_rms_samples.iter().sum::<f32>()
+                                        / ambient_rms_samples.len() as f32
+                                };
 
-                                        let audio = AudioBuffer::from_raw(
-                                            &raw,
-                                            native_rate,
-                                            native_channels,
-                                        );
-                                        if !audio.samples.is_empty() {
-                                            let _ = result_tx.send(AudioResult::PhraseReady(audio));
-                                        }
+                                // Compute mic gain to compensate for quiet mics.
+                                // Common causes of low signal: mono mic reported as stereo
+                                // (downmix halves amplitude), low Windows mic volume, distant
+                                // USB mic. We boost the signal so the PhraseDetector, UI level
+                                // indicator, and STT engine all receive usable audio levels.
+                                let mic_gain = if ambient_rms > 0.0 && ambient_rms < 0.005 {
+                                    // Quiet mic: boost so effective ambient ≈ 0.01
+                                    (0.01 / ambient_rms).min(20.0)
+                                } else if ambient_rms == 0.0 {
+                                    // Completely silent calibration (digital silence): moderate gain
+                                    10.0
+                                } else {
+                                    1.0
+                                };
 
-                                        detector.reset_phrase();
+                                // Compute threshold using the gained (effective) ambient level.
+                                let effective_ambient = ambient_rms * mic_gain;
+                                let calibrated_threshold = if rms_threshold > 0.0 {
+                                    rms_threshold
+                                } else {
+                                    (effective_ambient * 2.5).clamp(0.001, 0.025)
+                                };
+                                tracing::info!(
+                                    "Calibrated: ambient RMS = {:.6}, mic_gain = {:.1}x, effective ambient = {:.6}, threshold = {:.6} (config = {:.6}, mode = {})",
+                                    ambient_rms,
+                                    mic_gain,
+                                    effective_ambient,
+                                    calibrated_threshold,
+                                    rms_threshold,
+                                    if rms_threshold > 0.0 {
+                                        "manual"
+                                    } else {
+                                        "auto"
                                     }
-                                    PhraseState::SessionTimeout => {
-                                        // Drain any remaining audio
-                                        let remaining = {
-                                            let buf =
-                                                live_buf.lock().unwrap_or_else(|e| e.into_inner());
-                                            if buf.len() > phrase_start_idx {
-                                                Some(buf[phrase_start_idx..].to_vec())
+                                );
+
+                                // Drain calibration silence so the first phrase starts clean
+                                {
+                                    let mut buf = live_buf.lock().unwrap_or_else(|e| e.into_inner());
+                                    buf.drain(..analyzed_up_to);
+                                }
+                                analyzed_up_to = 0;
+
+                                let mut detector = PhraseDetector::new(
+                                    calibrated_threshold,
+                                    phrase_pause,
+                                    session_timeout,
+                                );
+                                let mut level_tick: u32 = 0;
+
+                                loop {
+                                                                    // Check for manual Stop
+                                                                    if let Ok(Cmd::Stop) = cmd_rx.try_recv() {
+                                                                        // Manual stop: flush remaining audio as a final phrase
+                                                                        let remaining = {
+                                                                            let mut buf =
+                                                                                live_buf.lock().unwrap_or_else(|e| e.into_inner());
+                                                                            if !buf.is_empty() {
+                                                                                let phrase = buf.clone();
+                                                                                buf.clear();
+                                                                                Some(phrase)
+                                                                            } else {
+                                                                                None
+                                                                            }
+                                                                        };
+                                    
+                                                                        if let Some(raw) = remaining {
+                                                                            let raw = apply_mic_gain(&raw, mic_gain);
+                                                                            let audio = AudioBuffer::from_raw(
+                                                                                &raw,
+                                                                                native_rate,
+                                                                                native_channels,
+                                                                            );
+                                                                            if !audio.samples.is_empty() {
+                                                                                let _ = result_tx.send(AudioResult::PhraseReady(audio));
+                                                                            }
+                                                                        }
+                                    
+                                                                        let _ = capture.stop();
+                                                                        let _ = result_tx.send(AudioResult::StreamingDone);
+                                                                        break;
+                                                                    }
+                                    // Read new samples, downmix to mono, apply mic gain, feed to phrase detector
+                                    let (state, chunk_rms) = {
+                                        let mut buf = live_buf.lock().unwrap_or_else(|e| e.into_inner());
+                                        if buf.len() > analyzed_up_to {
+                                            let mono = downmix_to_mono(
+                                                &buf[analyzed_up_to..],
+                                                native_channels,
+                                            );
+                                            // Apply mic gain so PhraseDetector and UI see proper levels
+                                            let mono = if mic_gain > 1.0 {
+                                                mono.iter().map(|s| (s * mic_gain).clamp(-1.0, 1.0)).collect::<Vec<f32>>()
                                             } else {
-                                                None
+                                                mono
+                                            };
+                                            let rms = compute_rms(&mono);
+                                            let st = detector.feed(&mono);
+                                            analyzed_up_to = buf.len();
+
+                                            // If we are still waiting for speech, discard old audio to prevent memory
+                                            // growth and avoid sending minutes of silence to the STT engine.
+                                            // Keep ~1 second of pre-roll history.
+                                            if st == PhraseState::WaitingForSpeech {
+                                                let preroll_samples = (native_rate as usize) * (native_channels as usize);
+                                                if buf.len() > preroll_samples {
+                                                    let drop_count = buf.len() - preroll_samples;
+                                                    buf.drain(..drop_count);
+                                                    analyzed_up_to -= drop_count;
+                                                }
                                             }
-                                        };
-                                        if let Some(raw) = remaining {
+
+                                            (st, rms)
+                                        } else {
+                                            (detector.state(), 0.0)
+                                        }
+                                    };
+
+                                    // Emit audio level every ~100ms (every 2nd tick)
+                                    level_tick += 1;
+                                    if level_tick.is_multiple_of(2) {
+                                        let _ = result_tx.send(AudioResult::AudioLevel(chunk_rms));
+                                    }
+
+                                    match state {
+                                        PhraseState::PhraseComplete => {
+                                            // Drain the phrase audio and compact the buffer
+                                            // to prevent unbounded memory growth.
+                                            let raw = {
+                                                let mut buf =
+                                                    live_buf.lock().unwrap_or_else(|e| e.into_inner());
+                                                let phrase = buf[..analyzed_up_to].to_vec();
+                                                // Remove consumed samples so the buffer
+                                                // doesn't grow indefinitely during long sessions.
+                                                buf.drain(..analyzed_up_to);
+                                                analyzed_up_to = 0;
+                                                phrase
+                                            };
+
+                                            // Apply mic gain to phrase audio so the STT engine
+                                            // receives properly-leveled samples.
+                                            let raw = apply_mic_gain(&raw, mic_gain);
+
                                             let audio = AudioBuffer::from_raw(
                                                 &raw,
                                                 native_rate,
                                                 native_channels,
                                             );
                                             if !audio.samples.is_empty() {
-                                                let _ =
-                                                    result_tx.send(AudioResult::PhraseReady(audio));
+                                                let _ = result_tx.send(AudioResult::PhraseReady(audio));
                                             }
-                                        }
-                                        tracing::info!("Streaming session timeout — no speech");
-                                        let _ = capture.stop();
-                                        let _ = result_tx.send(AudioResult::StreamingDone);
-                                        break;
-                                    }
-                                    _ => {}
-                                }
 
-                                std::thread::sleep(Duration::from_millis(50));
+                                            detector.reset_phrase();
+                                        }
+                                        PhraseState::SessionTimeout => {
+                                            // Drain any remaining audio
+                                            let remaining = {
+                                                let buf =
+                                                    live_buf.lock().unwrap_or_else(|e| e.into_inner());
+                                                if !buf.is_empty() {
+                                                    Some(buf.clone())
+                                                } else {
+                                                    None
+                                                }
+                                            };
+                                            if let Some(raw) = remaining {
+                                                let raw = apply_mic_gain(&raw, mic_gain);
+                                                let audio = AudioBuffer::from_raw(
+                                                    &raw,
+                                                    native_rate,
+                                                    native_channels,
+                                                );
+                                                if !audio.samples.is_empty() {
+                                                    let _ =
+                                                        result_tx.send(AudioResult::PhraseReady(audio));
+                                                }
+                                            }
+                                            tracing::info!("Streaming session timeout — no speech");
+                                            let _ = capture.stop();
+                                            let _ = result_tx.send(AudioResult::StreamingDone);
+                                            break;
+                                        }
+                                        _ => {}
+                                    }
+
+                                    std::thread::sleep(Duration::from_millis(50));
+                                }
+                            }
+
+                            Cmd::Stop => {
+                                tracing::debug!("Stop received outside monitoring loop, ignoring");
                             }
                         }
-
-                        Cmd::Stop => {
-                            tracing::debug!("Stop received outside monitoring loop, ignoring");
-                        }
                     }
+                }));
+
+                if let Err(panic_info) = worker_result {
+                    let msg = if let Some(s) = panic_info.downcast_ref::<String>() {
+                        s.clone()
+                    } else if let Some(s) = panic_info.downcast_ref::<&str>() {
+                        (*s).to_string()
+                    } else {
+                        "unknown panic in audio worker thread".to_string()
+                    };
+                    tracing::error!("Audio worker thread panicked: {}", msg);
+                    let _ = result_tx.send(AudioResult::StartFailed(format!("Audio worker crash: {}", msg)));
+                    
+                    // Since the audio worker is critical and shouldn't crash, 
+                    // emit an error that can be shown in the UI.
+                    let _ = app_handle.emit("hotkey-error", serde_json::json!({ "error": format!("Audio driver crashed: {}", msg) }));
                 }
             });
 
@@ -307,8 +405,11 @@ mod audio_worker {
 
 /// Shared application state managed by Tauri.
 struct AppState {
-    audio: audio_worker::Handle,
+    audio: std::sync::OnceLock<audio_worker::Handle>,
     engine: Arc<Mutex<Option<SttEngine>>>,
+    /// Lock-free flag: true once the STT engine has been initialized.
+    /// Avoids blocking the UI thread on the engine mutex in handle_toggle.
+    engine_loaded: std::sync::atomic::AtomicBool,
     recording: Mutex<bool>,
     settings: Mutex<Settings>,
     last_toggle: Mutex<Instant>,
@@ -495,11 +596,24 @@ async fn change_model(
         }
     }
 
+    // Stop recording first if active — changing models while recording would
+    // silently drop all phrases since the engine becomes None.
+    {
+        let is_recording = *state.recording.lock().unwrap_or_else(|e| e.into_inner());
+        if is_recording {
+            tracing::info!("Stopping recording before model change");
+            handle_toggle(&app);
+        }
+    }
+
     // Clear current engine
     {
         let mut guard = state.engine.lock().unwrap_or_else(|e| e.into_inner());
         *guard = None;
     }
+    state
+        .engine_loaded
+        .store(false, std::sync::atomic::Ordering::Release);
 
     // Emit loading state
     let _ = app.emit(
@@ -576,14 +690,25 @@ fn update_settings(
             .parse()
             .map_err(|e| format!("Invalid hotkey '{}': {:?}", trimmed, e))?;
 
-        // Unregister old, register new
-        if let Ok(old_shortcut) = settings.hotkey.parse::<tauri_plugin_global_shortcut::Shortcut>()
-        {
-            let _ = app.global_shortcut().unregister(old_shortcut);
+        let old_shortcut = settings
+            .hotkey
+            .parse::<tauri_plugin_global_shortcut::Shortcut>()
+            .ok();
+
+        // If old and new are different shortcuts, unregister old first to free the binding.
+        // If they're the same, unregister + re-register to refresh.
+        if let Some(ref old) = old_shortcut {
+            let _ = app.global_shortcut().unregister(*old);
         }
-        app.global_shortcut()
-            .register(new_shortcut)
-            .map_err(|e| format!("Failed to register hotkey '{}': {:?}", trimmed, e))?;
+
+        if let Err(e) = app.global_shortcut().register(new_shortcut) {
+            // Registration failed — try to restore the old hotkey so the user
+            // isn't left with no working hotkey.
+            if let Some(ref old) = old_shortcut {
+                let _ = app.global_shortcut().register(*old);
+            }
+            return Err(format!("Failed to register hotkey '{}': {:?}", trimmed, e));
+        }
 
         settings.hotkey = trimmed;
         tracing::info!("Hotkey updated to: {}", settings.hotkey);
@@ -593,11 +718,21 @@ fn update_settings(
         let mode = match mode_str.as_str() {
             "clipboard" => murmur_core::output::OutputMode::Clipboard,
             "keyboard" => murmur_core::output::OutputMode::Keyboard,
-            "stdout" => murmur_core::output::OutputMode::Stdout,
+            // Keep backward compatibility if the frontend still sends stdout.
+            // Desktop builds should deliver text to another app, so map stdout
+            // to keyboard mode instead of display-only behavior.
+            "stdout" => murmur_core::output::OutputMode::Keyboard,
             _ => return Err(format!("Unknown output mode: {}", mode_str)),
         };
         settings.output_mode = mode;
-        tracing::info!("Output mode updated to: {}", mode_str);
+        tracing::info!(
+            "Output mode updated to: {}",
+            if mode_str == "stdout" {
+                "keyboard (mapped from stdout)"
+            } else {
+                mode_str
+            }
+        );
     }
 
     if let Some(pp) = phrase_pause_secs {
@@ -840,6 +975,13 @@ async fn download_and_init_model(
         *guard = Some(stt);
     }
 
+    // Set the lock-free engine_loaded flag so handle_toggle never blocks
+    if let Some(app_state) = app.try_state::<AppState>() {
+        app_state
+            .engine_loaded
+            .store(true, std::sync::atomic::Ordering::Release);
+    }
+
     let _ = app.emit(
         "model-download-progress",
         ModelDownloadProgress {
@@ -881,8 +1023,16 @@ fn output_text(text: &str, mode: murmur_core::output::OutputMode) -> anyhow::Res
             let mut kb = murmur_core::output::keyboard::KeyboardOutput::new()
                 .context("Failed to create keyboard output")?;
             let with_space = format!("{} ", trimmed);
-            kb.type_text(&with_space)
-                .context("Failed to type text via keyboard")?;
+            if let Err(e) = kb.type_text(&with_space) {
+                tracing::warn!(
+                    "Keyboard output failed, falling back to clipboard copy: {}",
+                    e
+                );
+                let mut cb = murmur_core::output::clipboard::ClipboardOutput::new()
+                    .context("Failed to open clipboard for fallback")?;
+                cb.copy(trimmed)
+                    .context("Failed to copy fallback text to clipboard")?;
+            }
         }
         murmur_core::output::OutputMode::Clipboard => {
             let mut cb = murmur_core::output::clipboard::ClipboardOutput::new()
@@ -890,60 +1040,25 @@ fn output_text(text: &str, mode: murmur_core::output::OutputMode) -> anyhow::Res
             cb.copy(trimmed).context("Failed to copy text to clipboard")?;
         }
         murmur_core::output::OutputMode::Stdout => {
-            // In the desktop app, stdout output is a no-op.
-            // Text is delivered to the UI via the streaming-phrase event.
+            // Desktop app usually has no visible stdout in release builds.
+            // Fall back to keyboard so text still reaches the focused app.
+            let mut kb = murmur_core::output::keyboard::KeyboardOutput::new()
+                .context("Failed to create keyboard output for stdout fallback")?;
+            let with_space = format!("{} ", trimmed);
+            if let Err(e) = kb.type_text(&with_space) {
+                tracing::warn!(
+                    "Stdout mode fallback keyboard output failed, copying to clipboard: {}",
+                    e
+                );
+                let mut cb = murmur_core::output::clipboard::ClipboardOutput::new()
+                    .context("Failed to open clipboard for stdout fallback")?;
+                cb.copy(trimmed)
+                    .context("Failed to copy stdout fallback text to clipboard")?;
+            }
         }
     }
 
     Ok(())
-}
-
-/// Trim leading and trailing silence from audio samples.
-///
-/// Analyzes audio in 20ms non-overlapping frames, finds the first and last frames
-/// with RMS above a speech threshold, then returns a trimmed slice with a small
-/// pre-roll (200ms) and post-roll (300ms) for natural context.
-fn trim_silence(samples: &[f32], sample_rate: u32) -> Vec<f32> {
-    let frame_size = (sample_rate as usize * 20) / 1000; // 20ms frames
-    if samples.len() < frame_size {
-        return samples.to_vec();
-    }
-
-    const SPEECH_RMS: f32 = 0.005;
-    let num_frames = samples.len() / frame_size;
-
-    let mut first_speech = None;
-    let mut last_speech = None;
-
-    for i in 0..num_frames {
-        let start = i * frame_size;
-        let end = start + frame_size;
-        let frame = &samples[start..end];
-
-        let rms = (frame.iter().map(|s| s * s).sum::<f32>() / frame.len() as f32).sqrt();
-        if rms >= SPEECH_RMS {
-            if first_speech.is_none() {
-                first_speech = Some(i);
-            }
-            last_speech = Some(i);
-        }
-    }
-
-    let (Some(first), Some(last)) = (first_speech, last_speech) else {
-        return samples.to_vec();
-    };
-
-    // Pre-roll: 200ms before speech onset
-    let pre_roll_frames = (sample_rate as usize * 200) / (1000 * frame_size);
-    let start_frame = first.saturating_sub(pre_roll_frames);
-    let start_sample = start_frame * frame_size;
-
-    // Post-roll: 300ms after speech offset
-    let post_roll_frames = (sample_rate as usize * 300) / (1000 * frame_size);
-    let end_frame = (last + post_roll_frames + 1).min(num_frames);
-    let end_sample = (end_frame * frame_size).min(samples.len());
-
-    samples[start_sample..end_sample].to_vec()
 }
 
 /// Normalize very quiet audio so the STT engine can process it effectively.
@@ -956,10 +1071,10 @@ fn normalize_peak(samples: &[f32]) -> Vec<f32> {
         .map(|s| s.abs())
         .fold(0.0_f32, f32::max);
 
-    if peak < 0.1 && peak > 0.0 {
-        let scale = 0.5 / peak;
+    if peak < 0.2 && peak > 0.0 {
+        let scale = 0.6 / peak;
         tracing::debug!(
-            "Normalizing quiet audio: peak {:.4} -> 0.5 (scale {:.2}x)",
+            "Normalizing quiet audio: peak {:.4} -> 0.6 (scale {:.2}x)",
             peak,
             scale
         );
@@ -974,15 +1089,36 @@ fn transcribe_chunk(
     app: &tauri::AppHandle,
     audio: &murmur_core::audio::AudioBuffer,
 ) -> Option<(String, u64)> {
+    tracing::debug!(
+        "transcribe_chunk called: {} samples ({:.2}s)",
+        audio.samples.len(),
+        audio.samples.len() as f32 / 16000.0
+    );
+
     if audio.samples.is_empty() {
+        tracing::warn!("transcribe_chunk: empty audio buffer");
         return None;
     }
 
     // Skip very short chunks that produce garbage/hallucinations
-    const MIN_AUDIO_SECS: f32 = 0.5;
-    let raw_duration_secs = audio.samples.len() as f32 / 16000.0;
+    const MIN_AUDIO_SECS: f32 = 0.3; // Reduced from 0.5 to catch shorter phrases
+    // Cap audio length to keep inference latency bounded
+    const MAX_AUDIO_SAMPLES: usize = 20 * 16_000;
+    let samples = if audio.samples.len() > MAX_AUDIO_SAMPLES {
+        tracing::info!(
+            "Truncating audio from {:.1}s to 20s (large chunk)",
+            audio.samples.len() as f32 / 16000.0
+        );
+        &audio.samples[audio.samples.len() - MAX_AUDIO_SAMPLES..]
+    } else {
+        &audio.samples
+    };
+
+    let raw_duration_secs = samples.len() as f32 / 16000.0;
+    tracing::debug!("Raw audio duration: {:.2}s", raw_duration_secs);
+
     if raw_duration_secs < MIN_AUDIO_SECS {
-        tracing::debug!(
+        tracing::warn!(
             "Skipping short audio chunk ({:.2}s < {:.1}s minimum)",
             raw_duration_secs,
             MIN_AUDIO_SECS
@@ -990,18 +1126,22 @@ fn transcribe_chunk(
         return None;
     }
 
-    // Preprocessing: trim silence and normalize quiet audio
-    let processed = trim_silence(&audio.samples, 16_000);
-    let processed = normalize_peak(&processed);
+    // Preprocessing: normalize quiet audio first
+    let processed = normalize_peak(samples);
 
-    // Re-check minimum length after trimming
+    // Re-check minimum length after taking samples
     let duration_secs = processed.len() as f32 / 16000.0;
+    tracing::info!(
+        "Audio preprocessing: {:.2}s raw ({} samples)",
+        duration_secs,
+        processed.len()
+    );
+
     if duration_secs < MIN_AUDIO_SECS {
-        tracing::debug!(
-            "Skipping chunk after trim ({:.2}s < {:.1}s minimum, was {:.2}s raw)",
+        tracing::warn!(
+            "Skipping chunk ({:.2}s < {:.1}s minimum)",
             duration_secs,
             MIN_AUDIO_SECS,
-            raw_duration_secs
         );
         return None;
     }
@@ -1015,26 +1155,32 @@ fn transcribe_chunk(
         .developer_mode;
 
     let mut engine_guard = state.engine.lock().unwrap_or_else(|e| e.into_inner());
-    let engine = engine_guard.as_mut()?;
+    let engine = match engine_guard.as_mut() {
+        Some(e) => e,
+        None => {
+            tracing::error!("transcribe_chunk: STT engine not initialized");
+            return None;
+        }
+    };
 
-    // Known Whisper hallucination phrases produced on silence/short clips
+    tracing::info!("Starting transcription of {:.2}s audio", duration_secs);
+
+    // Known Whisper hallucination phrases produced on silence/short clips.
+    // We only filter multi-word phrases to avoid accidentally discarding valid single-word utterances.
     const HALLUCINATIONS: &[&str] = &[
         "thank you",
         "thanks for watching",
         "thanks for listening",
         "please subscribe",
         "see you next time",
-        "bye",
-        "you",
-        "the end",
-        "so",
-        "subtitle",
         "subtitles by",
-        "music",
-        "applause",
+        "subtitle",
     ];
 
-    match engine.transcribe(&processed) {
+    let transcribe_result = engine.transcribe(&processed);
+    tracing::debug!("Engine transcribe returned: {:?}", transcribe_result.is_ok());
+
+    match transcribe_result {
         Ok(result) if !result.text.is_empty() => {
             let text = if developer_mode {
                 let processed = PostProcessor::process(&result.text);
@@ -1054,13 +1200,14 @@ fn transcribe_chunk(
                 result.text
             };
             if text.is_empty() {
+                tracing::warn!("Transcription produced empty text after processing");
                 return None;
             }
 
             // Filter known Whisper hallucinations
             let trimmed = text.trim().trim_end_matches('.').to_lowercase();
             if HALLUCINATIONS.contains(&trimmed.as_str()) {
-                tracing::debug!("Filtered hallucination (exact match): {:?}", text);
+                tracing::info!("Filtered hallucination (exact match): {:?}", text);
                 return None;
             }
 
@@ -1069,26 +1216,21 @@ fn transcribe_chunk(
             if (stripped.starts_with('*') && stripped.ends_with('*'))
                 || (stripped.starts_with('[') && stripped.ends_with(']'))
             {
-                tracing::debug!("Filtered hallucination (bracketed): {:?}", text);
+                tracing::info!("Filtered hallucination (bracketed): {:?}", text);
                 return None;
             }
 
-            // Length-ratio check: >3s of audio but <=2 words is suspicious
-            // Normal speech produces ~2.5 words/sec
-            let word_count = text.split_whitespace().count();
-            if duration_secs > 3.0 && word_count <= 2 {
-                tracing::debug!(
-                    "Filtered hallucination (length-ratio): {:?} ({} words in {:.1}s)",
-                    text,
-                    word_count,
-                    duration_secs
-                );
-                return None;
-            }
-
+            tracing::info!("Transcription success: '{}' ({} chars)", text, text.len());
             Some((text, result.processing_time_ms))
         }
-        Ok(_) => None,
+        Ok(result) => {
+            tracing::warn!(
+                "Engine returned empty text ({}ms, {} samples)",
+                result.processing_time_ms,
+                processed.len()
+            );
+            None
+        }
         Err(e) => {
             tracing::error!("Phrase transcription failed: {}", e);
             None
@@ -1121,8 +1263,11 @@ fn handle_toggle(app: &tauri::AppHandle) {
         drop(recording);
 
         tracing::info!("Toggle: manual stop");
+        // Reflect stopped state in UI immediately. Cleanup will still happen
+        // when streaming_worker receives StreamingDone.
+        emit_recording_state(app, false, false);
 
-        if let Err(e) = state.audio.request_stop() {
+        if let Err(e) = state.audio.get().expect("audio initialized").request_stop() {
             tracing::error!("Failed to send stop command: {}", e);
             emit_recording_state(app, false, false);
             let _ = app.emit(
@@ -1133,18 +1278,15 @@ fn handle_toggle(app: &tauri::AppHandle) {
         // The streaming_worker thread will handle cleanup via StreamingDone
     } else {
         // ── Start streaming ──────────────────────────────────────────────
-        // Guard: engine not loaded
-        {
-            let engine = state.engine.lock().unwrap_or_else(|e| e.into_inner());
-            if engine.is_none() {
-                drop(recording);
-                tracing::debug!("Toggle: engine not loaded yet");
-                let _ = app.emit(
-                    "hotkey-error",
-                    serde_json::json!({ "error": "Model not loaded yet" }),
-                );
-                return;
-            }
+        // Guard: engine not loaded (lock-free check — never blocks UI)
+        if !state.engine_loaded.load(std::sync::atomic::Ordering::Acquire) {
+            drop(recording);
+            tracing::debug!("Toggle: engine not loaded yet");
+            let _ = app.emit(
+                "hotkey-error",
+                serde_json::json!({ "error": "Model still loading — please wait" }),
+            );
+            return;
         }
 
         // Set recording immediately to prevent double-toggle
@@ -1156,7 +1298,27 @@ fn handle_toggle(app: &tauri::AppHandle) {
 
         let app_handle = app.clone();
         std::thread::spawn(move || {
-            streaming_worker(&app_handle);
+            let worker_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                streaming_worker(&app_handle);
+            }));
+            if let Err(panic_info) = worker_result {
+                let msg = if let Some(s) = panic_info.downcast_ref::<String>() {
+                    s.clone()
+                } else if let Some(s) = panic_info.downcast_ref::<&str>() {
+                    (*s).to_string()
+                } else {
+                    "unknown panic in streaming worker".to_string()
+                };
+                tracing::error!("Streaming worker panicked: {}", msg);
+                if let Some(state) = app_handle.try_state::<AppState>() {
+                    *state.recording.lock().unwrap_or_else(|e| e.into_inner()) = false;
+                }
+                emit_recording_state(&app_handle, false, false);
+                let _ = app_handle.emit(
+                    "hotkey-error",
+                    serde_json::json!({ "error": format!("Recording crashed: {}", msg) }),
+                );
+            }
         });
     }
 }
@@ -1178,6 +1340,8 @@ fn streaming_worker(app: &tauri::AppHandle) {
     // Start streaming (blocks until audio capture is ready)
     if let Err(e) = state
         .audio
+        .get()
+        .expect("audio initialized")
         .start_streaming(rms_threshold, phrase_pause, session_timeout)
     {
         tracing::error!("Failed to start streaming: {}", e);
@@ -1191,9 +1355,13 @@ fn streaming_worker(app: &tauri::AppHandle) {
     }
 
     // Loop: receive PhraseReady / StreamingDone
+    let mut had_transcription = false;
     loop {
-        match state.audio.recv_result() {
+        match state.audio.get().expect("audio initialized").recv_result() {
             Ok(audio_worker::AudioResult::PhraseReady(audio)) => {
+                // We should still process this phrase if recording was JUST stopped.
+                // The worker flushes the last chunk on stop.
+
                 tracing::info!(
                     "Phrase ready: {} samples ({:.1}s of audio)",
                     audio.samples.len(),
@@ -1207,12 +1375,34 @@ fn streaming_worker(app: &tauri::AppHandle) {
                 tracing::info!("Transcription result: {:?}", result.as_ref().map(|(t, ms)| (t.as_str(), ms)));
 
                 if let Some((ref text, processing_time_ms)) = result {
-                    if let Err(e) = output_text(text, output_mode) {
-                        tracing::error!("Failed to output text: {}", e);
-                        let _ = app.emit(
-                            "hotkey-error",
-                            serde_json::json!({ "error": format!("Failed to output text: {}", e) }),
-                        );
+                    had_transcription = true;
+                    // Always output valid transcription regardless of recording state.
+                    // The phrase was already detected and transcribed; deliver it.
+                    tracing::info!("Outputting transcription ({} chars) to {:?}", text.len(), output_mode);
+                    let output_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        output_text(text, output_mode)
+                    }));
+                    match output_result {
+                        Ok(Err(e)) => {
+                            tracing::error!("Failed to output text: {}", e);
+                            let _ = app.emit(
+                                "hotkey-error",
+                                serde_json::json!({ "error": format!("Failed to output text: {}", e) }),
+                            );
+                        }
+                        Err(panic_info) => {
+                            let msg = if let Some(s) = panic_info.downcast_ref::<String>() {
+                                s.clone()
+                            } else {
+                                "unknown panic in output_text".to_string()
+                            };
+                            tracing::error!("output_text panicked: {}", msg);
+                            let _ = app.emit(
+                                "hotkey-error",
+                                serde_json::json!({ "error": format!("Output crashed: {}", msg) }),
+                            );
+                        }
+                        Ok(Ok(())) => {}
                     }
 
                     let _ = app.emit("streaming-phrase", serde_json::json!({ "text": text, "processing_time_ms": processing_time_ms }));
@@ -1229,7 +1419,7 @@ fn streaming_worker(app: &tauri::AppHandle) {
                 break;
             }
             Ok(audio_worker::AudioResult::AudioLevel(rms)) => {
-                let _ = app.emit("audio-level", serde_json::json!({ "rms": rms }));
+                let _ = app.emit("audio-level", rms);
             }
             Ok(audio_worker::AudioResult::Started) => {
                 // Shouldn't happen in this loop, but harmless
@@ -1247,6 +1437,14 @@ fn streaming_worker(app: &tauri::AppHandle) {
                 break;
             }
         }
+    }
+
+    // Notify user if no transcription was produced during the session
+    if !had_transcription {
+        let _ = app.emit(
+            "hotkey-error",
+            serde_json::json!({ "error": "No speech detected — check your microphone input" }),
+        );
     }
 
     // Cleanup
@@ -1274,70 +1472,49 @@ fn fallback_icon() -> Image<'static> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() -> anyhow::Result<()> {
+    // Set up file-based logging so release builds have visible logs.
+    let log_dir = if let Ok(appdata) = std::env::var("APPDATA") {
+        std::path::PathBuf::from(appdata).join("murmur")
+    } else if let Ok(home) = std::env::var("HOME") {
+        std::path::PathBuf::from(home).join(".config").join("murmur")
+    } else {
+        std::path::PathBuf::from(".")
+    };
+    let _ = std::fs::create_dir_all(&log_dir);
+
+    let file_appender = tracing_appender::rolling::daily(&log_dir, "app");
+    let (non_blocking, _guard) = tracing_appender::non_blocking(file_appender);
+
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
                 .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
         )
+        .with_writer(non_blocking)
+        .with_ansi(false)
         .init();
 
     Settings::migrate_from_voitex();
     let config_path = Settings::default_path().context("Failed to determine config path")?;
-    let settings = Settings::load(&config_path).context("Failed to load settings")?;
+    let mut settings = Settings::load(&config_path).context("Failed to load settings")?;
+    if settings.output_mode == murmur_core::output::OutputMode::Stdout {
+        // Desktop app should not default to display-only mode because users
+        // expect text to be delivered to the active app.
+        settings.output_mode = murmur_core::output::OutputMode::Keyboard;
+        if let Err(e) = settings.save(&config_path) {
+            tracing::warn!("Failed to persist output_mode migration from stdout: {}", e);
+        }
+        tracing::info!("Migrated desktop output mode from stdout to keyboard");
+    }
 
     let model = settings.model;
-    let model_mgr = ModelManager::new(
-        ModelManager::default_dir().context("Failed to determine models directory")?,
-    );
 
-    let model_already_downloaded = model_mgr.is_downloaded(model);
-
-    // For Parakeet, also need the ONNX Runtime DLL
-    let ort_ready = model.backend() != Backend::Parakeet || runtime::is_downloaded();
-
-    // If model exists (and runtime DLL for Parakeet), init engine immediately
-    let engine = if model_already_downloaded && ort_ready {
-        let model_path = model_mgr.model_path(model);
-        let path_str = model_path
-            .to_str()
-            .context("Invalid model path (non-UTF-8)")?;
-
-        let result = match model.backend() {
-            Backend::Whisper => SttEngine::new_whisper(path_str, 0),
-            Backend::Parakeet => SttEngine::new_parakeet(path_str),
-        };
-
-        match result {
-            Ok(e) => Some(e),
-            Err(e) => {
-                tracing::error!("Failed to initialize STT engine: {}", e);
-                None
-            }
-        }
-    } else {
-        tracing::info!(
-            "Model {} not ready, will auto-download on startup",
-            model.name()
-        );
-        None
-    };
-
-    // Need to auto-download if model or runtime is missing
-    let need_auto_download = !model_already_downloaded || !ort_ready;
-
-    let engine = Arc::new(Mutex::new(engine));
-    let audio = audio_worker::Handle::spawn();
-
+    // Always initialize engine in background to keep app startup instant.
+    // The UI shows a "loading model" banner until the engine is ready.
+    let engine: Arc<Mutex<Option<SttEngine>>> = Arc::new(Mutex::new(None));
+    
     let hotkey_str = settings.hotkey.clone();
     let show_widget_on_start = settings.show_widget;
-
-    let app_state = AppState {
-        audio,
-        engine: Arc::clone(&engine),
-        recording: Mutex::new(false),
-        settings: Mutex::new(settings),
-        last_toggle: Mutex::new(Instant::now() - Duration::from_secs(10)),
-    };
 
     tauri::Builder::default()
         .plugin(
@@ -1347,7 +1524,14 @@ pub fn run() -> anyhow::Result<()> {
                 })
                 .build(),
         )
-        .manage(app_state)
+        .manage(AppState {
+            audio: std::sync::OnceLock::new(),
+            engine: Arc::clone(&engine),
+            engine_loaded: std::sync::atomic::AtomicBool::new(false),
+            recording: Mutex::new(false),
+            settings: Mutex::new(settings),
+            last_toggle: Mutex::new(Instant::now() - Duration::from_secs(10)),
+        })
         .on_window_event(|window, event| {
             // Hide the main window on close instead of destroying it,
             // so it can be re-shown from the tray icon.
@@ -1372,6 +1556,11 @@ pub fn run() -> anyhow::Result<()> {
             set_widget_visible,
         ])
         .setup(move |app| {
+            // Initialize audio worker once we have the app handle
+            let state = app.state::<AppState>();
+            let handle = audio_worker::Handle::spawn(app.handle().clone());
+            let _ = state.audio.set(handle);
+
             let show_i = MenuItem::with_id(app, "show", "Show", true, None::<&str>)?;
             let widget_i =
                 MenuItem::with_id(app, "toggle_widget", "Toggle Widget", true, None::<&str>)?;
@@ -1428,19 +1617,19 @@ pub fn run() -> anyhow::Result<()> {
                 .build(app)?;
 
             // Register global hotkey (toggle mode)
-            let shortcut: tauri_plugin_global_shortcut::Shortcut = hotkey_str
-                .parse()
-                .map_err(|e| anyhow::anyhow!("Failed to parse hotkey '{}': {:?}", hotkey_str, e))?;
+            // Use unregister_all first to clear any stale registrations from
+            // a previous instance (e.g. after a force-kill that skipped cleanup).
+            let _ = app.global_shortcut().unregister_all();
 
-            // Unregister first in case a previous instance left it registered
-            // (e.g. after a force-kill that skipped cleanup)
-            let _ = app.global_shortcut().unregister(shortcut);
-
-            app.global_shortcut().register(shortcut).map_err(|e| {
-                anyhow::anyhow!("Failed to register hotkey '{}': {:?}", hotkey_str, e)
-            })?;
-
-            tracing::info!("Registered global hotkey: {}", hotkey_str);
+            match hotkey_str.parse::<tauri_plugin_global_shortcut::Shortcut>() {
+                Ok(shortcut) => {
+                    match app.global_shortcut().register(shortcut) {
+                        Ok(()) => tracing::info!("Registered global hotkey: {}", hotkey_str),
+                        Err(e) => tracing::warn!("Could not register hotkey '{}': {:?} (app will still work via UI)", hotkey_str, e),
+                    }
+                }
+                Err(e) => tracing::warn!("Could not parse hotkey '{}': {:?}", hotkey_str, e),
+            }
 
             // Hide widget if config says so
             if !show_widget_on_start
@@ -1449,43 +1638,50 @@ pub fn run() -> anyhow::Result<()> {
                 let _ = widget.hide();
             }
 
-            // Auto-download model (and ORT runtime if needed) if not ready
-            if need_auto_download {
-                let engine_ref = Arc::clone(&engine);
-                spawn_download_and_init(app.handle().clone(), engine_ref, model);
-            }
+            // Always init engine in background — never block startup
+            spawn_download_and_init(app.handle().clone(), Arc::clone(&engine), model);
 
             // Global mouse-click listener: any click stops an active recording session.
             // Only active when click_to_stop is enabled in settings (default: off).
-            let app_for_mouse = app.handle().clone();
-            std::thread::spawn(move || {
-                if let Err(e) = rdev::listen(move |event| {
-                    if let rdev::EventType::ButtonPress(
-                        rdev::Button::Left | rdev::Button::Right | rdev::Button::Middle,
-                    ) = event.event_type
-                    {
-                        let state = app_for_mouse.state::<AppState>();
-                        let click_to_stop = state
-                            .settings
-                            .try_lock()
-                            .map(|s| s.click_to_stop)
-                            .unwrap_or(false);
-                        if !click_to_stop {
-                            return;
-                        }
-                        let is_recording = state
-                            .recording
-                            .try_lock()
-                            .map(|g| *g)
-                            .unwrap_or(false);
-                        if is_recording {
-                            handle_toggle(&app_for_mouse);
-                        }
+            // Wrapped in catch_unwind to prevent panics from crossing the rdev FFI boundary.
+            let click_to_stop = state.settings.lock().map(|s| s.click_to_stop).unwrap_or(false);
+            if click_to_stop {
+                let app_for_mouse = app.handle().clone();
+                std::thread::spawn(move || {
+                    tracing::info!("Starting global mouse listener (click_to_stop enabled)");
+                    if let Err(e) = rdev::listen(move |event| {
+                        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                            if let rdev::EventType::ButtonPress(
+                                rdev::Button::Left | rdev::Button::Right | rdev::Button::Middle,
+                            ) = event.event_type
+                            {
+                                let state = app_for_mouse.state::<AppState>();
+                                // Still check the lock in case it was disabled during runtime
+                                let click_to_stop = state
+                                    .settings
+                                    .try_lock()
+                                    .map(|s| s.click_to_stop)
+                                    .unwrap_or(false);
+                                if !click_to_stop {
+                                    return;
+                                }
+                                let is_recording = state
+                                    .recording
+                                    .try_lock()
+                                    .map(|g| *g)
+                                    .unwrap_or(false);
+                                if is_recording {
+                                    handle_toggle(&app_for_mouse);
+                                }
+                            }
+                        }));
+                    }) {
+                        tracing::error!("Global mouse listener failed: {:?}", e);
                     }
-                }) {
-                    tracing::error!("Global mouse listener failed: {:?}", e);
-                }
-            });
+                });
+            } else {
+                tracing::info!("Global mouse listener disabled (click_to_stop is false)");
+            }
 
             tracing::info!("Murmur app started");
             Ok(())

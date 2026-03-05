@@ -87,7 +87,7 @@ fn default_phrase_pause_secs() -> f32 {
 }
 
 fn default_session_timeout_secs() -> f32 {
-    10.0
+    30.0
 }
 
 fn default_true() -> bool {
@@ -169,13 +169,19 @@ impl Settings {
         }
     }
 
-    /// Save settings to a TOML file.
+    /// Save settings to a TOML file (atomic: write to tempfile, then rename).
     pub fn save(&self, path: &PathBuf) -> Result<()> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
         let content = toml::to_string_pretty(self)?;
-        std::fs::write(path, content)?;
+
+        // Atomic write: write to a sibling tempfile first, then rename.
+        // This prevents a crash mid-write from corrupting the config file.
+        let tmp_path = path.with_extension("toml.tmp");
+        std::fs::write(&tmp_path, &content)?;
+        std::fs::rename(&tmp_path, path)?;
+
         tracing::info!("Saved config to {}", path.display());
         Ok(())
     }

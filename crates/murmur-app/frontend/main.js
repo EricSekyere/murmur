@@ -14,12 +14,11 @@ let transcriptionHandled = false;  // guard: prevent double-display from invoke 
 // Analytics - current session
 let currentSession = null;
 
-// Web Audio
-let audioContext = null;
-let analyserNode = null;
-let micStream = null;
-let animationFrameHandle = null;
+// Visualization state (driven by backend audio-level events)
 let vizActive = false;
+let animationFrameHandle = null;
+let currentRms = 0;
+let targetRms = 0;
 
 // ─── DOM Refs ────────────────────────────────────────────────────────────────
 const modelBanner       = document.getElementById('model-banner');
@@ -503,7 +502,10 @@ settingsToggle.addEventListener('click', async () => {
     try {
       const status = await invoke('get_status');
       if (status.hotkey) hotkeyInput.value = status.hotkey;
-      if (status.output_mode) outputModeSelect.value = status.output_mode;
+      if (status.output_mode) {
+        // Desktop app treats stdout as keyboard fallback.
+        outputModeSelect.value = status.output_mode === 'stdout' ? 'keyboard' : status.output_mode;
+      }
       if (status.phrase_pause_secs != null) {
         phrasePauseRange.value = status.phrase_pause_secs;
         phrasePauseValue.textContent = `${parseFloat(status.phrase_pause_secs).toFixed(1)}s`;
@@ -579,7 +581,7 @@ hotkeySave.addEventListener('click', async () => {
 outputModeSelect.addEventListener('change', async () => {
   const mode = outputModeSelect.value;
   try {
-    await invoke('update_settings', { outputMode: mode });
+    await invoke('update_settings', { output_mode: mode });
     outputModeDisplay.textContent = mode;
     showToast(`Output: ${mode}`, 'success');
   } catch (err) {
@@ -611,7 +613,7 @@ phrasePauseRange.addEventListener('input', () => {
 phrasePauseRange.addEventListener('change', async () => {
   const val = parseFloat(phrasePauseRange.value);
   try {
-    await invoke('update_settings', { phrasePauseSecs: val });
+    await invoke('update_settings', { phrase_pause_secs: val });
   } catch (err) {
     showToast(`Failed: ${err}`, 'error');
   }
@@ -625,7 +627,7 @@ sessionTimeoutRange.addEventListener('input', () => {
 sessionTimeoutRange.addEventListener('change', async () => {
   const val = parseInt(sessionTimeoutRange.value, 10);
   try {
-    await invoke('update_settings', { sessionTimeoutSecs: val });
+    await invoke('update_settings', { session_timeout_secs: val });
   } catch (err) {
     showToast(`Failed: ${err}`, 'error');
   }
@@ -635,7 +637,7 @@ sessionTimeoutRange.addEventListener('change', async () => {
 clickToStopToggle.addEventListener('change', async () => {
   const enabled = clickToStopToggle.checked;
   try {
-    await invoke('update_settings', { clickToStop: enabled });
+    await invoke('update_settings', { click_to_stop: enabled });
   } catch (err) {
     clickToStopToggle.checked = !enabled;
     showToast(`Failed: ${err}`, 'error');
@@ -658,11 +660,16 @@ listen('audio-level', (event) => {
   const level = event.payload;
   if (typeof level !== 'number') return;
 
+  // Feed the visualization
+  targetRms = level;
+
   micQuality.hidden = false;
-  if (level > 0.15) {
+  // Thresholds tuned for gained audio levels (mic gain normalization
+  // brings quiet mics to usable levels before these values are emitted).
+  if (level > 0.08) {
     micQualityText.textContent = 'Good signal';
     micQuality.className = 'mic-quality mic-quality--good';
-  } else if (level > 0.05) {
+  } else if (level > 0.02) {
     micQualityText.textContent = 'Fair signal';
     micQuality.className = 'mic-quality mic-quality--fair';
   } else {
@@ -837,33 +844,14 @@ function resetVoiceBars() {
   micWrapper.style.removeProperty('--audio-level');
 }
 
-async function startVisualization() {
+function startVisualization() {
   visualization.hidden = false;
   if (voiceBars.length === 0) createVoiceBars();
   resetVoiceBars();
-
-  try {
-    if (!audioContext) {
-      audioContext = new AudioContext();
-    }
-    if (audioContext.state === 'suspended') {
-      await audioContext.resume();
-    }
-
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
-    micStream = stream;
-
-    const source = audioContext.createMediaStreamSource(stream);
-    analyserNode = audioContext.createAnalyser();
-    analyserNode.fftSize = 256;
-    analyserNode.smoothingTimeConstant = 0.75;
-    source.connect(analyserNode);
-
-    vizActive = true;
-    drawVisualization();
-  } catch (err) {
-    console.warn('Web Audio unavailable, visualization disabled:', err);
-  }
+  currentRms = 0;
+  targetRms = 0;
+  vizActive = true;
+  drawVisualization();
 }
 
 function stopVisualization() {
@@ -874,12 +862,8 @@ function stopVisualization() {
     animationFrameHandle = null;
   }
 
-  if (micStream) {
-    for (const track of micStream.getTracks()) track.stop();
-    micStream = null;
-  }
-
-  analyserNode = null;
+  currentRms = 0;
+  targetRms = 0;
   visualization.hidden = true;
   levelFill.style.width = '0%';
   micQuality.hidden = true;
@@ -887,32 +871,28 @@ function stopVisualization() {
 }
 
 function drawVisualization() {
-  if (!vizActive || !analyserNode) return;
+  if (!vizActive) return;
 
   animationFrameHandle = requestAnimationFrame(drawVisualization);
 
-  const freqData = new Uint8Array(analyserNode.frequencyBinCount);
-  analyserNode.getByteFrequencyData(freqData);
+  // Smooth interpolation toward the target RMS from backend
+  currentRms += (targetRms - currentRms) * 0.25;
 
-  // Map frequency bins to voice bars
-  const binCount = analyserNode.frequencyBinCount;
-  const step = Math.floor(binCount / NUM_BARS);
+  // Clamp the level for visual scaling (backend RMS is typically 0.0 - 0.3)
+  const level = Math.min(1, currentRms * 5);
+
+  // Drive voice bars from RMS with per-bar variation for a natural look
+  const time = performance.now() * 0.003;
   for (let i = 0; i < NUM_BARS; i++) {
-    const val = freqData[i * step] / 255;
+    // Each bar oscillates slightly differently based on its position
+    const wave = Math.sin(time + i * 0.4) * 0.3 + 0.7;
+    const jitter = 0.8 + Math.random() * 0.4;
+    const val = level * wave * jitter;
     const h = Math.max(3, val * BAR_HEIGHT_MAX);
     voiceBars[i].style.height = `${h}px`;
   }
 
-  // RMS for level bar + mic glow
-  const timeData = new Uint8Array(analyserNode.fftSize);
-  analyserNode.getByteTimeDomainData(timeData);
-  let sumSq = 0;
-  for (let i = 0; i < timeData.length; i++) {
-    const v = (timeData[i] - 128) / 128;
-    sumSq += v * v;
-  }
-  const rms = Math.sqrt(sumSq / timeData.length);
-  const level = Math.min(1, rms * 3);
+  // Level bar + mic glow
   levelFill.style.width = `${(level * 100).toFixed(1)}%`;
   micWrapper.style.setProperty('--audio-level', level.toFixed(3));
 }
@@ -1078,7 +1058,7 @@ async function init() {
       hotkeyDisplay.textContent = status.hotkey;
     }
     if (status.output_mode) {
-      outputModeDisplay.textContent = status.output_mode;
+      outputModeDisplay.textContent = status.output_mode === 'stdout' ? 'keyboard' : status.output_mode;
     }
     if (status.developer_mode) {
       developerModeToggle.checked = true;

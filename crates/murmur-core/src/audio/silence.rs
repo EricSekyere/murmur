@@ -127,7 +127,16 @@ pub struct PhraseDetector {
     state: PhraseState,
     silence_start: Option<Instant>,
     last_speech: Instant,
+    /// Consecutive speech frames seen while in TrailingSilence.
+    /// Prevents single noise frames (clicks, breaths) from resetting
+    /// the phrase pause timer. Requires sustained speech to re-enter InSpeech.
+    speech_confirm_count: u32,
 }
+
+/// Number of consecutive speech frames required to re-enter InSpeech
+/// from TrailingSilence. At ~50ms per frame, 3 frames ≈ 150ms.
+/// Filters transient noise while catching genuine continued speech.
+const SPEECH_CONFIRM_FRAMES: u32 = 3;
 
 impl PhraseDetector {
     pub fn new(rms_threshold: f32, phrase_pause: Duration, session_timeout: Duration) -> Self {
@@ -138,6 +147,7 @@ impl PhraseDetector {
             state: PhraseState::WaitingForSpeech,
             silence_start: None,
             last_speech: Instant::now(),
+            speech_confirm_count: 0,
         }
     }
 
@@ -173,6 +183,7 @@ impl PhraseDetector {
                 if is_speech {
                     self.state = PhraseState::InSpeech;
                     self.silence_start = None;
+                    self.speech_confirm_count = 0;
                 } else if !self.session_timeout.is_zero()
                     && self.last_speech.elapsed() >= self.session_timeout
                 {
@@ -183,16 +194,26 @@ impl PhraseDetector {
                 if !is_speech {
                     self.state = PhraseState::TrailingSilence;
                     self.silence_start = Some(Instant::now());
+                    self.speech_confirm_count = 0;
                 }
             }
             PhraseState::TrailingSilence => {
                 if is_speech {
-                    self.state = PhraseState::InSpeech;
-                    self.silence_start = None;
-                } else if let Some(start) = self.silence_start
-                    && start.elapsed() >= self.phrase_pause
-                {
-                    self.state = PhraseState::PhraseComplete;
+                    self.speech_confirm_count += 1;
+                    if self.speech_confirm_count >= SPEECH_CONFIRM_FRAMES {
+                        // Sustained speech confirmed — extend the phrase
+                        self.state = PhraseState::InSpeech;
+                        self.silence_start = None;
+                        self.speech_confirm_count = 0;
+                    }
+                    // Otherwise: possible transient noise, keep timing silence
+                } else {
+                    self.speech_confirm_count = 0;
+                    if let Some(start) = self.silence_start
+                        && start.elapsed() >= self.phrase_pause
+                    {
+                        self.state = PhraseState::PhraseComplete;
+                    }
                 }
             }
             PhraseState::PhraseComplete | PhraseState::SessionTimeout => {}
@@ -214,6 +235,7 @@ impl PhraseDetector {
     pub fn reset_phrase(&mut self) {
         self.state = PhraseState::WaitingForSpeech;
         self.silence_start = None;
+        self.speech_confirm_count = 0;
         // last_speech keeps its value so session timeout tracks total inactivity
     }
 
@@ -238,6 +260,9 @@ pub fn downmix_to_mono(samples: &[f32], channels: u16) -> Vec<f32> {
         return samples.to_vec();
     }
     let ch = channels as usize;
+    if ch == 0 {
+        return Vec::new();
+    }
     samples
         .chunks_exact(ch)
         .map(|frame| frame.iter().sum::<f32>() / ch as f32)
@@ -442,7 +467,29 @@ mod tests {
         det.feed(&make_silence(160));
         assert_eq!(det.state(), PhraseState::TrailingSilence);
 
+        // Requires SPEECH_CONFIRM_FRAMES consecutive speech frames to re-enter InSpeech
+        det.feed(&make_speech(160));
+        assert_eq!(det.state(), PhraseState::TrailingSilence); // 1 frame — not enough
+        det.feed(&make_speech(160));
+        assert_eq!(det.state(), PhraseState::TrailingSilence); // 2 frames — not enough
         let state = det.feed(&make_speech(160));
-        assert_eq!(state, PhraseState::InSpeech);
+        assert_eq!(state, PhraseState::InSpeech); // 3 frames — confirmed
+    }
+
+    #[test]
+    fn phrase_transient_noise_ignored_in_trailing() {
+        let mut det =
+            PhraseDetector::new(0.015, Duration::from_millis(500), Duration::from_secs(5));
+        det.feed(&make_speech(160));
+        det.feed(&make_silence(160));
+        assert_eq!(det.state(), PhraseState::TrailingSilence);
+
+        // A single speech frame (e.g. keyboard click) should NOT reset the timer
+        det.feed(&make_speech(160));
+        assert_eq!(det.state(), PhraseState::TrailingSilence);
+
+        // Followed by silence — confirm counter resets, silence timer continues
+        det.feed(&make_silence(160));
+        assert_eq!(det.state(), PhraseState::TrailingSilence);
     }
 }
