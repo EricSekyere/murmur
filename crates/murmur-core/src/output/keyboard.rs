@@ -8,11 +8,20 @@ use anyhow::Result;
 /// terminals, browsers, editors, elevated windows. No clipboard involved.
 ///
 /// On other platforms, falls back to clipboard + paste.
-pub struct KeyboardOutput;
+pub struct KeyboardOutput {
+    /// Milliseconds to wait before sending input, giving the target window
+    /// time to regain focus after a hotkey release.
+    pre_delay_ms: u64,
+}
 
 impl KeyboardOutput {
     pub fn new() -> Result<Self> {
-        Ok(Self)
+        Ok(Self { pre_delay_ms: 80 })
+    }
+
+    /// Create with a custom pre-output delay.
+    pub fn with_delay(pre_delay_ms: u64) -> Result<Self> {
+        Ok(Self { pre_delay_ms })
     }
 
     /// Type text into the focused application.
@@ -22,7 +31,19 @@ impl KeyboardOutput {
         }
 
         #[cfg(windows)]
+        log_foreground_window();
+
+        if self.pre_delay_ms > 0 {
+            tracing::trace!("Pre-output delay: {}ms", self.pre_delay_ms);
+            std::thread::sleep(std::time::Duration::from_millis(self.pre_delay_ms));
+        }
+
+        #[cfg(windows)]
         {
+            // Release all modifier keys first to prevent interference.
+            // After a hotkey like Ctrl+Q, some apps still see modifiers as held.
+            release_all_modifiers();
+
             tracing::debug!("Typing {} characters via SendInput (Unicode)", text.len());
             send_unicode_input(text)
         }
@@ -33,6 +54,240 @@ impl KeyboardOutput {
             clipboard_paste(text)
         }
     }
+}
+
+/// Log the foreground window title and class for diagnostics.
+/// Public wrapper for use by other output modules.
+#[cfg(windows)]
+pub fn log_foreground_window_public() {
+    log_foreground_window();
+}
+
+/// Release all stuck modifier keys.
+/// Public wrapper for use by other output modules.
+#[cfg(windows)]
+pub fn release_all_modifiers_public() {
+    release_all_modifiers();
+}
+
+/// Foreground window diagnostics for Windows output routing decisions.
+#[cfg(windows)]
+#[derive(Debug, Clone)]
+pub struct ForegroundWindowInfo {
+    pub title: String,
+    pub class_name: String,
+    pub process_name: Option<String>,
+}
+
+/// Read foreground window info for heuristics such as terminal detection.
+#[cfg(windows)]
+pub fn foreground_window_info_public() -> Option<ForegroundWindowInfo> {
+    foreground_window_info()
+}
+
+// ─── Windows: diagnostics ────────────────────────────────────────────────────
+
+#[cfg(windows)]
+fn log_foreground_window() {
+    unsafe extern "system" {
+        fn GetForegroundWindow() -> *mut std::ffi::c_void;
+    }
+
+    let hwnd = unsafe { GetForegroundWindow() };
+    if hwnd.is_null() {
+        tracing::debug!("No foreground window detected");
+        return;
+    }
+
+    if let Some(info) = foreground_window_info() {
+        tracing::info!(
+            "Target window: title={:?}, class={:?}, process={:?}, hwnd={:?}",
+            info.title,
+            info.class_name,
+            info.process_name,
+            hwnd
+        );
+    }
+}
+
+#[cfg(windows)]
+fn foreground_window_info() -> Option<ForegroundWindowInfo> {
+    use std::ffi::c_void;
+
+    const PROCESS_QUERY_LIMITED_INFORMATION: u32 = 0x1000;
+
+    unsafe extern "system" {
+        fn GetForegroundWindow() -> *mut c_void;
+        fn GetWindowTextW(hwnd: *mut c_void, lp_string: *mut u16, n_max: i32) -> i32;
+        fn GetClassNameW(hwnd: *mut c_void, lp_class: *mut u16, n_max: i32) -> i32;
+        fn GetWindowThreadProcessId(hwnd: *mut c_void, lpdw_process_id: *mut u32) -> u32;
+        fn OpenProcess(
+            dw_desired_access: u32,
+            b_inherit_handle: i32,
+            dw_process_id: u32,
+        ) -> *mut c_void;
+        fn QueryFullProcessImageNameW(
+            h_process: *mut c_void,
+            dw_flags: u32,
+            lp_exe_name: *mut u16,
+            lpdw_size: *mut u32,
+        ) -> i32;
+        fn CloseHandle(h_object: *mut c_void) -> i32;
+    }
+
+    fn lossy_wide_to_string(buf: &[u16], len: i32) -> String {
+        let len = len.max(0) as usize;
+        String::from_utf16_lossy(&buf[..len.min(buf.len())])
+    }
+
+    let hwnd = unsafe { GetForegroundWindow() };
+    if hwnd.is_null() {
+        return None;
+    }
+
+    let mut title_buf = [0u16; 512];
+    let title_len = unsafe { GetWindowTextW(hwnd, title_buf.as_mut_ptr(), title_buf.len() as i32) };
+    let title = lossy_wide_to_string(&title_buf, title_len);
+
+    let mut class_buf = [0u16; 256];
+    let class_len = unsafe { GetClassNameW(hwnd, class_buf.as_mut_ptr(), class_buf.len() as i32) };
+    let class_name = lossy_wide_to_string(&class_buf, class_len);
+
+    let mut process_id = 0u32;
+    unsafe {
+        GetWindowThreadProcessId(hwnd, &mut process_id);
+    }
+
+    let process_name = if process_id == 0 {
+        None
+    } else {
+        let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, process_id) };
+        if handle.is_null() {
+            None
+        } else {
+            let mut path_buf = [0u16; 1024];
+            let mut size = path_buf.len() as u32;
+            let ok =
+                unsafe { QueryFullProcessImageNameW(handle, 0, path_buf.as_mut_ptr(), &mut size) };
+            let _ = unsafe { CloseHandle(handle) };
+
+            if ok == 0 || size == 0 {
+                None
+            } else {
+                let path = String::from_utf16_lossy(&path_buf[..size as usize]);
+                std::path::Path::new(&path)
+                    .file_name()
+                    .map(|name| name.to_string_lossy().into_owned())
+            }
+        }
+    };
+
+    Some(ForegroundWindowInfo {
+        title,
+        class_name,
+        process_name,
+    })
+}
+
+// ─── Windows: release stuck modifier keys ────────────────────────────────────
+
+/// Send key-up events for all modifier keys to prevent interference.
+///
+/// After a global hotkey like Ctrl+Q is released, some applications still see
+/// the modifier as "held" because the key-up event was consumed by the hotkey
+/// system. Explicitly releasing all modifiers ensures the subsequent text input
+/// isn't misinterpreted as shortcut combinations (e.g., Ctrl+H instead of 'h').
+#[cfg(windows)]
+fn release_all_modifiers() {
+    use std::mem;
+
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    struct KeybdInput {
+        w_vk: u16,
+        w_scan: u16,
+        dw_flags: u32,
+        time: u32,
+        dw_extra_info: usize,
+    }
+
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    struct Input {
+        input_type: u32,
+        _padding: u32,
+        ki: KeybdInput,
+        _extra: u32,
+    }
+
+    const INPUT_KEYBOARD: u32 = 1;
+    const KEYEVENTF_KEYUP: u32 = 0x0002;
+
+    // All modifier virtual key codes
+    const VK_LCONTROL: u16 = 0xA2;
+    const VK_RCONTROL: u16 = 0xA3;
+    const VK_LSHIFT: u16 = 0xA0;
+    const VK_RSHIFT: u16 = 0xA1;
+    const VK_LMENU: u16 = 0xA4; // Left Alt
+    const VK_RMENU: u16 = 0xA5; // Right Alt
+    const VK_LWIN: u16 = 0x5B;
+    const VK_RWIN: u16 = 0x5C;
+
+    unsafe extern "system" {
+        fn SendInput(c_inputs: u32, p_inputs: *const Input, cb_size: i32) -> u32;
+        fn GetAsyncKeyState(v_key: i32) -> i16;
+    }
+
+    let modifiers = [
+        VK_LCONTROL,
+        VK_RCONTROL,
+        VK_LSHIFT,
+        VK_RSHIFT,
+        VK_LMENU,
+        VK_RMENU,
+        VK_LWIN,
+        VK_RWIN,
+    ];
+
+    let mut inputs: Vec<Input> = Vec::new();
+
+    for &vk in &modifiers {
+        // Only release keys that are currently pressed (bit 15 set = key is down)
+        let state = unsafe { GetAsyncKeyState(vk as i32) };
+        if state & (1 << 15) != 0 {
+            tracing::debug!("Releasing stuck modifier key: VK 0x{:02X}", vk);
+            inputs.push(Input {
+                input_type: INPUT_KEYBOARD,
+                _padding: 0,
+                ki: KeybdInput {
+                    w_vk: vk,
+                    w_scan: 0,
+                    dw_flags: KEYEVENTF_KEYUP,
+                    time: 0,
+                    dw_extra_info: 0,
+                },
+                _extra: 0,
+            });
+        }
+    }
+
+    if inputs.is_empty() {
+        tracing::trace!("No stuck modifier keys detected");
+        return;
+    }
+
+    let sent = unsafe {
+        SendInput(
+            inputs.len() as u32,
+            inputs.as_ptr(),
+            mem::size_of::<Input>() as i32,
+        )
+    };
+
+    tracing::info!("Released {}/{} stuck modifier keys", sent, inputs.len());
+
+    // Brief pause to let the modifier release propagate
+    std::thread::sleep(std::time::Duration::from_millis(20));
 }
 
 // ─── Windows: SendInput with KEYEVENTF_UNICODE ──────────────────────────────

@@ -5,6 +5,8 @@ use anyhow::Result;
 use std::panic::AssertUnwindSafe;
 use std::time::Instant;
 
+use super::models::SttModel;
+
 #[cfg(feature = "stt")]
 use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
 
@@ -33,6 +35,8 @@ pub struct Segment {
 pub struct SttEngine {
     inner: EngineInner,
     model_path: String,
+    /// Model variant hint for tuning inference parameters per model size.
+    model: Option<SttModel>,
 }
 
 enum EngineInner {
@@ -78,6 +82,7 @@ impl SttEngine {
             Ok(Self {
                 inner: EngineInner::Whisper { ctx, n_threads },
                 model_path: model_path.to_string(),
+                model: None,
             })
         }
 
@@ -88,6 +93,7 @@ impl SttEngine {
             Ok(Self {
                 inner: EngineInner::Stub,
                 model_path: model_path.to_string(),
+                model: None,
             })
         }
     }
@@ -108,19 +114,37 @@ impl SttEngine {
             let config = parakeet_rs::ExecutionConfig::new()
                 .with_execution_provider(parakeet_rs::ExecutionProvider::DirectML);
 
-            tracing::info!("Loading Parakeet model with DirectML GPU acceleration...");
+            tracing::info!(
+                "Loading Parakeet model from {} with DirectML GPU acceleration...",
+                model_dir
+            );
 
-            let engine =
-                parakeet_rs::ParakeetTDT::from_pretrained(model_dir, Some(config))
-                    .map_err(|e| anyhow::anyhow!("Failed to load Parakeet model: {}", e))?;
-
-            tracing::info!("Parakeet engine loaded model from: {}", model_dir);
+            let engine = match parakeet_rs::ParakeetTDT::from_pretrained(model_dir, Some(config)) {
+                Ok(e) => {
+                    tracing::info!("Parakeet engine loaded successfully from: {}", model_dir);
+                    e
+                }
+                Err(e) => {
+                    tracing::error!(
+                        "Parakeet model load failed (DirectML): {}. \
+                         This may indicate a GPU compatibility issue. \
+                         Check that DirectML is supported on this GPU.",
+                        e
+                    );
+                    return Err(anyhow::anyhow!(
+                        "Failed to load Parakeet model: {}. \
+                         Try a Whisper model if this persists.",
+                        e
+                    ));
+                }
+            };
 
             Ok(Self {
                 inner: EngineInner::Parakeet {
                     engine: Box::new(engine),
                 },
                 model_path: model_dir.to_string(),
+                model: None,
             })
         }
 
@@ -131,6 +155,7 @@ impl SttEngine {
             Ok(Self {
                 inner: EngineInner::Stub,
                 model_path: model_dir.to_string(),
+                model: None,
             })
         }
     }
@@ -138,6 +163,12 @@ impl SttEngine {
     /// Backward-compatible constructor (delegates to new_whisper).
     pub fn new(model_path: &str, n_threads: i32) -> Result<Self> {
         Self::new_whisper(model_path, n_threads)
+    }
+
+    /// Set the model variant so the engine can tune inference parameters
+    /// (temperature fallback, segment mode, etc.) per model size.
+    pub fn set_model(&mut self, model: SttModel) {
+        self.model = Some(model);
     }
 
     /// Transcribe raw PCM audio samples (16kHz mono f32) to text.
@@ -155,7 +186,7 @@ impl SttEngine {
         match &mut self.inner {
             #[cfg(feature = "stt")]
             EngineInner::Whisper { ctx, n_threads } => {
-                Self::transcribe_whisper(ctx, *n_threads, samples, start)
+                Self::transcribe_whisper(ctx, *n_threads, samples, start, self.model)
             }
             #[cfg(feature = "parakeet")]
             EngineInner::Parakeet { engine } => Self::transcribe_parakeet(engine, samples, start),
@@ -176,10 +207,16 @@ impl SttEngine {
         n_threads: i32,
         samples: &[f32],
         start: Instant,
+        model: Option<SttModel>,
     ) -> Result<TranscriptionResult> {
         let mut state = ctx
             .create_state()
             .context("Failed to create whisper state")?;
+
+        let is_large = matches!(
+            model,
+            Some(SttModel::WhisperMediumEn | SttModel::WhisperLargeV3Turbo)
+        );
 
         let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
         params.set_n_threads(n_threads);
@@ -189,7 +226,8 @@ impl SttEngine {
         params.set_print_progress(false);
         params.set_print_realtime(false);
         params.set_print_timestamps(false);
-        params.set_single_segment(false);
+        // Each chunk is a single phrase — tell the model not to over-segment.
+        params.set_single_segment(true);
         params.set_no_context(true);
         params.set_no_timestamps(false);
         params.set_suppress_blank(true);
@@ -197,15 +235,22 @@ impl SttEngine {
         // Encourage proper punctuation and capitalization via initial prompt.
         // Whisper uses this as a style hint for the decoder.
         params.set_initial_prompt("Use proper punctuation and capitalization.");
-        // Disable temperature fallback retries to minimize latency and memory spikes.
         params.set_temperature(0.0);
-        params.set_temperature_inc(0.0);
+        if is_large {
+            // Larger models (medium, large-v3-turbo) hit more edge cases where
+            // greedy decoding fails. Enable temperature fallback so the model
+            // retries with randomness on bad decodes (high compression ratio or
+            // low log probability). Increment of 0.4 gives at most 2 retries.
+            params.set_temperature_inc(0.4);
+        } else {
+            // Base/small: greedy is reliable, skip fallback for lower latency.
+            params.set_temperature_inc(0.0);
+        }
 
         // Wrap inference in catch_unwind to prevent whisper.cpp panics from
         // crashing the entire application (larger models hit more edge cases).
-        let inference_result = std::panic::catch_unwind(AssertUnwindSafe(|| {
-            state.full(params, samples)
-        }));
+        let inference_result =
+            std::panic::catch_unwind(AssertUnwindSafe(|| state.full(params, samples)));
 
         match inference_result {
             Ok(Ok(_)) => {}
@@ -246,11 +291,16 @@ impl SttEngine {
         }
 
         let elapsed = start.elapsed();
-        tracing::debug!(
-            "Whisper transcribed {} samples in {}ms -> {} segments",
+        tracing::info!(
+            "Whisper transcribed {} samples in {}ms -> {} segment(s), text={:?}",
             samples.len(),
             elapsed.as_millis(),
-            segments.len()
+            segments.len(),
+            if full_text.trim().is_empty() {
+                "<empty>"
+            } else {
+                full_text.trim()
+            }
         );
 
         Ok(TranscriptionResult {
@@ -268,15 +318,33 @@ impl SttEngine {
     ) -> Result<TranscriptionResult> {
         use parakeet_rs::Transcriber;
 
+        tracing::info!(
+            "Parakeet: transcribing {} samples ({:.2}s)...",
+            samples.len(),
+            samples.len() as f32 / 16000.0
+        );
+
         let result = engine
             .transcribe_samples(samples.to_vec(), 16000, 1, None)
-            .map_err(|e| anyhow::anyhow!("Parakeet transcription failed: {}", e))?;
+            .map_err(|e| {
+                tracing::error!("Parakeet transcription call failed: {}", e);
+                anyhow::anyhow!(
+                    "Parakeet transcription failed: {}. \
+                     This may indicate a DirectML/GPU issue.",
+                    e
+                )
+            })?;
 
         let elapsed = start.elapsed();
-        tracing::debug!(
-            "Parakeet transcribed {} samples in {}ms",
+        tracing::info!(
+            "Parakeet transcribed {} samples in {}ms -> {:?}",
             samples.len(),
             elapsed.as_millis(),
+            if result.text.is_empty() {
+                "<empty>"
+            } else {
+                &result.text
+            }
         );
 
         Ok(TranscriptionResult {

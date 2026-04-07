@@ -250,14 +250,21 @@ pub fn init_ort() -> Result<()> {
         match ort::init_from(&path) {
             Ok(builder) => {
                 builder.commit();
+                tracing::info!("ONNX Runtime initialized successfully");
                 Ok(())
             }
-            Err(e) => Err(format!("{}", e)),
+            Err(e) => {
+                tracing::error!("ONNX Runtime init_from failed: {}", e);
+                Err(format!("{}", e))
+            }
         }
     });
 
     match result {
         Ok(()) => Ok(()),
-        Err(e) => Err(anyhow::anyhow!("ONNX Runtime initialization failed: {}", e)),
+        Err(e) => {
+            tracing::error!("ONNX Runtime initialization failed (cached error): {}", e);
+            Err(anyhow::anyhow!("ONNX Runtime initialization failed: {}", e))
+        }
     }
 }

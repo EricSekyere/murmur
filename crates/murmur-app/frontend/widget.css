@@ -3,24 +3,19 @@
 
 /* ─── Variables ─────────────────────────────────────────────────────────── */
 :root {
-  --color-accent: #8b5cf6;
-  --color-record: #ef4444;
-  --color-processing: #f59e0b;
-  --color-text: #ffffff;
-  --color-text-muted: #9ca3af;
-  
-  --pill-bg: rgba(22, 22, 28, 0.7);
-  --pill-border: rgba(255, 255, 255, 0.12);
-  --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
-  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --accent: #8b5cf6;
+  --record: #ef4444;
+  --processing: #f59e0b;
+  --text: #f0f0f5;
+  --text-dim: rgba(255, 255, 255, 0.4);
+  --bg: rgba(12, 12, 18, 0.92);
+  --border: rgba(255, 255, 255, 0.07);
+  --ease: cubic-bezier(0.16, 1, 0.3, 1);
+  --spring: cubic-bezier(0.34, 1.56, 0.64, 1);
 }
 
 /* ─── Reset ─────────────────────────────────────────────────────────────── */
-*, *::before, *::after {
-  margin: 0;
-  padding: 0;
-  box-sizing: border-box;
-}
+*, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
 
 html, body {
   width: 100vw;
@@ -35,176 +30,202 @@ html, body {
   justify-content: center;
 }
 
-/* ─── Pill Container ────────────────────────────────────────────────────── */
+/* ─── Pill ──────────────────────────────────────────────────────────────── */
 .pill {
   position: relative;
   display: flex;
   align-items: center;
-  width: 140px;
-  height: 48px;
-  border-radius: 24px;
-  background: var(--pill-bg);
-  backdrop-filter: blur(16px) saturate(160%);
-  -webkit-backdrop-filter: blur(16px) saturate(160%);
-  border: 1px solid var(--pill-border);
-  box-shadow: 
-    inset 0 1px 1px rgba(255, 255, 255, 0.1),
-    0 10px 30px rgba(0, 0, 0, 0.5);
+  height: 42px;
+  border-radius: 21px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  padding: 3px 10px 3px 3px;
+  gap: 0;
   cursor: grab;
-  transition: all 0.4s var(--ease-spring);
-  padding: 6px;
-  gap: 12px;
+  transition: width 0.45s var(--ease),
+              border-color 0.35s ease,
+              box-shadow 0.4s ease;
+  overflow: hidden;
 }
 
-.pill:active {
-  cursor: grabbing;
-}
+.pill:active { cursor: grabbing; }
 
-/* Bridging drag area */
-.pill::after {
-  content: "";
+/* ─── Ambient Ring ──────────────────────────────────────────────────────── */
+.pill__ring {
   position: absolute;
-  inset: -10px;
-  z-index: -1;
+  inset: -1px;
+  border-radius: 22px;
+  pointer-events: none;
+  z-index: 0;
+  opacity: 0;
+  transition: opacity 0.4s ease, box-shadow 0.4s ease;
 }
 
-/* ─── Icon Button ───────────────────────────────────────────────────────── */
-.pill__icon-btn {
+/* ─── Orb ───────────────────────────────────────────────────────────────── */
+.pill__orb {
+  position: relative;
   width: 36px;
   height: 36px;
   border-radius: 50%;
   border: none;
   background: rgba(255, 255, 255, 0.05);
-  color: var(--color-text-muted);
+  color: var(--text-dim);
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
-  z-index: 5;
-  transition: all 0.3s var(--ease-spring);
   flex-shrink: 0;
+  z-index: 2;
+  transition: all 0.3s var(--spring);
 }
 
-.pill__icon-btn:hover {
+.pill__orb:hover {
   background: rgba(255, 255, 255, 0.1);
-  color: var(--color-text);
-  transform: scale(1.05);
+  color: var(--text);
+  transform: scale(1.06);
 }
 
-.pill__icon-btn:active {
-  transform: scale(0.95);
+.pill__orb:active {
+  transform: scale(0.93);
 }
 
+/* ─── Icons ─────────────────────────────────────────────────────────────── */
 .pill__icon {
-  width: 18px;
-  height: 18px;
-  transition: transform 0.4s var(--ease-spring);
+  position: absolute;
+  width: 17px;
+  height: 17px;
+  transition: opacity 0.2s ease, transform 0.3s var(--spring);
 }
 
-/* ─── Content Area ──────────────────────────────────────────────────────── */
-.pill__content {
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  flex-grow: 1;
-  position: relative;
-  overflow: hidden;
+.pill__icon--mic   { opacity: 1; transform: scale(1); }
+.pill__icon--stop  { opacity: 0; transform: scale(0.4); }
+.pill__icon--spin  { opacity: 0; transform: scale(0.4); }
+
+/* ─── Waveform ──────────────────────────────────────────────────────────── */
+.pill__wave {
+  display: none;
+  height: 34px;
+  flex-shrink: 0;
+  z-index: 1;
 }
 
+/* ─── Label ─────────────────────────────────────────────────────────────── */
 .pill__label {
-  font-size: 0.85rem;
+  font-size: 0.76rem;
   font-weight: 600;
-  color: var(--color-text-muted);
-  letter-spacing: 0.02em;
-  transition: all 0.3s var(--ease-out);
+  letter-spacing: 0.05em;
+  text-transform: lowercase;
+  color: var(--text-dim);
   white-space: nowrap;
+  padding: 0 4px 0 8px;
+  z-index: 1;
+  transition: color 0.3s ease, opacity 0.25s ease;
 }
 
-/* ─── Visualizer ────────────────────────────────────────────────────────── */
-.pill__visualizer {
-  display: none;
-  align-items: center;
-  gap: 3px;
-  height: 16px;
+/* ═══════════════════════════════════════════════════════════════════════════
+   IDLE
+   ═══════════════════════════════════════════════════════════════════════════ */
+.pill--idle {
+  width: 128px;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.35);
 }
 
-.bar {
-  width: 4px;
-  height: 4px;
-  background-color: var(--color-record);
-  border-radius: 2px;
-  transition: height 0.08s ease;
+.pill--idle .pill__orb {
+  background: rgba(139, 92, 246, 0.12);
+  color: var(--accent);
 }
 
-/* ─── States ────────────────────────────────────────────────────────────── */
-
-/* Recording */
+/* ═══════════════════════════════════════════════════════════════════════════
+   RECORDING
+   ═══════════════════════════════════════════════════════════════════════════ */
 .pill--recording {
-  border-color: rgba(239, 68, 68, 0.3);
-  box-shadow: 
-    inset 0 1px 1px rgba(255, 255, 255, 0.1),
-    0 0 20px rgba(239, 68, 68, 0.2),
-    0 10px 30px rgba(0, 0, 0, 0.5);
+  width: 170px;
+  border-color: rgba(239, 68, 68, 0.2);
+  box-shadow: 0 0 20px rgba(239, 68, 68, 0.12),
+              0 2px 12px rgba(0, 0, 0, 0.35);
 }
 
-.pill--recording .pill__icon-btn {
-  background: rgba(239, 68, 68, 0.15);
-  color: var(--color-record);
+.pill--recording .pill__ring {
+  opacity: 1;
+  box-shadow: inset 0 0 0 1px rgba(239, 68, 68, 0.15);
 }
 
-.pill--recording .pill__label {
-  display: none;
+.pill--recording .pill__orb {
+  background: var(--record);
+  color: white;
+  box-shadow: 0 0 14px rgba(239, 68, 68, 0.4);
+  animation: orb-pulse 2s infinite ease-in-out;
 }
 
-.pill--recording .pill__visualizer {
-  display: flex;
-}
+.pill--recording .pill__icon--mic  { opacity: 0; transform: scale(0.4); }
+.pill--recording .pill__icon--stop { opacity: 1; transform: scale(1); }
 
-/* Processing */
+.pill--recording .pill__wave  { display: block; }
+.pill--recording .pill__label { display: none; }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   PROCESSING
+   ═══════════════════════════════════════════════════════════════════════════ */
 .pill--processing {
-  border-color: rgba(245, 158, 11, 0.3);
-  box-shadow: 
-    inset 0 1px 1px rgba(255, 255, 255, 0.1),
-    0 0 20px rgba(245, 158, 11, 0.15),
-    0 10px 30px rgba(0, 0, 0, 0.5);
+  width: 144px;
+  border-color: rgba(245, 158, 11, 0.2);
+  box-shadow: 0 0 16px rgba(245, 158, 11, 0.1),
+              0 2px 12px rgba(0, 0, 0, 0.35);
 }
 
-.pill--processing .pill__icon-btn {
-  background: rgba(245, 158, 11, 0.15);
-  color: var(--color-processing);
+.pill--processing .pill__ring {
+  opacity: 0.6;
+  box-shadow: inset 0 0 0 1px rgba(245, 158, 11, 0.15);
 }
 
-.pill--processing .pill__icon {
-  animation: pulse-icon 1.5s infinite var(--ease-out);
+.pill--processing .pill__orb {
+  background: rgba(245, 158, 11, 0.12);
+  color: var(--processing);
 }
+
+.pill--processing .pill__icon--mic  { opacity: 0; transform: scale(0.4); }
+.pill--processing .pill__icon--spin { opacity: 1; transform: scale(1); animation: spin 0.8s linear infinite; }
 
 .pill--processing .pill__label {
-  color: var(--color-processing);
+  color: var(--processing);
+  animation: fade-pulse 1.6s infinite ease-in-out;
 }
 
-/* Error */
+/* ═══════════════════════════════════════════════════════════════════════════
+   ERROR
+   ═══════════════════════════════════════════════════════════════════════════ */
 .pill--error {
-  border-color: rgba(239, 68, 68, 0.8);
-  animation: shake 0.4s var(--ease-spring);
+  width: 128px;
+  border-color: rgba(239, 68, 68, 0.4);
+  animation: shake 0.35s var(--spring);
 }
 
-.pill--error .pill__icon-btn {
-  background: var(--color-record);
+.pill--error .pill__orb {
+  background: var(--record);
   color: white;
 }
 
-.pill--error .pill__label {
-  color: var(--color-record);
+.pill--error .pill__label { color: var(--record); }
+
+/* ─── Animations ────────────────────────────────────────────────────────── */
+@keyframes orb-pulse {
+  0%, 100% { box-shadow: 0 0 14px rgba(239, 68, 68, 0.4); }
+  50%      { box-shadow: 0 0 22px rgba(239, 68, 68, 0.6); }
 }
 
-/* Animations */
-@keyframes pulse-icon {
-  0%, 100% { opacity: 1; transform: scale(1); }
-  50% { opacity: 0.6; transform: scale(0.9); }
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+@keyframes fade-pulse {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.45; }
 }
 
 @keyframes shake {
   0%, 100% { transform: translateX(0); }
-  25% { transform: translateX(-4px); }
-  75% { transform: translateX(4px); }
+  20% { transform: translateX(-3px); }
+  40% { transform: translateX(3px); }
+  60% { transform: translateX(-2px); }
+  80% { transform: translateX(2px); }
 }

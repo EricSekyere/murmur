@@ -27,19 +27,17 @@ impl AudioCapture {
     }
 
     /// Start recording from the default microphone.
-    pub fn start(&mut self) -> Result<()> {
+    pub fn start(&mut self, preferred_device: Option<&str>) -> Result<()> {
         if let Ok(mut buf) = self.buffer.lock() {
             buf.clear();
         }
 
         let host = cpal::default_host();
-        let device = host
-            .default_input_device()
-            .ok_or_else(|| anyhow::anyhow!("No input device available"))?;
+        let device = select_input_device(&host, preferred_device)?;
 
         tracing::info!("Using input device: {}", device.name()?);
 
-        let supported = pick_best_config(&device)?;
+        let supported = choose_input_config(&device)?;
         let sample_format = supported.sample_format();
         let native_rate = supported.sample_rate().0;
         let native_channels = supported.channels();
@@ -56,48 +54,7 @@ impl AudioCapture {
 
         let config = supported.config();
 
-        let stream = match sample_format {
-            SampleFormat::F32 => {
-                let buffer = Arc::clone(&self.buffer);
-                device.build_input_stream(
-                    &config,
-                    move |data: &[f32], _: &cpal::InputCallbackInfo| {
-                        if let Ok(mut buf) = buffer.lock() {
-                            buf.extend_from_slice(data);
-                        }
-                    },
-                    |err| tracing::error!("Audio stream error: {}", err),
-                    None,
-                )?
-            }
-            SampleFormat::I16 => {
-                let buffer = Arc::clone(&self.buffer);
-                device.build_input_stream(
-                    &config,
-                    move |data: &[i16], _: &cpal::InputCallbackInfo| {
-                        if let Ok(mut buf) = buffer.lock() {
-                            buf.extend(data.iter().map(|&s| s as f32 / 32768.0));
-                        }
-                    },
-                    |err| tracing::error!("Audio stream error: {}", err),
-                    None,
-                )?
-            }
-            SampleFormat::I32 => {
-                let buffer = Arc::clone(&self.buffer);
-                device.build_input_stream(
-                    &config,
-                    move |data: &[i32], _: &cpal::InputCallbackInfo| {
-                        if let Ok(mut buf) = buffer.lock() {
-                            buf.extend(data.iter().map(|&s| s as f32 / i32::MAX as f32));
-                        }
-                    },
-                    |err| tracing::error!("Audio stream error: {}", err),
-                    None,
-                )?
-            }
-            format => anyhow::bail!("Unsupported sample format: {:?}", format),
-        };
+        let stream = build_input_stream_for_format(&device, &config, sample_format, &self.buffer)?;
 
         stream.play()?;
         self.stream = Some(stream);
@@ -169,6 +126,165 @@ impl AudioCapture {
     pub fn is_recording(&self) -> bool {
         self.stream.is_some()
     }
+}
+
+fn select_input_device(host: &cpal::Host, preferred_device: Option<&str>) -> Result<cpal::Device> {
+    if let Some(preferred_name) = preferred_device
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+    {
+        let devices = host
+            .input_devices()
+            .context("Failed to enumerate input devices")?;
+
+        for device in devices {
+            let Ok(name) = device.name() else {
+                continue;
+            };
+            if name == preferred_name {
+                return Ok(device);
+            }
+        }
+
+        tracing::warn!(
+            "Preferred input device {:?} not found, falling back to default input device",
+            preferred_name
+        );
+    }
+
+    host.default_input_device()
+        .ok_or_else(|| anyhow::anyhow!("No input device available"))
+}
+
+fn choose_input_config(device: &cpal::Device) -> Result<SupportedStreamConfig> {
+    #[cfg(windows)]
+    {
+        if let Ok(default) = device.default_input_config() {
+            tracing::info!(
+                "Using Windows default input config: {}Hz, {} channel(s), format: {:?}",
+                default.sample_rate().0,
+                default.channels(),
+                default.sample_format()
+            );
+            return Ok(default);
+        }
+
+        tracing::warn!("default_input_config failed on Windows, falling back to scanned configs");
+    }
+
+    pick_best_config(device)
+}
+
+fn build_input_stream_for_format(
+    device: &cpal::Device,
+    config: &cpal::StreamConfig,
+    sample_format: SampleFormat,
+    buffer: &Arc<Mutex<Vec<f32>>>,
+) -> Result<cpal::Stream> {
+    let err_fn = |err| tracing::error!("Audio stream error: {}", err);
+
+    let stream = match sample_format {
+        SampleFormat::F32 => {
+            let buffer = Arc::clone(buffer);
+            device.build_input_stream(
+                config,
+                move |data: &[f32], _: &cpal::InputCallbackInfo| {
+                    if let Ok(mut buf) = buffer.lock() {
+                        buf.extend_from_slice(data);
+                    }
+                },
+                err_fn,
+                None,
+            )?
+        }
+        SampleFormat::I16 => {
+            let buffer = Arc::clone(buffer);
+            device.build_input_stream(
+                config,
+                move |data: &[i16], _: &cpal::InputCallbackInfo| {
+                    if let Ok(mut buf) = buffer.lock() {
+                        buf.extend(data.iter().map(|&s| s as f32 / 32768.0));
+                    }
+                },
+                err_fn,
+                None,
+            )?
+        }
+        SampleFormat::U16 => {
+            let buffer = Arc::clone(buffer);
+            device.build_input_stream(
+                config,
+                move |data: &[u16], _: &cpal::InputCallbackInfo| {
+                    if let Ok(mut buf) = buffer.lock() {
+                        buf.extend(data.iter().map(|&s| (s as f32 / 65535.0) * 2.0 - 1.0));
+                    }
+                },
+                err_fn,
+                None,
+            )?
+        }
+        SampleFormat::I32 => {
+            let buffer = Arc::clone(buffer);
+            device.build_input_stream(
+                config,
+                move |data: &[i32], _: &cpal::InputCallbackInfo| {
+                    if let Ok(mut buf) = buffer.lock() {
+                        buf.extend(data.iter().map(|&s| s as f32 / i32::MAX as f32));
+                    }
+                },
+                err_fn,
+                None,
+            )?
+        }
+        SampleFormat::U32 => {
+            let buffer = Arc::clone(buffer);
+            device.build_input_stream(
+                config,
+                move |data: &[u32], _: &cpal::InputCallbackInfo| {
+                    if let Ok(mut buf) = buffer.lock() {
+                        buf.extend(
+                            data.iter()
+                                .map(|&s| (s as f32 / u32::MAX as f32) * 2.0 - 1.0),
+                        );
+                    }
+                },
+                err_fn,
+                None,
+            )?
+        }
+        SampleFormat::I8 => {
+            let buffer = Arc::clone(buffer);
+            device.build_input_stream(
+                config,
+                move |data: &[i8], _: &cpal::InputCallbackInfo| {
+                    if let Ok(mut buf) = buffer.lock() {
+                        buf.extend(data.iter().map(|&s| s as f32 / i8::MAX as f32));
+                    }
+                },
+                err_fn,
+                None,
+            )?
+        }
+        SampleFormat::U8 => {
+            let buffer = Arc::clone(buffer);
+            device.build_input_stream(
+                config,
+                move |data: &[u8], _: &cpal::InputCallbackInfo| {
+                    if let Ok(mut buf) = buffer.lock() {
+                        buf.extend(
+                            data.iter()
+                                .map(|&s| (s as f32 / u8::MAX as f32) * 2.0 - 1.0),
+                        );
+                    }
+                },
+                err_fn,
+                None,
+            )?
+        }
+        format => anyhow::bail!("Unsupported sample format: {:?}", format),
+    };
+
+    Ok(stream)
 }
 
 /// Score a sample format — lower is better.
@@ -266,14 +382,23 @@ fn pick_best_config(device: &cpal::Device) -> Result<SupportedStreamConfig> {
     Ok(config)
 }
 
-/// Linear interpolation resampler.
+/// Anti-aliased resampler: applies a low-pass filter before downsampling
+/// to prevent aliasing artifacts, then uses linear interpolation.
 pub(crate) fn resample(samples: &[f32], from_rate: u32, to_rate: u32) -> Vec<f32> {
     if from_rate == to_rate || samples.is_empty() {
         return samples.to_vec();
     }
 
+    // When downsampling, apply an anti-aliasing low-pass filter at the
+    // target Nyquist frequency (to_rate / 2) to prevent aliasing.
+    let source = if from_rate > to_rate {
+        lowpass_antialias(samples, from_rate, to_rate)
+    } else {
+        samples.to_vec()
+    };
+
     let ratio = from_rate as f64 / to_rate as f64;
-    let output_len = (samples.len() as f64 / ratio) as usize;
+    let output_len = (source.len() as f64 / ratio) as usize;
     let mut output = Vec::with_capacity(output_len);
 
     for i in 0..output_len {
@@ -281,14 +406,44 @@ pub(crate) fn resample(samples: &[f32], from_rate: u32, to_rate: u32) -> Vec<f32
         let idx = src_pos as usize;
         let frac = (src_pos - idx as f64) as f32;
 
-        let sample = if idx + 1 < samples.len() {
-            samples[idx] * (1.0 - frac) + samples[idx + 1] * frac
+        let sample = if idx + 1 < source.len() {
+            source[idx] * (1.0 - frac) + source[idx + 1] * frac
         } else {
-            samples[idx.min(samples.len() - 1)]
+            source[idx.min(source.len() - 1)]
         };
 
         output.push(sample);
     }
 
     output
+}
+
+/// Two-pass (forward + backward) single-pole IIR low-pass filter.
+///
+/// Applied before downsampling to prevent aliasing. The two-pass approach
+/// gives second-order rolloff (~12dB/octave) with zero phase distortion.
+/// Cutoff is set to the target Nyquist frequency (to_rate / 2).
+fn lowpass_antialias(samples: &[f32], from_rate: u32, to_rate: u32) -> Vec<f32> {
+    // RC time constant for cutoff at target_nyquist = to_rate / 2
+    let cutoff_hz = to_rate as f32 / 2.0;
+    let rc = 1.0 / (std::f32::consts::TAU * cutoff_hz);
+    let dt = 1.0 / from_rate as f32;
+    let alpha = dt / (rc + dt);
+
+    // Forward pass
+    let mut filtered = Vec::with_capacity(samples.len());
+    let mut prev = samples[0];
+    for &s in samples {
+        prev += alpha * (s - prev);
+        filtered.push(prev);
+    }
+
+    // Backward pass (zero-phase: eliminates phase distortion from forward pass)
+    prev = *filtered.last().unwrap();
+    for s in filtered.iter_mut().rev() {
+        prev += alpha * (*s - prev);
+        *s = prev;
+    }
+
+    filtered
 }

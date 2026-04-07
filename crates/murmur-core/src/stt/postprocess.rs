@@ -153,8 +153,7 @@ fn remove_like_filler(text: &str) -> String {
 fn starts_with_word_ci(text: &str, word: &str) -> bool {
     let lower = text.to_lowercase();
     lower.starts_with(&word.to_lowercase())
-        && (text.len() == word.len()
-            || !text.as_bytes()[word.len()].is_ascii_alphanumeric())
+        && (text.len() == word.len() || !text.as_bytes()[word.len()].is_ascii_alphanumeric())
 }
 
 fn is_word_boundary(bytes: &[u8], pos: usize) -> bool {
@@ -589,8 +588,8 @@ fn strip_trailing_punct(s: &str) -> (String, &str) {
 const CASING_KEYWORDS: &[&str] = &["camel", "snake", "pascal", "kebab", "upper"];
 
 const STOP_WORDS: &[&str] = &[
-    "and", "then", "or", "but", "the", "a", "an", "to", "in", "on", "for", "with", "from",
-    "that", "this", "is", "it", "of",
+    "and", "then", "or", "but", "the", "a", "an", "to", "in", "on", "for", "with", "from", "that",
+    "this", "is", "it", "of",
 ];
 
 fn apply_casing_formatters(text: &str) -> String {
@@ -803,10 +802,7 @@ mod tests {
 
     #[test]
     fn symbol_parens() {
-        assert_eq!(
-            expand_symbols("open paren x close paren"),
-            "(x )"
-        );
+        assert_eq!(expand_symbols("open paren x close paren"), "(x )");
     }
 
     #[test]
@@ -861,10 +857,7 @@ mod tests {
 
     #[test]
     fn casing_upper() {
-        assert_eq!(
-            apply_casing_formatters("upper max retries"),
-            "MAX_RETRIES"
-        );
+        assert_eq!(apply_casing_formatters("upper max retries"), "MAX_RETRIES");
     }
 
     #[test]

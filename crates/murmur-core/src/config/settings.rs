@@ -56,6 +56,11 @@ pub struct Settings {
     /// Show the floating widget window (default: true).
     #[serde(default = "default_true")]
     pub show_widget: bool,
+
+    /// Milliseconds to wait before sending keystrokes after hotkey release.
+    /// Gives the target window time to regain focus. Set to 0 to disable.
+    #[serde(default = "default_pre_output_delay_ms")]
+    pub pre_output_delay_ms: u64,
 }
 
 fn default_hotkey() -> String {
@@ -83,7 +88,7 @@ fn default_silence_timeout_secs() -> f32 {
 }
 
 fn default_phrase_pause_secs() -> f32 {
-    1.8
+    0.8
 }
 
 fn default_session_timeout_secs() -> f32 {
@@ -92,6 +97,10 @@ fn default_session_timeout_secs() -> f32 {
 
 fn default_true() -> bool {
     true
+}
+
+fn default_pre_output_delay_ms() -> u64 {
+    80
 }
 
 impl Default for Settings {
@@ -109,6 +118,7 @@ impl Default for Settings {
             developer_mode: false,
             click_to_stop: false,
             show_widget: true,
+            pre_output_delay_ms: default_pre_output_delay_ms(),
         }
     }
 }

@@ -1,8 +1,12 @@
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
+use cpal::SampleFormat;
+use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use murmur_core::config::Settings;
 use murmur_core::output::OutputMode;
 use murmur_core::stt::models::{Backend, ModelManager, SttModel};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 #[derive(Parser)]
 #[command(name = "murmur")]
@@ -55,6 +59,21 @@ enum Commands {
         #[arg(long)]
         download: Option<String>,
     },
+
+    /// Test microphone capture without transcription or UI.
+    AudioTest {
+        /// Audio input device name. Omit to use system default.
+        #[arg(long)]
+        device: Option<String>,
+
+        /// Test every available input device.
+        #[arg(long)]
+        all: bool,
+
+        /// Capture duration in seconds.
+        #[arg(long, default_value_t = 3)]
+        seconds: u64,
+    },
 }
 
 #[tokio::main]
@@ -81,9 +100,158 @@ async fn main() -> Result<()> {
             hotkey,
         } => cmd_config(show, reset, hotkey)?,
         Commands::Models { list, download } => cmd_models(list, download).await?,
+        Commands::AudioTest {
+            device,
+            all,
+            seconds,
+        } => cmd_audio_test(device, all, seconds)?,
     }
 
     Ok(())
+}
+
+fn cmd_audio_test(device_name: Option<String>, all: bool, seconds: u64) -> Result<()> {
+    let host = cpal::default_host();
+    let default_name = host
+        .default_input_device()
+        .and_then(|device| device.name().ok())
+        .unwrap_or_else(|| "<none>".to_string());
+
+    let devices = host
+        .input_devices()
+        .context("Failed to enumerate input devices")?
+        .collect::<Vec<_>>();
+
+    println!("Default input device: {}", default_name);
+    println!("Available input devices:");
+    for device in &devices {
+        let name = device.name().unwrap_or_else(|_| "<unnamed>".to_string());
+        let marker = if name == default_name {
+            " (default)"
+        } else {
+            ""
+        };
+        println!("  - {}{}", name, marker);
+    }
+
+    let mut targets = Vec::new();
+    if all {
+        targets = devices;
+    } else if let Some(requested) = device_name {
+        let requested = requested.trim();
+        let device = devices
+            .into_iter()
+            .find(|device| device.name().map(|name| name == requested).unwrap_or(false))
+            .ok_or_else(|| anyhow::anyhow!("Input device not found: {}", requested))?;
+        targets.push(device);
+    } else {
+        targets.push(
+            host.default_input_device()
+                .ok_or_else(|| anyhow::anyhow!("No default input device available"))?,
+        );
+    }
+
+    for device in targets {
+        test_audio_device(&device, seconds)?;
+    }
+
+    Ok(())
+}
+
+fn test_audio_device(device: &cpal::Device, seconds: u64) -> Result<()> {
+    let name = device.name().unwrap_or_else(|_| "<unnamed>".to_string());
+    let config = device
+        .default_input_config()
+        .with_context(|| format!("Failed to read default input config for {}", name))?;
+
+    println!();
+    println!("Testing: {}", name);
+    println!(
+        "  Config: {}Hz, {} channel(s), {:?}",
+        config.sample_rate().0,
+        config.channels(),
+        config.sample_format()
+    );
+    println!("  Speak now for {} second(s)...", seconds);
+
+    let samples = Arc::new(Mutex::new(Vec::<f32>::new()));
+    let stream_config = config.config();
+    let sample_format = config.sample_format();
+    let stream = build_test_stream(device, &stream_config, sample_format, Arc::clone(&samples))?;
+
+    stream.play()?;
+    std::thread::sleep(Duration::from_secs(seconds));
+    drop(stream);
+
+    let samples = samples.lock().map_err(|e| anyhow::anyhow!("{}", e))?;
+    let peak = samples.iter().map(|s| s.abs()).fold(0.0_f32, f32::max);
+    let rms = if samples.is_empty() {
+        0.0
+    } else {
+        (samples.iter().map(|s| s * s).sum::<f32>() / samples.len() as f32).sqrt()
+    };
+
+    println!("  Captured samples: {}", samples.len());
+    println!("  Peak: {:.6}", peak);
+    println!("  RMS:  {:.6}", rms);
+
+    if samples.is_empty() {
+        println!("  Result: FAIL - stream delivered no samples");
+    } else if peak < 0.001 || rms < 0.0001 {
+        println!("  Result: FAIL - samples are near digital silence");
+    } else {
+        println!("  Result: OK - microphone signal detected");
+    }
+
+    Ok(())
+}
+
+fn build_test_stream(
+    device: &cpal::Device,
+    config: &cpal::StreamConfig,
+    sample_format: SampleFormat,
+    samples: Arc<Mutex<Vec<f32>>>,
+) -> Result<cpal::Stream> {
+    let err_fn = |err| eprintln!("  Stream error: {}", err);
+
+    let stream = match sample_format {
+        SampleFormat::F32 => device.build_input_stream(
+            config,
+            move |data: &[f32], _| {
+                if let Ok(mut out) = samples.lock() {
+                    out.extend_from_slice(data);
+                }
+            },
+            err_fn,
+            None,
+        )?,
+        SampleFormat::I16 => device.build_input_stream(
+            config,
+            move |data: &[i16], _| {
+                if let Ok(mut out) = samples.lock() {
+                    out.extend(data.iter().map(|&s| s as f32 / i16::MAX as f32));
+                }
+            },
+            err_fn,
+            None,
+        )?,
+        SampleFormat::U16 => device.build_input_stream(
+            config,
+            move |data: &[u16], _| {
+                if let Ok(mut out) = samples.lock() {
+                    out.extend(
+                        data.iter()
+                            .map(|&s| (s as f32 / u16::MAX as f32) * 2.0 - 1.0),
+                    );
+                }
+            },
+            err_fn,
+            None,
+        )?,
+        format => anyhow::bail!("Unsupported audio test sample format: {:?}", format),
+    };
+
+    Ok(stream)
 }
 
 async fn cmd_listen(stdout: bool, clipboard: bool, model_name: Option<String>) -> Result<()> {
@@ -156,7 +324,7 @@ async fn cmd_listen(stdout: bool, clipboard: bool, model_name: Option<String>) -
             Ok(murmur_core::hotkey::HotkeyEvent::Pressed) => {
                 tracing::info!("Hotkey pressed — recording...");
                 println!("Recording...");
-                capture.start()?;
+                capture.start(settings.audio_device.as_deref())?;
             }
             Ok(murmur_core::hotkey::HotkeyEvent::Released) => {
                 tracing::info!("Hotkey released — transcribing...");
@@ -193,19 +361,7 @@ async fn cmd_listen(stdout: bool, clipboard: bool, model_name: Option<String>) -
 }
 
 fn output_text(text: &str, mode: OutputMode) -> Result<()> {
-    match mode {
-        OutputMode::Stdout => {
-            murmur_core::output::stdout::StdoutOutput::new().write(text)?;
-        }
-        OutputMode::Clipboard => {
-            murmur_core::output::clipboard::ClipboardOutput::new()?.copy(text)?;
-            println!("Copied to clipboard: {}", text);
-        }
-        OutputMode::Keyboard => {
-            murmur_core::output::keyboard::KeyboardOutput::new()?.type_text(text)?;
-        }
-    }
-    Ok(())
+    murmur_core::output::dispatch_output(text, mode)
 }
 
 fn cmd_config(show: bool, reset: bool, hotkey: Option<String>) -> Result<()> {

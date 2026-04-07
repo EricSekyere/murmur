@@ -498,13 +498,13 @@ settingsToggle.addEventListener('click', async () => {
   settingsPanel.hidden = expanded;
   if (!expanded) {
     loadModelList();
-    loadAudioDevices();
     try {
       const status = await invoke('get_status');
+      await loadAudioDevices(status.audio_device || '');
       if (status.hotkey) hotkeyInput.value = status.hotkey;
       if (status.output_mode) {
-        // Desktop app treats stdout as keyboard fallback.
-        outputModeSelect.value = status.output_mode === 'stdout' ? 'keyboard' : status.output_mode;
+        // Map stdout → auto for the desktop app dropdown.
+        outputModeSelect.value = status.output_mode === 'stdout' ? 'auto' : status.output_mode;
       }
       if (status.phrase_pause_secs != null) {
         phrasePauseRange.value = status.phrase_pause_secs;
@@ -590,20 +590,40 @@ outputModeSelect.addEventListener('change', async () => {
 });
 
 // ─── Audio Device ────────────────────────────────────────────────────────────
-async function loadAudioDevices() {
+async function loadAudioDevices(selectedDevice = '') {
   try {
     const devices = await invoke('list_audio_devices');
     audioDeviceSelect.innerHTML = '';
+
+    const defaultOpt = document.createElement('option');
+    defaultOpt.value = '';
+    defaultOpt.textContent = 'System default';
+    audioDeviceSelect.appendChild(defaultOpt);
+
     for (const d of devices) {
       const opt = document.createElement('option');
       opt.value = d;
       opt.textContent = d;
       audioDeviceSelect.appendChild(opt);
     }
+
+    audioDeviceSelect.value = devices.includes(selectedDevice) ? selectedDevice : '';
   } catch (err) {
     console.warn('Failed to list audio devices:', err);
   }
 }
+
+audioDeviceSelect.addEventListener('change', async () => {
+  try {
+    await invoke('update_settings', { audio_device: audioDeviceSelect.value });
+    showToast(
+      audioDeviceSelect.value ? `Mic: ${audioDeviceSelect.value}` : 'Mic: system default',
+      'success'
+    );
+  } catch (err) {
+    showToast(`Failed: ${err}`, 'error');
+  }
+});
 
 // ─── Phrase Pause Slider ─────────────────────────────────────────────────────
 phrasePauseRange.addEventListener('input', () => {
@@ -1058,7 +1078,7 @@ async function init() {
       hotkeyDisplay.textContent = status.hotkey;
     }
     if (status.output_mode) {
-      outputModeDisplay.textContent = status.output_mode === 'stdout' ? 'keyboard' : status.output_mode;
+      outputModeDisplay.textContent = status.output_mode === 'stdout' ? 'auto' : status.output_mode;
     }
     if (status.developer_mode) {
       developerModeToggle.checked = true;
