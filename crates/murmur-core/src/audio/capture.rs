@@ -28,10 +28,6 @@ impl AudioCapture {
 
     /// Start recording from the default microphone.
     pub fn start(&mut self, preferred_device: Option<&str>) -> Result<()> {
-        if let Ok(mut buf) = self.buffer.lock() {
-            buf.clear();
-        }
-
         let host = cpal::default_host();
         let device = select_input_device(&host, preferred_device)?;
 
@@ -41,6 +37,21 @@ impl AudioCapture {
         let sample_format = supported.sample_format();
         let native_rate = supported.sample_rate().0;
         let native_channels = supported.channels();
+
+        // Pre-reserve enough capacity for ~30 s of audio at the chosen
+        // config so the realtime cpal callback never reallocates during
+        // `extend_from_slice`. A reallocating Vec on the audio thread is
+        // the textbook cause of audible dropouts. The consumer drains the
+        // buffer routinely, so this is a high-water mark, not steady state.
+        const RESERVE_SECS: usize = 30;
+        let reserve_samples = RESERVE_SECS * native_rate as usize * native_channels.max(1) as usize;
+        if let Ok(mut buf) = self.buffer.lock() {
+            buf.clear();
+            let current_cap = buf.capacity();
+            if current_cap < reserve_samples {
+                buf.reserve(reserve_samples - current_cap);
+            }
+        }
 
         tracing::info!(
             "Selected config: {}Hz, {} channel(s), format: {:?}",
@@ -216,7 +227,9 @@ fn build_input_stream_for_format(
                 config,
                 move |data: &[u16], _: &cpal::InputCallbackInfo| {
                     if let Ok(mut buf) = buffer.lock() {
-                        buf.extend(data.iter().map(|&s| (s as f32 / 65535.0) * 2.0 - 1.0));
+                        // Zero-centered: silence in unsigned formats sits at
+                        // the midpoint (32768), not at 0.
+                        buf.extend(data.iter().map(|&s| (s as f32 - 32768.0) / 32768.0));
                     }
                 },
                 err_fn,
@@ -244,7 +257,7 @@ fn build_input_stream_for_format(
                     if let Ok(mut buf) = buffer.lock() {
                         buf.extend(
                             data.iter()
-                                .map(|&s| (s as f32 / u32::MAX as f32) * 2.0 - 1.0),
+                                .map(|&s| ((s as f64 - 2_147_483_648.0) / 2_147_483_648.0) as f32),
                         );
                     }
                 },
@@ -271,10 +284,7 @@ fn build_input_stream_for_format(
                 config,
                 move |data: &[u8], _: &cpal::InputCallbackInfo| {
                     if let Ok(mut buf) = buffer.lock() {
-                        buf.extend(
-                            data.iter()
-                                .map(|&s| (s as f32 / u8::MAX as f32) * 2.0 - 1.0),
-                        );
+                        buf.extend(data.iter().map(|&s| (s as f32 - 128.0) / 128.0));
                     }
                 },
                 err_fn,

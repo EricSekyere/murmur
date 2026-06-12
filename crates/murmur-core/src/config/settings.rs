@@ -4,6 +4,17 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+/// Transcription filtering profile.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TranscriptionProfile {
+    /// More permissive thresholds for quieter/shorter phrases.
+    #[default]
+    Relaxed,
+    /// Stricter thresholds and stronger hallucination filtering.
+    Strict,
+}
+
 /// Application settings, loaded from TOML config file.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Settings {
@@ -48,6 +59,10 @@ pub struct Settings {
     #[serde(default)]
     pub developer_mode: bool,
 
+    /// Transcription filtering profile (strict or relaxed).
+    #[serde(default)]
+    pub transcription_profile: TranscriptionProfile,
+
     /// Stop recording on any mouse click (default: false).
     /// When disabled, recording only stops via hotkey or mic button.
     #[serde(default)]
@@ -61,6 +76,15 @@ pub struct Settings {
     /// Gives the target window time to regain focus. Set to 0 to disable.
     #[serde(default = "default_pre_output_delay_ms")]
     pub pre_output_delay_ms: u64,
+
+    /// Key that toggles recording when double-tapped quickly.
+    /// "ctrl" (both sides; Cmd on macOS), "rctrl"/"lctrl" for one side only,
+    /// "rcmd" on macOS, or a single letter like "v". Taps only count when no
+    /// other key is involved, so shortcuts like Ctrl+V are ignored.
+    /// "rctrl" is the recommended value: it never types a character and is
+    /// virtually never part of shortcuts.
+    #[serde(default = "default_double_tap_key")]
+    pub double_tap_key: String,
 }
 
 fn default_hotkey() -> String {
@@ -76,6 +100,8 @@ fn default_model() -> SttModel {
 }
 
 fn default_vad_threshold() -> f32 {
+    // 0.5 (Silero's own default). 0.3 catches quieter speech but lets
+    // sighs/breaths through, which whisper then hallucinates words for.
     0.5
 }
 
@@ -88,7 +114,10 @@ fn default_silence_timeout_secs() -> f32 {
 }
 
 fn default_phrase_pause_secs() -> f32 {
-    0.8
+    // Short enough that text lands soon after you stop talking
+    // (macOS-dictation feel), long enough not to split mid-sentence
+    // breaths into separate phrases.
+    0.6
 }
 
 fn default_session_timeout_secs() -> f32 {
@@ -101,6 +130,10 @@ fn default_true() -> bool {
 
 fn default_pre_output_delay_ms() -> u64 {
     80
+}
+
+fn default_double_tap_key() -> String {
+    "ctrl".to_string()
 }
 
 impl Default for Settings {
@@ -116,9 +149,11 @@ impl Default for Settings {
             phrase_pause_secs: default_phrase_pause_secs(),
             session_timeout_secs: default_session_timeout_secs(),
             developer_mode: false,
+            transcription_profile: TranscriptionProfile::default(),
             click_to_stop: false,
             show_widget: true,
             pre_output_delay_ms: default_pre_output_delay_ms(),
+            double_tap_key: default_double_tap_key(),
         }
     }
 }

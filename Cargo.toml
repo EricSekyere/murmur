@@ -12,6 +12,11 @@ edition = "2024"
 license = "MIT"
 rust-version = "1.93"
 
+[profile.release]
+# More codegen units = smaller chunks per unit = lower peak memory in rustc-LLVM.
+# Avoids OOM during codegen of large crates (murmur-app/src/lib.rs) on Windows.
+codegen-units = 256
+
 [workspace.dependencies]
 murmur-core = { path = "crates/murmur-core" }
 tokio = { version = "1", features = ["full"] }

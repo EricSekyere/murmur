@@ -98,7 +98,33 @@ pub fn dispatch_output(text: &str, mode: OutputMode) -> anyhow::Result<()> {
     );
 
     match mode {
-        OutputMode::Auto | OutputMode::Keyboard => {
+        OutputMode::Auto => {
+            // macOS-Dictation-style: paste reliably. Ctrl+V is accepted by
+            // virtually every text-accepting surface on Windows (terminals,
+            // browsers, IDEs, Electron apps, elevated windows via clipboard
+            // sharing) and is immune to keyboard-layout differences and
+            // stuck-modifier interference. SendInput Unicode is kept as a
+            // fallback for the rare app that suppresses paste.
+            let text_with_space = format!("{} ", trimmed);
+
+            if let Err(e) = paste::ClipboardPasteOutput::new().paste_text(&text_with_space) {
+                tracing::warn!(
+                    "Auto: clipboard+paste failed, falling back to keyboard simulation: {}",
+                    e
+                );
+                let kb_result = keyboard::KeyboardOutput::new()
+                    .and_then(|mut kb| kb.type_text(&text_with_space));
+
+                if let Err(e2) = kb_result {
+                    tracing::warn!(
+                        "Auto: keyboard fallback also failed, copying to clipboard: {}",
+                        e2
+                    );
+                    clipboard::ClipboardOutput::new()?.copy(trimmed)?;
+                }
+            }
+        }
+        OutputMode::Keyboard => {
             let text_with_space = format!("{} ", trimmed);
 
             #[cfg(windows)]
@@ -113,7 +139,6 @@ pub fn dispatch_output(text: &str, mode: OutputMode) -> anyhow::Result<()> {
                 return Ok(());
             }
 
-            // Try keyboard simulation first
             let kb_result =
                 keyboard::KeyboardOutput::new().and_then(|mut kb| kb.type_text(&text_with_space));
 
@@ -122,7 +147,6 @@ pub fn dispatch_output(text: &str, mode: OutputMode) -> anyhow::Result<()> {
                     "Keyboard output failed, falling back to clipboard+paste: {}",
                     e
                 );
-                // Try clipboard + paste
                 let paste_result = paste::ClipboardPasteOutput::new().paste_text(&text_with_space);
 
                 if let Err(e2) = paste_result {

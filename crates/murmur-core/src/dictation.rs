@@ -1,4 +1,7 @@
 use crate::audio::AudioBuffer;
+use crate::audio::silence::compute_rms;
+#[cfg(feature = "vad")]
+use crate::audio::vad::{SILERO_FRAME_SAMPLES, VadState, VoiceActivityDetector};
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
@@ -7,7 +10,15 @@ pub struct DictationConfig {
     pub speech_threshold: f32,
     pub silence_hold: Duration,
     pub min_phrase: Duration,
+    /// Soft target for phrase length during continuous speech. When the
+    /// phrase buffer reaches this size, the session looks for an
+    /// energy-minimum frame within `split_search` to break on; if it
+    /// can't find one before `max_phrase + split_search`, it hard-cuts.
     pub max_phrase: Duration,
+    /// Window searched for an energy-minimum frame around `max_phrase`.
+    /// Larger window = more chance of finding a clean break, but more
+    /// latency before flushing during continuous speech.
+    pub split_search: Duration,
     pub preroll: Duration,
     pub session_timeout: Duration,
 }
@@ -18,12 +29,22 @@ impl Default for DictationConfig {
             speech_threshold: 0.010,
             silence_hold: Duration::from_millis(700),
             min_phrase: Duration::from_millis(150),
-            max_phrase: Duration::from_secs(3),
+            // Stay under whisper's 30s window. Long enough to keep
+            // sentences intact without choppy 3s splits in the middle of
+            // a thought.
+            max_phrase: Duration::from_secs(20),
+            // Search ~2s for a quiet frame to split on. Mirrors the
+            // pattern used by transcribe-rs/transcriber/energy_adaptive_chunked.
+            split_search: Duration::from_millis(2000),
             preroll: Duration::from_millis(350),
             session_timeout: Duration::from_secs(30),
         }
     }
 }
+
+/// Frame size used to score energy when searching for a split point.
+/// 30ms @ 16 kHz; matches transcribe-rs's `frame_size = 480`.
+const SPLIT_FRAME_MS: u64 = 30;
 
 #[derive(Debug, Clone)]
 pub enum DictationEvent {
@@ -45,12 +66,33 @@ pub struct DictationSession {
     silence_hold_samples: usize,
     min_phrase_samples: usize,
     max_phrase_samples: usize,
+    /// Width of the energy-minimum search window (in samples) used when the
+    /// buffer exceeds `max_phrase` and we have to force a split.
+    split_search_samples: usize,
+    /// Frame size in samples for energy scoring during split-point search.
+    split_frame_samples: usize,
     preroll: VecDeque<f32>,
     phrase_samples: Vec<f32>,
     in_speech: bool,
     silence_run_samples: usize,
     last_activity: Instant,
     signaled_activity: bool,
+    /// Consecutive speech-positive chunks seen while idle. With VAD attached,
+    /// a phrase only starts after `SPEECH_ONSET_CHUNKS` consecutive positives
+    /// (~100ms of sustained speech) so a single sigh/breath/click frame can't
+    /// open a phrase. The deferred audio stays in the preroll, so nothing is
+    /// lost when the onset is confirmed.
+    onset_streak: u32,
+    /// Optional Silero VAD. When present, speech detection uses the model's
+    /// probability instead of RMS thresholding — much more accurate, but
+    /// adds ~1ms per 32ms frame on CPU. Falls back to RMS gracefully when
+    /// `None` so the session still works without a model file.
+    #[cfg(feature = "vad")]
+    vad: Option<VoiceActivityDetector>,
+    /// Buffer of resampled-to-16kHz mono audio that hasn't yet been chunked
+    /// into Silero's 512-sample frames. Only populated when `vad` is Some.
+    #[cfg(feature = "vad")]
+    vad_pending: Vec<f32>,
 }
 
 impl DictationSession {
@@ -59,6 +101,8 @@ impl DictationSession {
             ((duration.as_secs_f64() * native_rate as f64).round() as usize).max(1)
         };
 
+        let split_frame_samples = ((SPLIT_FRAME_MS * native_rate as u64) / 1000).max(1) as usize;
+
         Self {
             config,
             native_rate,
@@ -66,13 +110,40 @@ impl DictationSession {
             silence_hold_samples: sample_count(config.silence_hold),
             min_phrase_samples: sample_count(config.min_phrase),
             max_phrase_samples: sample_count(config.max_phrase),
+            split_search_samples: sample_count(config.split_search),
+            split_frame_samples,
             preroll: VecDeque::new(),
             phrase_samples: Vec::new(),
             in_speech: false,
             silence_run_samples: 0,
             last_activity: Instant::now(),
             signaled_activity: false,
+            onset_streak: 0,
+            #[cfg(feature = "vad")]
+            vad: None,
+            #[cfg(feature = "vad")]
+            vad_pending: Vec::new(),
         }
+    }
+
+    /// Attach a Silero VAD detector. When attached, the session uses the
+    /// model's speech probability for phrase boundary detection instead of
+    /// raw RMS — better at distinguishing breath/keyboard clicks from real
+    /// speech. RMS is still used to drive the audio level UI.
+    #[cfg(feature = "vad")]
+    pub fn with_vad(mut self, vad: VoiceActivityDetector) -> Self {
+        self.vad = Some(vad);
+        self.vad_pending.reserve(SILERO_FRAME_SAMPLES * 4);
+        self
+    }
+
+    /// Update the RMS speech threshold mid-session. Used by callers that
+    /// refine their noise-floor estimate while the session runs (e.g. when
+    /// startup calibration was contaminated by the user already speaking).
+    /// Only affects the RMS fallback path; Silero VAD decisions are
+    /// unaffected.
+    pub fn set_speech_threshold(&mut self, threshold: f32) {
+        self.config.speech_threshold = threshold;
     }
 
     pub fn ingest(&mut self, mono_samples: &[f32]) -> Vec<DictationEvent> {
@@ -83,23 +154,47 @@ impl DictationSession {
 
         let rms = compute_rms(mono_samples);
         events.push(DictationEvent::Level(rms));
+
+        // Speech decision: prefer Silero VAD when present, RMS otherwise.
+        // Silero is much more robust to laptop-mic noise floors and to
+        // transient noises (breaths, keyboard clicks) that fool RMS.
+        #[cfg(feature = "vad")]
+        let is_speech = if self.vad.is_some() {
+            self.vad_chunk_is_speech(mono_samples).unwrap_or_else(|| {
+                tracing::trace!("VAD returned no decision, falling back to RMS for this chunk");
+                rms >= self.config.speech_threshold
+            })
+        } else {
+            rms >= self.config.speech_threshold
+        };
+
+        #[cfg(not(feature = "vad"))]
         let is_speech = rms >= self.config.speech_threshold;
 
         if is_speech {
             self.last_activity = Instant::now();
-            if !self.signaled_activity {
-                self.signaled_activity = true;
-                events.push(DictationEvent::ActivityDetected);
-            }
         }
 
         if !self.in_speech {
             if is_speech {
-                self.in_speech = true;
-                self.silence_run_samples = 0;
-                self.phrase_samples.extend(self.preroll.drain(..));
-                self.phrase_samples.extend_from_slice(mono_samples);
+                self.onset_streak += 1;
+                if self.onset_streak >= self.onset_chunks_required() {
+                    self.onset_streak = 0;
+                    self.in_speech = true;
+                    self.silence_run_samples = 0;
+                    self.phrase_samples.extend(self.preroll.drain(..));
+                    self.phrase_samples.extend_from_slice(mono_samples);
+                    if !self.signaled_activity {
+                        self.signaled_activity = true;
+                        events.push(DictationEvent::ActivityDetected);
+                    }
+                } else {
+                    // Possible onset, not yet confirmed — keep the audio in
+                    // the preroll so it lands in the phrase if confirmed.
+                    self.push_preroll(mono_samples);
+                }
             } else {
+                self.onset_streak = 0;
                 self.push_preroll(mono_samples);
                 if !self.config.session_timeout.is_zero()
                     && self.last_activity.elapsed() >= self.config.session_timeout
@@ -115,8 +210,14 @@ impl DictationSession {
 
         if is_speech {
             self.silence_run_samples = 0;
-            if self.phrase_samples.len() >= self.max_phrase_samples
-                && let Some(buffer) = self.flush_phrase(false)
+            // Don't hard-cut at exactly max_phrase — a 3s cut almost always
+            // lands mid-word. Wait until we've accumulated enough audio to
+            // search for a low-energy frame inside `split_search`, then
+            // split there. Hard-cut only as a last resort if speech keeps
+            // coming for `max_phrase + split_search` samples.
+            let target = self.max_phrase_samples + self.split_search_samples;
+            if self.phrase_samples.len() >= target
+                && let Some(buffer) = self.flush_phrase_at_split()
             {
                 events.push(DictationEvent::PhraseReady(buffer));
             }
@@ -130,6 +231,67 @@ impl DictationSession {
         }
 
         events
+    }
+
+    /// Force-flush a phrase that has run past `max_phrase` of continuous
+    /// speech. Searches the last `split_search` window for the lowest-energy
+    /// frame (a likely word boundary) and splits there. The audio after the
+    /// split is carried forward as the start of the next phrase to avoid
+    /// dropping speech.
+    fn flush_phrase_at_split(&mut self) -> Option<AudioBuffer> {
+        let len = self.phrase_samples.len();
+        if len < self.min_phrase_samples {
+            return None;
+        }
+
+        // Search window: from `max_phrase_samples - split_search/2` to end.
+        // Clamp into a valid range and align to frame boundaries.
+        let half_search = self.split_search_samples / 2;
+        let search_start = self.max_phrase_samples.saturating_sub(half_search);
+        let search_end = len.min(self.max_phrase_samples + half_search);
+
+        let split_at = if search_end > search_start + self.split_frame_samples {
+            find_split_point(
+                &self.phrase_samples,
+                search_start,
+                search_end,
+                self.split_frame_samples,
+            )
+        } else {
+            // Window collapsed — fall back to hard cut at max_phrase.
+            self.max_phrase_samples.min(len)
+        };
+
+        // Defensive: never split before min_phrase, never past end.
+        let split_at = split_at.clamp(self.min_phrase_samples, len);
+
+        let mut head = std::mem::take(&mut self.phrase_samples);
+        let tail = head.split_off(split_at);
+
+        // Reset state and seed the next phrase with the tail so we don't
+        // drop the speech that came after the split.
+        self.in_speech = !tail.is_empty();
+        self.silence_run_samples = 0;
+        self.phrase_samples = tail;
+        self.preroll.clear();
+
+        if head.len() < self.min_phrase_samples {
+            return None;
+        }
+        Some(AudioBuffer::from_raw(&head, self.native_rate, 1))
+    }
+
+    /// How many consecutive speech-positive chunks are needed to open a
+    /// phrase. With Silero VAD attached, require 2 (~100ms at the worker's
+    /// 50ms tick) so isolated breath/sigh frames don't start phrases. The
+    /// RMS fallback keeps the old single-chunk behaviour: its calibrated
+    /// threshold is already the noise gate.
+    fn onset_chunks_required(&self) -> u32 {
+        #[cfg(feature = "vad")]
+        if self.vad.is_some() {
+            return 2;
+        }
+        1
     }
 
     pub fn finish(&mut self) -> Option<AudioBuffer> {
@@ -150,6 +312,7 @@ impl DictationSession {
 
         self.in_speech = false;
         self.silence_run_samples = 0;
+        self.onset_streak = 0;
 
         if samples.len() < self.min_phrase_samples {
             self.preroll.clear();
@@ -159,6 +322,19 @@ impl DictationSession {
 
         let buffer = AudioBuffer::from_raw(&samples, self.native_rate, 1);
         self.preroll.clear();
+
+        // Reset VAD state between phrases. Silero's LSTM assumes a
+        // continuous stream within an utterance; carrying state across
+        // phrase boundaries causes false speech detection at the start of
+        // the next phrase as the LSTM "expects" continuation.
+        #[cfg(feature = "vad")]
+        {
+            if let Some(vad) = self.vad.as_mut() {
+                vad.reset();
+            }
+            self.vad_pending.clear();
+        }
+
         Some(buffer)
     }
 
@@ -170,15 +346,86 @@ impl DictationSession {
             }
         }
     }
+
+    /// Run the chunk through Silero VAD and return Some(true)/Some(false)
+    /// if at least one full 512-sample frame was processed. Returns None
+    /// when the chunk is too short to produce a complete frame (caller
+    /// should fall back to RMS for the moment).
+    ///
+    /// We resample to 16 kHz internally because callers typically feed
+    /// audio at the device's native rate (44.1k or 48k on most systems).
+    /// Silero v5 only accepts 16 kHz at 512 samples per frame.
+    #[cfg(feature = "vad")]
+    fn vad_chunk_is_speech(&mut self, mono_samples: &[f32]) -> Option<bool> {
+        let vad = self.vad.as_mut()?;
+
+        let resampled: Vec<f32> = if self.native_rate == 16_000 {
+            mono_samples.to_vec()
+        } else {
+            crate::audio::capture::resample(mono_samples, self.native_rate, 16_000)
+        };
+
+        self.vad_pending.extend_from_slice(&resampled);
+
+        // OR the per-frame results — if any frame in this chunk is speech,
+        // treat the whole chunk as speech. This is intentionally generous
+        // because phrase boundary detection downstream needs `silence_hold`
+        // worth of consistent silence to flush, so a single speech frame
+        // here just resets the silence counter.
+        let mut decided: Option<bool> = None;
+        while self.vad_pending.len() >= SILERO_FRAME_SAMPLES {
+            let frame: Vec<f32> = self.vad_pending.drain(..SILERO_FRAME_SAMPLES).collect();
+            match vad.process(&frame) {
+                Ok(state) => {
+                    let frame_speech = state == VadState::Speech;
+                    decided = Some(decided.unwrap_or(false) || frame_speech);
+                }
+                Err(e) => {
+                    tracing::warn!("VAD frame failed: {}", e);
+                    return None;
+                }
+            }
+        }
+
+        decided
+    }
 }
 
-fn compute_rms(samples: &[f32]) -> f32 {
-    if samples.is_empty() {
-        return 0.0;
+/// Scan `samples[search_start..search_end]` in non-overlapping frames of
+/// `frame_samples` and return the sample offset at the start of the
+/// lowest-RMS frame. Used to pick a clean split point — quiet frames are
+/// almost always word boundaries.
+///
+/// Mirrors the core idea of transcribe-rs's energy_adaptive_chunked
+/// `find_split_point`: instead of cutting at a fixed offset, look around
+/// the target for a natural pause.
+fn find_split_point(
+    samples: &[f32],
+    search_start: usize,
+    search_end: usize,
+    frame_samples: usize,
+) -> usize {
+    debug_assert!(search_end <= samples.len());
+    debug_assert!(search_end > search_start);
+    debug_assert!(frame_samples > 0);
+
+    let mut best_offset = search_start;
+    let mut best_energy = f32::INFINITY;
+
+    let mut offset = search_start;
+    while offset + frame_samples <= search_end {
+        let frame = &samples[offset..offset + frame_samples];
+        // Use sum-of-squares (proportional to RMS²) — the sqrt + length
+        // normalization don't change the argmin and we save the work.
+        let energy: f32 = frame.iter().map(|&s| s * s).sum();
+        if energy < best_energy {
+            best_energy = energy;
+            best_offset = offset;
+        }
+        offset += frame_samples;
     }
 
-    let sum_sq: f32 = samples.iter().map(|&s| s * s).sum();
-    (sum_sq / samples.len() as f32).sqrt()
+    best_offset
 }
 
 #[cfg(test)]
@@ -202,6 +449,7 @@ mod tests {
                 silence_hold: Duration::from_millis(100),
                 min_phrase: Duration::from_millis(50),
                 max_phrase: Duration::from_secs(5),
+                split_search: Duration::from_millis(500),
                 preroll: Duration::from_millis(50),
                 session_timeout: Duration::from_secs(5),
             },
@@ -223,16 +471,40 @@ mod tests {
         let mut session = DictationSession::new(
             DictationConfig {
                 max_phrase: Duration::from_millis(100),
+                split_search: Duration::from_millis(50),
+                min_phrase: Duration::from_millis(50),
                 ..DictationConfig::default()
             },
             rate,
         );
 
+        // First chunk transitions !in_speech → in_speech and stages samples
+        // (the state machine returns early on the speech-onset path).
+        let _ = session.ingest(&speech(800));
+        // Second chunk, while already in_speech, pushes the buffer past
+        // `max_phrase + split_search` so the energy-aware split fires.
         let events = session.ingest(&speech(4000));
         assert!(
             events
                 .iter()
                 .any(|event| matches!(event, DictationEvent::PhraseReady(_)))
+        );
+    }
+
+    #[test]
+    fn split_picks_lowest_energy_frame() {
+        // Build a buffer where samples[2400..2880] is silence (480 samples =
+        // one frame at 16kHz/30ms) and the rest is loud. The split should
+        // land at the start of the silent frame.
+        let mut samples = vec![0.5_f32; 5000];
+        for s in &mut samples[2400..2880] {
+            *s = 0.0;
+        }
+        let split = find_split_point(&samples, 1000, 4000, 480);
+        assert!(
+            (2400..=2880).contains(&split),
+            "expected split inside silence frame, got {}",
+            split
         );
     }
 }

@@ -10,6 +10,10 @@
 # Options: "base-en", "small-en", "medium-en", "large-v3-turbo"
 model = "small-en"
 
+# Transcription profile:
+# "relaxed" catches quieter/shorter phrases; "strict" filters more aggressively.
+transcription_profile = "relaxed"
+
 # Output mode: how transcribed text is delivered.
 # Options: "keyboard" (simulate keystrokes), "clipboard" (copy to clipboard), "stdout" (print to terminal)
 output_mode = "keyboard"
