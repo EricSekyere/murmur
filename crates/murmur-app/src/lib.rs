@@ -3067,9 +3067,12 @@ pub fn run() -> anyhow::Result<()> {
                 Err(e) => tracing::warn!("Could not parse hotkey '{}': {:?}", hotkey_str, e),
             }
 
-            // Clear the WebView2 background so the widget is truly transparent.
+            // Clear the WebView2 background so the widget is truly transparent,
+            // and disable the DWM window shadow at runtime as well (the config
+            // flag alone has been unreliable on some Windows builds).
             if let Some(widget) = app.get_webview_window("widget") {
                 let _ = widget.set_background_color(Some(tauri::window::Color(0, 0, 0, 0)));
+                let _ = widget.set_shadow(false);
                 if !show_widget_on_start {
                     let _ = widget.hide();
                 }
