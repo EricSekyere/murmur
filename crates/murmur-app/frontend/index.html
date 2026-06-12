@@ -29,377 +29,430 @@
       <button class="banner__dismiss" id="dismiss-error" aria-label="Dismiss error">&#215;</button>
     </div>
 
-    <!-- App Content -->
-    <div class="app-content">
+    <!-- Dashboard Shell -->
+    <div class="shell">
 
-      <!-- Header -->
-      <header>
+      <!-- Sidebar -->
+      <aside class="sidebar">
         <div class="header__brand">
           <h1 class="logo">murmur</h1>
           <span id="dev-mode-badge" class="badge badge--dev" hidden>DEV</span>
         </div>
+
         <span id="status-badge" class="badge badge--idle" role="status" aria-live="polite">Idle</span>
-      </header>
 
-      <!-- Hero: Mic + Visualization -->
-      <section class="hero" id="controls">
-        <div class="mic-wrapper" id="mic-wrapper">
-          <div class="mic-ring" id="mic-ring"></div>
-          <div class="mic-glow" aria-hidden="true"></div>
-          <button
-            id="mic-btn"
-            class="mic-btn mic-btn--idle"
-            aria-label="Start recording"
-            aria-pressed="false"
-          >
-            <svg class="mic-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-              <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
-              <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
-              <line x1="12" y1="19" x2="12" y2="23"/>
-              <line x1="8" y1="23" x2="16" y2="23"/>
-            </svg>
-          </button>
-        </div>
-
-        <!-- Voice Bars Visualization -->
-        <div id="visualization" hidden>
-          <div class="voice-bars" id="voice-bars"></div>
-          <div class="level-bar">
-            <div id="level-fill"></div>
-          </div>
-          <div class="mic-quality" id="mic-quality" hidden>
-            <span id="mic-quality-text">Listening...</span>
-          </div>
-        </div>
-
-        <!-- Session Stats -->
-        <div id="session-stats">
-          <span id="duration-display" hidden>0:00</span>
-          <span id="word-count" hidden>0 words</span>
-          <span id="proc-time" hidden></span>
-        </div>
-      </section>
-
-      <!-- Transcription -->
-      <section id="transcription">
-        <div class="section-header">
-          <h2>Transcription</h2>
-          <button class="btn-icon" id="copy-transcription" aria-label="Copy transcription" title="Copy" disabled>
+        <nav class="nav" aria-label="Main navigation">
+          <button class="nav__item nav__item--active" data-view="home">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-              <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
-              <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+              <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/>
+              <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+              <line x1="12" y1="19" x2="12" y2="22"/>
             </svg>
+            <span>Dictate</span>
           </button>
+          <button class="nav__item" data-view="analytics">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <line x1="18" y1="20" x2="18" y2="10"/>
+              <line x1="12" y1="20" x2="12" y2="4"/>
+              <line x1="6" y1="20" x2="6" y2="14"/>
+            </svg>
+            <span>Analytics</span>
+          </button>
+          <button class="nav__item" data-view="settings">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <circle cx="12" cy="12" r="3"/>
+              <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+            </svg>
+            <span>Settings</span>
+          </button>
+          <button class="nav__item" data-view="diagnostics">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
+            </svg>
+            <span>Diagnostics</span>
+          </button>
+        </nav>
+
+        <!-- Footer chips -->
+        <footer>
+          <span id="hotkey-display" class="hotkey-badge">ctrl+q</span>
+          <span id="output-mode-display" class="output-mode-badge">keyboard</span>
+          <span id="model-info" class="model-info">Model: small.en</span>
+        </footer>
+      </aside>
+
+      <!-- Content -->
+      <main class="content">
+
+        <!-- ── Dictate View ── -->
+        <div class="view view--active" id="view-home">
+
+          <!-- Hero: Mic + Visualization -->
+          <section class="hero" id="controls">
+            <div class="mic-wrapper" id="mic-wrapper">
+              <div class="mic-ring" id="mic-ring"></div>
+              <div class="mic-glow" aria-hidden="true"></div>
+              <button
+                id="mic-btn"
+                class="mic-btn mic-btn--idle"
+                aria-label="Start recording"
+                aria-pressed="false"
+              >
+                <svg class="mic-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
+                  <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+                  <line x1="12" y1="19" x2="12" y2="23"/>
+                  <line x1="8" y1="23" x2="16" y2="23"/>
+                </svg>
+              </button>
+            </div>
+
+            <!-- Voice Bars Visualization -->
+            <div id="visualization" hidden>
+              <div class="voice-bars" id="voice-bars"></div>
+              <div class="level-bar">
+                <div id="level-fill"></div>
+              </div>
+              <div class="mic-quality" id="mic-quality" hidden>
+                <span id="mic-quality-text">Listening...</span>
+              </div>
+            </div>
+
+            <!-- Session Stats -->
+            <div id="session-stats">
+              <span id="duration-display" hidden>0:00</span>
+              <span id="word-count" hidden>0 words</span>
+              <span id="proc-time" hidden></span>
+            </div>
+          </section>
+
+          <!-- Transcription -->
+          <section id="transcription">
+            <div class="section-header">
+              <h2>Transcription</h2>
+              <button class="btn-icon" id="copy-transcription" aria-label="Copy transcription" title="Copy" disabled>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
+                  <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+                </svg>
+              </button>
+            </div>
+            <div id="transcription-output" class="transcription-output">
+              <span class="placeholder">Press the mic or hit your hotkey to begin.</span>
+            </div>
+          </section>
+
+          <!-- History -->
+          <section id="history-section" class="collapsible">
+            <button class="collapsible__trigger" id="history-toggle" aria-expanded="false">
+              <span class="collapsible__title">History</span>
+              <span class="history-count" id="history-count" hidden>0</span>
+              <svg class="collapsible__chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <polyline points="6 9 12 15 18 9"/>
+              </svg>
+            </button>
+            <div class="section-header section-header--panel">
+              <h2>History</h2>
+            </div>
+            <ul id="history-list" class="history-list" hidden></ul>
+          </section>
         </div>
-        <div id="transcription-output" class="transcription-output">
-          <span class="placeholder">Press the mic or hit your hotkey to begin.</span>
+
+        <!-- ── Analytics View ── -->
+        <div class="view" id="view-analytics">
+          <div class="view-header"><h2>Analytics</h2></div>
+          <section id="analytics-section" class="collapsible">
+            <button class="collapsible__trigger" id="analytics-toggle" aria-expanded="false">
+              <span class="collapsible__title">Analytics</span>
+              <svg class="collapsible__chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <polyline points="6 9 12 15 18 9"/>
+              </svg>
+            </button>
+            <div id="analytics-panel" class="analytics-panel" hidden>
+              <div class="analytics-group">
+                <h3 class="analytics-group__title">Last Session</h3>
+                <div class="analytics-grid">
+                  <div class="stat-card">
+                    <span class="stat-card__value" id="stat-wpm">--</span>
+                    <span class="stat-card__label">WPM</span>
+                  </div>
+                  <div class="stat-card">
+                    <span class="stat-card__value" id="stat-phrases">0</span>
+                    <span class="stat-card__label">Phrases</span>
+                  </div>
+                  <div class="stat-card">
+                    <span class="stat-card__value" id="stat-duration">0:00</span>
+                    <span class="stat-card__label">Duration</span>
+                  </div>
+                  <div class="stat-card">
+                    <span class="stat-card__value" id="stat-latency">--</span>
+                    <span class="stat-card__label">Avg Lat.</span>
+                  </div>
+                </div>
+              </div>
+              <div class="analytics-group">
+                <h3 class="analytics-group__title">Today</h3>
+                <div class="analytics-grid">
+                  <div class="stat-card">
+                    <span class="stat-card__value" id="stat-today-words">0</span>
+                    <span class="stat-card__label">Words</span>
+                  </div>
+                  <div class="stat-card">
+                    <span class="stat-card__value" id="stat-today-sessions">0</span>
+                    <span class="stat-card__label">Sessions</span>
+                  </div>
+                </div>
+              </div>
+              <div class="analytics-group">
+                <h3 class="analytics-group__title">All Time</h3>
+                <div class="analytics-grid">
+                  <div class="stat-card">
+                    <span class="stat-card__value" id="stat-total-words">0</span>
+                    <span class="stat-card__label">Words</span>
+                  </div>
+                  <div class="stat-card">
+                    <span class="stat-card__value" id="stat-total-sessions">0</span>
+                    <span class="stat-card__label">Sessions</span>
+                  </div>
+                  <div class="stat-card">
+                    <span class="stat-card__value" id="stat-avg-wpm">--</span>
+                    <span class="stat-card__label">Avg WPM</span>
+                  </div>
+                  <div class="stat-card">
+                    <span class="stat-card__value" id="stat-avg-duration">0:00</span>
+                    <span class="stat-card__label">Avg Dur.</span>
+                  </div>
+                </div>
+              </div>
+              <div class="analytics-group">
+                <h3 class="analytics-group__title">Peak Hour</h3>
+                <p class="analytics-peak" id="stat-peak-hour">No data yet</p>
+              </div>
+            </div>
+          </section>
         </div>
-      </section>
 
-      <!-- History -->
-      <section id="history-section" class="collapsible">
-        <button class="collapsible__trigger" id="history-toggle" aria-expanded="false">
-          <span class="collapsible__title">History</span>
-          <span class="history-count" id="history-count" hidden>0</span>
-          <svg class="collapsible__chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <polyline points="6 9 12 15 18 9"/>
-          </svg>
-        </button>
-        <ul id="history-list" class="history-list" hidden></ul>
-      </section>
+        <!-- ── Settings View ── -->
+        <div class="view" id="view-settings">
+          <div class="view-header"><h2>Settings</h2></div>
+          <section id="settings-section" class="collapsible">
+            <button class="collapsible__trigger" id="settings-toggle" aria-expanded="false">
+              <span class="collapsible__title">Settings</span>
+              <svg class="collapsible__chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <polyline points="6 9 12 15 18 9"/>
+              </svg>
+            </button>
+            <div id="settings-panel" class="settings-panel" hidden>
+              <!-- Hotkey -->
+              <div class="settings-group">
+                <div class="settings-row">
+                  <div class="settings-row__text">
+                    <label class="settings-label" for="hotkey-input">Hotkey</label>
+                    <span class="settings-hint">Press your desired key combo below.</span>
+                  </div>
+                  <div class="hotkey-capture">
+                    <input type="text" id="hotkey-input" class="settings-input settings-input--hotkey" readonly placeholder="Press keys...">
+                    <button id="hotkey-save" class="btn-small" disabled>Save</button>
+                  </div>
+                </div>
+              </div>
 
-      <!-- Analytics -->
-      <section id="analytics-section" class="collapsible">
-        <button class="collapsible__trigger" id="analytics-toggle" aria-expanded="false">
-          <span class="collapsible__title">Analytics</span>
-          <svg class="collapsible__chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <polyline points="6 9 12 15 18 9"/>
-          </svg>
-        </button>
-        <div id="analytics-panel" class="analytics-panel" hidden>
-          <div class="analytics-group">
-            <h3 class="analytics-group__title">Last Session</h3>
-            <div class="analytics-grid">
-              <div class="stat-card">
-                <span class="stat-card__value" id="stat-wpm">--</span>
-                <span class="stat-card__label">WPM</span>
+              <!-- Output Mode -->
+              <div class="settings-group">
+                <div class="settings-row">
+                  <div class="settings-row__text">
+                    <label class="settings-label">Output Mode</label>
+                    <span class="settings-hint">How transcribed text is delivered.</span>
+                  </div>
+                  <select id="output-mode-select" class="settings-select">
+                    <option value="auto">Auto (recommended)</option>
+                    <option value="keyboard">Keyboard</option>
+                    <option value="clipboard_paste">Clipboard + Paste</option>
+                    <option value="clipboard">Clipboard Only</option>
+                  </select>
+                </div>
               </div>
-              <div class="stat-card">
-                <span class="stat-card__value" id="stat-phrases">0</span>
-                <span class="stat-card__label">Phrases</span>
+
+              <!-- Transcription Profile -->
+              <div class="settings-group">
+                <div class="settings-row">
+                  <div class="settings-row__text">
+                    <label class="settings-label">Transcription Profile</label>
+                    <span class="settings-hint">Relaxed catches quieter speech. Strict filters more aggressively.</span>
+                  </div>
+                  <select id="transcription-profile-select" class="settings-select">
+                    <option value="relaxed">Relaxed (recommended)</option>
+                    <option value="strict">Strict</option>
+                  </select>
+                </div>
               </div>
-              <div class="stat-card">
-                <span class="stat-card__value" id="stat-duration">0:00</span>
-                <span class="stat-card__label">Duration</span>
+
+              <!-- Audio Device -->
+              <div class="settings-group">
+                <div class="settings-row">
+                  <div class="settings-row__text">
+                    <label class="settings-label">Audio Device</label>
+                    <span class="settings-hint">Microphone input source.</span>
+                  </div>
+                  <select id="audio-device-select" class="settings-select">
+                    <option value="">System Default</option>
+                  </select>
+                </div>
               </div>
-              <div class="stat-card">
-                <span class="stat-card__value" id="stat-latency">--</span>
-                <span class="stat-card__label">Avg Lat.</span>
+
+              <!-- Phrase Pause -->
+              <div class="settings-group">
+                <div class="settings-row">
+                  <div class="settings-row__text">
+                    <label class="settings-label" for="phrase-pause-range">Phrase Pause</label>
+                    <span class="settings-hint">Silence duration that ends a phrase.</span>
+                  </div>
+                  <div class="settings-slider-wrap">
+                    <input type="range" id="phrase-pause-range" min="0.5" max="5.0" step="0.1" value="0.6">
+                    <span id="phrase-pause-value" class="settings-slider-val">0.6s</span>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Session Timeout -->
+              <div class="settings-group">
+                <div class="settings-row">
+                  <div class="settings-row__text">
+                    <label class="settings-label" for="session-timeout-range">Session Timeout</label>
+                    <span class="settings-hint">Total silence before session auto-stops.</span>
+                  </div>
+                  <div class="settings-slider-wrap">
+                    <input type="range" id="session-timeout-range" min="5" max="120" step="5" value="30">
+                    <span id="session-timeout-value" class="settings-slider-val">30s</span>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Click to Stop -->
+              <div class="settings-group">
+                <div class="settings-row">
+                  <div class="settings-row__text">
+                    <label class="settings-label" for="click-to-stop-toggle">Click to Stop</label>
+                    <span class="settings-hint">Stop recording on any mouse click.</span>
+                  </div>
+                  <label class="toggle-switch">
+                    <input type="checkbox" id="click-to-stop-toggle">
+                    <span class="toggle-switch__slider"></span>
+                  </label>
+                </div>
+              </div>
+
+              <!-- Show Widget -->
+              <div class="settings-group">
+                <div class="settings-row">
+                  <div class="settings-row__text">
+                    <label class="settings-label" for="show-widget-toggle">Floating Widget</label>
+                    <span class="settings-hint">Show the always-on-top mini control.</span>
+                  </div>
+                  <label class="toggle-switch">
+                    <input type="checkbox" id="show-widget-toggle" checked>
+                    <span class="toggle-switch__slider"></span>
+                  </label>
+                </div>
+              </div>
+
+              <!-- STT Model -->
+              <div class="settings-group">
+                <label class="settings-label">STT Model</label>
+                <div id="model-list" class="model-list"></div>
+              </div>
+
+              <!-- Developer Mode -->
+              <div class="settings-group settings-group--devmode">
+                <div class="settings-row">
+                  <div class="settings-row__text">
+                    <label class="settings-label" for="developer-mode-toggle">Developer Mode</label>
+                    <span class="settings-hint">Post-processes transcription for programming: corrects tech terms, expands spoken symbols, removes fillers, and enables casing commands (camel, snake, pascal, kebab, upper).</span>
+                  </div>
+                  <label class="toggle-switch">
+                    <input type="checkbox" id="developer-mode-toggle">
+                    <span class="toggle-switch__slider"></span>
+                  </label>
+                </div>
               </div>
             </div>
-          </div>
-          <div class="analytics-group">
-            <h3 class="analytics-group__title">Today</h3>
-            <div class="analytics-grid">
-              <div class="stat-card">
-                <span class="stat-card__value" id="stat-today-words">0</span>
-                <span class="stat-card__label">Words</span>
-              </div>
-              <div class="stat-card">
-                <span class="stat-card__value" id="stat-today-sessions">0</span>
-                <span class="stat-card__label">Sessions</span>
-              </div>
-            </div>
-          </div>
-          <div class="analytics-group">
-            <h3 class="analytics-group__title">All Time</h3>
-            <div class="analytics-grid">
-              <div class="stat-card">
-                <span class="stat-card__value" id="stat-total-words">0</span>
-                <span class="stat-card__label">Words</span>
-              </div>
-              <div class="stat-card">
-                <span class="stat-card__value" id="stat-total-sessions">0</span>
-                <span class="stat-card__label">Sessions</span>
-              </div>
-              <div class="stat-card">
-                <span class="stat-card__value" id="stat-avg-wpm">--</span>
-                <span class="stat-card__label">Avg WPM</span>
-              </div>
-              <div class="stat-card">
-                <span class="stat-card__value" id="stat-avg-duration">0:00</span>
-                <span class="stat-card__label">Avg Dur.</span>
-              </div>
-            </div>
-          </div>
-          <div class="analytics-group">
-            <h3 class="analytics-group__title">Peak Hour</h3>
-            <p class="analytics-peak" id="stat-peak-hour">No data yet</p>
-          </div>
+          </section>
         </div>
-      </section>
 
-      <!-- Settings -->
-      <section id="settings-section" class="collapsible">
-        <button class="collapsible__trigger" id="settings-toggle" aria-expanded="false">
-          <span class="collapsible__title">Settings</span>
-          <svg class="collapsible__chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <polyline points="6 9 12 15 18 9"/>
-          </svg>
-        </button>
-        <div id="settings-panel" class="settings-panel" hidden>
-          <!-- Hotkey -->
-          <div class="settings-group">
-            <div class="settings-row">
-              <div class="settings-row__text">
-                <label class="settings-label" for="hotkey-input">Hotkey</label>
-                <span class="settings-hint">Press your desired key combo below.</span>
+        <!-- ── Diagnostics View ── -->
+        <div class="view" id="view-diagnostics">
+          <div class="view-header"><h2>Diagnostics</h2></div>
+          <section id="diagnostics-section" class="collapsible">
+            <button class="collapsible__trigger" id="diagnostics-toggle" aria-expanded="false">
+              <span class="collapsible__title">Diagnostics</span>
+              <svg class="collapsible__chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <polyline points="6 9 12 15 18 9"/>
+              </svg>
+            </button>
+            <div id="diagnostics-panel" class="analytics-panel" hidden>
+              <div class="analytics-group">
+                <h3 class="analytics-group__title">Signal</h3>
+                <div class="analytics-grid">
+                  <div class="stat-card">
+                    <span class="stat-card__value" id="diag-live-rms">0.0000</span>
+                    <span class="stat-card__label">Live RMS</span>
+                  </div>
+                  <div class="stat-card">
+                    <span class="stat-card__value" id="diag-peak-rms">0.0000</span>
+                    <span class="stat-card__label">Peak RMS</span>
+                  </div>
+                </div>
               </div>
-              <div class="hotkey-capture">
-                <input type="text" id="hotkey-input" class="settings-input settings-input--hotkey" readonly placeholder="Press keys...">
-                <button id="hotkey-save" class="btn-small" disabled>Save</button>
+              <div class="analytics-group">
+                <h3 class="analytics-group__title">Transcription</h3>
+                <div class="analytics-grid">
+                  <div class="stat-card">
+                    <span class="stat-card__value" id="diag-accepted">0</span>
+                    <span class="stat-card__label">Accepted</span>
+                  </div>
+                  <div class="stat-card">
+                    <span class="stat-card__value" id="diag-rejected">0</span>
+                    <span class="stat-card__label">Rejected</span>
+                  </div>
+                </div>
+              </div>
+              <div class="analytics-group">
+                <h3 class="analytics-group__title">Rejection Reasons</h3>
+                <div class="analytics-grid">
+                  <div class="stat-card">
+                    <span class="stat-card__value" id="diag-reason-too-short">0</span>
+                    <span class="stat-card__label">Too Short</span>
+                  </div>
+                  <div class="stat-card">
+                    <span class="stat-card__value" id="diag-reason-too-quiet">0</span>
+                    <span class="stat-card__label">Too Quiet</span>
+                  </div>
+                  <div class="stat-card">
+                    <span class="stat-card__value" id="diag-reason-hallucination">0</span>
+                    <span class="stat-card__label">Hallucination</span>
+                  </div>
+                  <div class="stat-card">
+                    <span class="stat-card__value" id="diag-reason-engine">0</span>
+                    <span class="stat-card__label">Engine</span>
+                  </div>
+                  <div class="stat-card">
+                    <span class="stat-card__value" id="diag-reason-no-signal">0</span>
+                    <span class="stat-card__label">No Signal</span>
+                  </div>
+                  <div class="stat-card">
+                    <span class="stat-card__value" id="diag-reason-other">0</span>
+                    <span class="stat-card__label">Other</span>
+                  </div>
+                </div>
+              </div>
+              <div class="diagnostics-actions">
+                <button id="diagnostics-reset" class="btn-small">Reset Counters</button>
               </div>
             </div>
-          </div>
-
-          <!-- Output Mode -->
-          <div class="settings-group">
-            <div class="settings-row">
-              <div class="settings-row__text">
-                <label class="settings-label">Output Mode</label>
-                <span class="settings-hint">How transcribed text is delivered.</span>
-              </div>
-              <select id="output-mode-select" class="settings-select">
-                <option value="auto">Auto (recommended)</option>
-                <option value="keyboard">Keyboard</option>
-                <option value="clipboard_paste">Clipboard + Paste</option>
-                <option value="clipboard">Clipboard Only</option>
-              </select>
-            </div>
-          </div>
-
-          <!-- Transcription Profile -->
-          <div class="settings-group">
-            <div class="settings-row">
-              <div class="settings-row__text">
-                <label class="settings-label">Transcription Profile</label>
-                <span class="settings-hint">Relaxed catches quieter speech. Strict filters more aggressively.</span>
-              </div>
-              <select id="transcription-profile-select" class="settings-select">
-                <option value="relaxed">Relaxed (recommended)</option>
-                <option value="strict">Strict</option>
-              </select>
-            </div>
-          </div>
-
-          <!-- Audio Device -->
-          <div class="settings-group">
-            <div class="settings-row">
-              <div class="settings-row__text">
-                <label class="settings-label">Audio Device</label>
-                <span class="settings-hint">Microphone input source.</span>
-              </div>
-              <select id="audio-device-select" class="settings-select">
-                <option value="">System Default</option>
-              </select>
-            </div>
-          </div>
-
-          <!-- Phrase Pause -->
-          <div class="settings-group">
-            <div class="settings-row">
-              <div class="settings-row__text">
-                <label class="settings-label" for="phrase-pause-range">Phrase Pause</label>
-                <span class="settings-hint">Silence duration that ends a phrase.</span>
-              </div>
-              <div class="settings-slider-wrap">
-                <input type="range" id="phrase-pause-range" min="0.5" max="5.0" step="0.1" value="1.8">
-                <span id="phrase-pause-value" class="settings-slider-val">1.8s</span>
-              </div>
-            </div>
-          </div>
-
-          <!-- Session Timeout -->
-          <div class="settings-group">
-            <div class="settings-row">
-              <div class="settings-row__text">
-                <label class="settings-label" for="session-timeout-range">Session Timeout</label>
-                <span class="settings-hint">Total silence before session auto-stops.</span>
-              </div>
-              <div class="settings-slider-wrap">
-                <input type="range" id="session-timeout-range" min="5" max="120" step="5" value="10">
-                <span id="session-timeout-value" class="settings-slider-val">10s</span>
-              </div>
-            </div>
-          </div>
-
-          <!-- Click to Stop -->
-          <div class="settings-group">
-            <div class="settings-row">
-              <div class="settings-row__text">
-                <label class="settings-label" for="click-to-stop-toggle">Click to Stop</label>
-                <span class="settings-hint">Stop recording on any mouse click.</span>
-              </div>
-              <label class="toggle-switch">
-                <input type="checkbox" id="click-to-stop-toggle">
-                <span class="toggle-switch__slider"></span>
-              </label>
-            </div>
-          </div>
-
-          <!-- Show Widget -->
-          <div class="settings-group">
-            <div class="settings-row">
-              <div class="settings-row__text">
-                <label class="settings-label" for="show-widget-toggle">Floating Widget</label>
-                <span class="settings-hint">Show the always-on-top mini control.</span>
-              </div>
-              <label class="toggle-switch">
-                <input type="checkbox" id="show-widget-toggle" checked>
-                <span class="toggle-switch__slider"></span>
-              </label>
-            </div>
-          </div>
-
-          <!-- STT Model -->
-          <div class="settings-group">
-            <label class="settings-label">STT Model</label>
-            <div id="model-list" class="model-list"></div>
-          </div>
-
-          <!-- Developer Mode -->
-          <div class="settings-group settings-group--devmode">
-            <div class="settings-row">
-              <div class="settings-row__text">
-                <label class="settings-label" for="developer-mode-toggle">Developer Mode</label>
-                <span class="settings-hint">Post-processes transcription for programming: corrects tech terms, expands spoken symbols, removes fillers, and enables casing commands (camel, snake, pascal, kebab, upper).</span>
-              </div>
-              <label class="toggle-switch">
-                <input type="checkbox" id="developer-mode-toggle">
-                <span class="toggle-switch__slider"></span>
-              </label>
-            </div>
-          </div>
+          </section>
         </div>
-      </section>
 
-      <!-- Diagnostics -->
-      <section id="diagnostics-section" class="collapsible">
-        <button class="collapsible__trigger" id="diagnostics-toggle" aria-expanded="false">
-          <span class="collapsible__title">Diagnostics</span>
-          <svg class="collapsible__chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <polyline points="6 9 12 15 18 9"/>
-          </svg>
-        </button>
-        <div id="diagnostics-panel" class="analytics-panel" hidden>
-          <div class="analytics-group">
-            <h3 class="analytics-group__title">Signal</h3>
-            <div class="analytics-grid">
-              <div class="stat-card">
-                <span class="stat-card__value" id="diag-live-rms">0.0000</span>
-                <span class="stat-card__label">Live RMS</span>
-              </div>
-              <div class="stat-card">
-                <span class="stat-card__value" id="diag-peak-rms">0.0000</span>
-                <span class="stat-card__label">Peak RMS</span>
-              </div>
-            </div>
-          </div>
-          <div class="analytics-group">
-            <h3 class="analytics-group__title">Transcription</h3>
-            <div class="analytics-grid">
-              <div class="stat-card">
-                <span class="stat-card__value" id="diag-accepted">0</span>
-                <span class="stat-card__label">Accepted</span>
-              </div>
-              <div class="stat-card">
-                <span class="stat-card__value" id="diag-rejected">0</span>
-                <span class="stat-card__label">Rejected</span>
-              </div>
-            </div>
-          </div>
-          <div class="analytics-group">
-            <h3 class="analytics-group__title">Rejection Reasons</h3>
-            <div class="analytics-grid">
-              <div class="stat-card">
-                <span class="stat-card__value" id="diag-reason-too-short">0</span>
-                <span class="stat-card__label">Too Short</span>
-              </div>
-              <div class="stat-card">
-                <span class="stat-card__value" id="diag-reason-too-quiet">0</span>
-                <span class="stat-card__label">Too Quiet</span>
-              </div>
-              <div class="stat-card">
-                <span class="stat-card__value" id="diag-reason-hallucination">0</span>
-                <span class="stat-card__label">Hallucination</span>
-              </div>
-              <div class="stat-card">
-                <span class="stat-card__value" id="diag-reason-engine">0</span>
-                <span class="stat-card__label">Engine</span>
-              </div>
-              <div class="stat-card">
-                <span class="stat-card__value" id="diag-reason-no-signal">0</span>
-                <span class="stat-card__label">No Signal</span>
-              </div>
-              <div class="stat-card">
-                <span class="stat-card__value" id="diag-reason-other">0</span>
-                <span class="stat-card__label">Other</span>
-              </div>
-            </div>
-            <div class="diagnostics-actions">
-              <button id="diagnostics-reset" class="btn-small">Reset Counters</button>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      <!-- Footer -->
-      <footer>
-        <span id="hotkey-display" class="hotkey-badge">ctrl+q</span>
-        <span id="output-mode-display" class="output-mode-badge">keyboard</span>
-        <span id="model-info" class="model-info">Model: small.en</span>
-      </footer>
-
+      </main>
     </div>
 
     <!-- Toast notifications -->
@@ -407,5 +460,6 @@
 
   </div>
   <script src="main.js"></script>
+  <script src="dashboard.js"></script>
 </body>
 </html>

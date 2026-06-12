@@ -1,0 +1,48 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release-windows:
+    runs-on: windows-latest
+    env:
+      LIBCLANG_PATH: C:\Program Files\LLVM\bin
+      # whisper.cpp must compile optimized: with CMAKE_GENERATOR unset,
+      # cmake-rs overrides the MSVC Release flags and strips /O2 (see
+      # build.sh for the full story). AVX2 covers every Intel/AMD CPU
+      # since ~2013; the CI build is CPU-only so it runs on any machine
+      # (the CUDA build remains a local build.sh option).
+      CMAKE_GENERATOR: Visual Studio 17 2022
+      CFLAGS: /DNDEBUG /arch:AVX2
+      CXXFLAGS: /DNDEBUG /arch:AVX2
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target"
+
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          projectPath: crates/murmur-app
+          tagName: ${{ github.ref_name }}
+          releaseName: "Murmur ${{ github.ref_name }}"
+          releaseBody: |
+            Voice-to-text dictation for Windows.
+
+            **Install:** download the `.exe` installer below and run it.
+            Models download automatically on first launch.
+
+            Requires a CPU with AVX2 (any Intel/AMD CPU from ~2013 onward).
+          releaseDraft: false
+          prerelease: false
