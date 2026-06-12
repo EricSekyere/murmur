@@ -1,0 +1,189 @@
+/* ═══════════════════════════════════════════════════════════════════════════
+   DASHBOARD SHELL
+   Sidebar navigation + full-page views. The legacy collapsible triggers
+   remain in the DOM (main.js binds its data loaders to them) but are
+   hidden; dashboard.js drives them when switching views.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+.shell {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+/* ─── Sidebar ───────────────────────────────────────────────────────────── */
+.sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  width: 208px;
+  flex-shrink: 0;
+  padding: 22px 14px 16px;
+  border-right: 1px solid var(--color-border);
+  background: rgba(13, 14, 22, 0.6);
+  backdrop-filter: blur(14px) saturate(140%);
+  -webkit-backdrop-filter: blur(14px) saturate(140%);
+}
+
+.sidebar .header__brand {
+  padding: 0 8px;
+}
+
+.sidebar #status-badge {
+  align-self: flex-start;
+  margin: 0 8px;
+}
+
+.nav {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 8px;
+}
+
+.nav__item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--color-text-secondary);
+  font-family: var(--font-sans);
+  font-size: 0.84rem;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.nav__item svg {
+  width: 16px;
+  height: 16px;
+  opacity: 0.7;
+  flex-shrink: 0;
+}
+
+.nav__item:hover {
+  color: var(--color-text);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.nav__item:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+.nav__item--active {
+  color: var(--color-accent-light);
+  background: var(--color-accent-dim);
+  border-color: rgba(139, 92, 246, 0.2);
+}
+
+.nav__item--active svg {
+  opacity: 1;
+}
+
+/* Footer chips live at the bottom of the sidebar */
+.sidebar footer {
+  margin-top: auto;
+  padding: 0 8px;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+}
+
+.sidebar footer .hotkey-badge,
+.sidebar footer .output-mode-badge {
+  text-align: center;
+}
+
+.sidebar footer .model-info {
+  text-align: center;
+  padding-top: 2px;
+}
+
+/* ─── Content & Views ───────────────────────────────────────────────────── */
+.content {
+  flex: 1;
+  min-width: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 20px 26px 24px;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(139, 92, 246, 0.2) transparent;
+}
+
+.content::-webkit-scrollbar { width: 6px; }
+.content::-webkit-scrollbar-track { background: transparent; }
+.content::-webkit-scrollbar-thumb {
+  background: rgba(139, 92, 246, 0.2);
+  border-radius: 3px;
+}
+
+.view {
+  display: none;
+}
+
+.view--active {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  animation: expand-in 0.25s var(--ease-out);
+}
+
+.view-header h2 {
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: var(--color-text);
+  letter-spacing: 0.01em;
+}
+
+/* ─── Legacy layout overrides for the dashboard ─────────────────────────── */
+/* Collapsible triggers are driven programmatically — hide them. */
+.collapsible__trigger {
+  display: none;
+}
+
+.collapsible {
+  padding: 0;
+  margin-top: 0;
+}
+
+/* Panels become standalone cards (no attached trigger above them). */
+.history-list,
+.analytics-panel,
+.settings-panel {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+}
+
+.section-header--panel {
+  margin-bottom: 8px;
+}
+
+/* The hero is more compact inside the dashboard. */
+.hero {
+  padding: 8px 0 4px;
+}
+
+#transcription {
+  padding: 0;
+  flex: 0 0 auto;
+}
+
+.transcription-output {
+  min-height: 96px;
+  max-height: 200px;
+}
+
+#history-section {
+  padding: 0;
+}
+
+.history-list {
+  max-height: 260px;
+}
