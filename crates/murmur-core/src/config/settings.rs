@@ -133,7 +133,14 @@ fn default_pre_output_delay_ms() -> u64 {
 }
 
 fn default_double_tap_key() -> String {
-    "ctrl".to_string()
+    // Right Ctrl never types a character and is virtually unused in
+    // shortcuts, so double-tapping it cannot collide with typing or
+    // copy/paste. macOS has no right-Ctrl convention; use Cmd there.
+    if cfg!(windows) {
+        "rctrl".to_string()
+    } else {
+        "ctrl".to_string()
+    }
 }
 
 impl Default for Settings {

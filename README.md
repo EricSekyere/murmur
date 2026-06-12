@@ -1,69 +1,63 @@
 # Murmur
 
-Fast, private, on-device dictation for Windows. Press a hotkey, speak, and your words appear in whatever app has focus — like macOS dictation, but for Windows and fully offline.
+Fast, private, on-device dictation for Windows. Press a hotkey, speak, and your words appear in whatever app has focus — fully offline.
 
 ## Features
 
-- **Local-first** — all speech recognition runs on your machine. No cloud, no network calls, no telemetry.
-- **Fast** — GPU-accelerated Whisper (CUDA) or Parakeet models transcribe phrases in well under a second; text lands moments after you pause.
-- **Types anywhere** — output goes straight to the focused window via paste or keystroke simulation, with smart fallbacks for terminals and elevated windows.
-- **Smart voice detection** — Silero VAD plus decoder-confidence gating means sighs, breaths, and background noise don't turn into phantom words.
-- **Floating pill widget** — an always-on-top mini control with live waveform, recording timer, and one-click toggle.
-- **Dashboard** — transcription history, session analytics (WPM, words/day), live diagnostics, and full settings.
-- **Developer mode** — optional post-processing for dictating code: tech-term correction, spoken symbols (`fat arrow` → `=>`), filler removal, and casing commands (camel, snake, pascal, kebab).
+- **Local-first** — speech recognition runs on your machine. No cloud, no telemetry.
+- **Fast** — Whisper (CUDA-accelerated on NVIDIA GPUs) or Parakeet (DirectML) transcribe each phrase in well under a second.
+- **Types anywhere** — text is delivered to the focused window via paste or keystroke simulation, with fallbacks for terminals and elevated windows.
+- **Noise-robust** — Silero VAD plus decoder-confidence gating keep sighs, breaths, and background noise from becoming phantom words.
+- **Floating pill widget** — always-on-top control with live waveform and recording timer.
+- **Dashboard** — history, session analytics, diagnostics, and settings.
+- **Developer mode** — dictate code: tech-term correction, spoken symbols (`fat arrow` → `=>`), filler removal, casing commands (camel, snake, pascal, kebab).
 
 ## Install
 
-Download the latest installer from [Releases](https://github.com/EricSekyere/murmur/releases) and run it. Models download automatically on first launch (~500 MB for the default model).
+Download the installer from [Releases](https://github.com/EricSekyere/murmur/releases) and run it. The default model (~490 MB) downloads on first launch.
 
-Requirements: Windows 10/11 x64, a CPU with AVX2 (any Intel/AMD CPU from ~2013 onward). An NVIDIA GPU is optional — CUDA builds are currently local-build only.
+Requires Windows 10/11 x64 with an AVX2-capable CPU (any Intel/AMD CPU from ~2013 onward). NVIDIA GPU optional.
 
 ## Usage
 
 | Action | How |
 |---|---|
-| Start/stop dictation | `Ctrl+Q` (configurable), double-tap **right Ctrl**, or click the pill |
+| Start/stop dictation | Double-tap **right Ctrl**, press `Ctrl+Q`, or click the pill |
 | Choose a model | Settings → STT Model (smaller = faster, larger = more accurate) |
-| Tune phrase splitting | Settings → Phrase Pause (how long a silence ends a phrase) |
-| Filter aggressiveness | Settings → Transcription Profile (Relaxed / Strict) |
+| Phrase splitting | Settings → Phrase Pause (silence duration that ends a phrase) |
+| Filtering | Settings → Transcription Profile (Relaxed / Strict) |
 
-Speak naturally; each phrase is transcribed when you pause and typed into the active window. Stop dictating and the final phrase flushes automatically.
+Each phrase is transcribed when you pause and typed into the active window; stopping flushes the final phrase.
 
 ## Building from source
 
-Prerequisites:
-
-- Rust 1.93+ ([rustup.rs](https://rustup.rs))
-- CMake and LLVM/libclang (for whisper.cpp)
-- `cargo install tauri-cli --version '^2'`
-- Optional: CUDA Toolkit 12.x for GPU-accelerated Whisper (auto-detected)
-- Optional: NSIS for installer bundling
+Prerequisites: Rust 1.93+, CMake, LLVM/libclang, `cargo install tauri-cli --version '^2'`. Optional: CUDA Toolkit 12.x (auto-detected, enables GPU Whisper), NSIS (installer bundling).
 
 ```sh
 ./build.sh
 ```
 
-The script handles the important build details — notably forcing optimized MSVC flags for whisper.cpp (see the comments in `build.sh` for why) and enabling CUDA when the toolkit is present.
+`build.sh` handles the non-obvious parts — forcing optimized MSVC flags for whisper.cpp and wiring up CUDA — see its comments for details.
 
-```
-cargo check --workspace                  # check default features
-cargo test -p murmur-core -p murmur-app # unit tests
-cargo run -p murmur-app                  # run the desktop app (debug)
+```sh
+cargo check --workspace                   # default features
+cargo test -p murmur-core -p murmur-app   # unit tests
+cargo run -p murmur-app                   # desktop app (debug)
 ```
 
 ## Architecture
 
-Cargo workspace with three crates:
+Cargo workspace, three crates:
 
-- `murmur-core` — audio capture (CPAL), voice activity detection (Silero via ONNX Runtime), STT engines (whisper.cpp, Parakeet), output strategies, config.
-- `murmur-app` — Tauri v2 desktop app: system tray, dashboard window, floating pill widget, dictation session orchestration.
-- `murmur-cli` — command-line interface for one-shot transcription.
+- `murmur-core` — audio capture (CPAL), Silero VAD (ONNX Runtime), STT engines (whisper.cpp, Parakeet), output strategies, config.
+- `murmur-app` — Tauri v2 desktop app: tray, dashboard, pill widget, session orchestration.
+- `murmur-cli` — command-line transcription.
 
-Audio capture, phrase detection, and inference each run on dedicated threads connected by channels; the realtime audio callback never blocks on anything.
+Capture, phrase detection, and inference run on dedicated threads connected by channels; the realtime audio callback never blocks.
 
 ## Privacy
 
-Everything runs locally. The only network access is downloading model files (from Hugging Face/GitHub) on first use, verified by checksum. Your audio and transcripts never leave your machine.
+Everything runs locally. The only network access is the one-time, checksum-verified download of model files. Audio and transcripts never leave your machine.
 
 ## License
 
