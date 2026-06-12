@@ -2,7 +2,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use anyhow::Context;
-use murmur_core::config::Settings;
+use murmur_core::config::{Settings, TranscriptionProfile};
 use murmur_core::stt::engine::SttEngine;
 use murmur_core::stt::models::{Backend, ModelManager, SttModel};
 use murmur_core::stt::postprocess::PostProcessor;
@@ -23,15 +23,21 @@ mod audio_worker {
     use murmur_core::audio::capture::AudioCapture;
     use murmur_core::audio::silence::{compute_rms, downmix_to_mono};
     use murmur_core::dictation::{DictationConfig, DictationEvent, DictationSession};
+    use std::collections::VecDeque;
     use std::sync::Mutex;
     use std::sync::mpsc;
     use std::time::{Duration, Instant};
     use tauri::Emitter;
 
+    /// Rolling window for the in-session noise-floor estimate: ~5s of
+    /// 50ms monitoring ticks.
+    const FLOOR_WINDOW_TICKS: usize = 100;
+
     enum Cmd {
         StartStreaming {
             audio_device: Option<String>,
             rms_threshold: f32,
+            vad_threshold: f32,
             phrase_pause: Duration,
             session_timeout: Duration,
         },
@@ -75,9 +81,12 @@ mod audio_worker {
                             Cmd::StartStreaming {
                                 audio_device,
                                 rms_threshold,
+                                vad_threshold,
                                 phrase_pause,
                                 session_timeout,
                             } => {
+                                #[cfg(not(feature = "vad"))]
+                                let _ = vad_threshold;
                                 // Wrap capture.start() in catch_unwind — CPAL's native
                                 // audio backend (WASAPI) can panic/crash on some drivers.
                                 let start_result =
@@ -103,8 +112,6 @@ mod audio_worker {
                                     }
                                     Ok(Ok(())) => {}
                                 }
-                                let _ = result_tx.send(AudioResult::Started);
-
                                 let live_buf = capture.live_buffer();
                                 let native_rate = capture.native_rate();
                                 let native_channels = capture.native_channels();
@@ -115,13 +122,47 @@ mod audio_worker {
                                 );
                                 let mut analyzed_up_to = 0usize;
 
-                                // ── Calibration phase: measure ambient noise ──
-                                // Wait for WASAPI/CPAL to actually begin streaming before
-                                // measuring. Audio backends often need 100-200ms to start
-                                // producing samples after capture.start() returns.
-                                std::thread::sleep(Duration::from_millis(200));
+                                // Ensure the stream is actually delivering samples before
+                                // declaring recording started. Some WASAPI paths report
+                                // success but never produce callbacks.
+                                let sample_probe_deadline =
+                                    Instant::now() + Duration::from_millis(1500);
+                                let mut saw_initial_samples = false;
+                                while Instant::now() < sample_probe_deadline {
+                                    let has_samples = {
+                                        let buf =
+                                            live_buf.lock().unwrap_or_else(|e| e.into_inner());
+                                        !buf.is_empty()
+                                    };
+                                    if has_samples {
+                                        saw_initial_samples = true;
+                                        break;
+                                    }
+                                    std::thread::sleep(Duration::from_millis(30));
+                                }
 
-                                let calibration_duration = Duration::from_millis(400);
+                                if !saw_initial_samples {
+                                    let msg = "Microphone opened but produced no audio samples. Check Windows microphone privacy permissions and selected input device.".to_string();
+                                    tracing::error!("{}", msg);
+                                    if let Err(e) = capture.stop() {
+                                        tracing::warn!(
+                                            "Failed to stop capture after startup sample probe failure: {}",
+                                            e
+                                        );
+                                    }
+                                    let _ = result_tx.send(AudioResult::StartFailed(msg));
+                                    continue;
+                                }
+
+                                let _ = result_tx.send(AudioResult::Started);
+
+                                // ── Calibration phase: measure ambient noise ──
+                                // The startup probe above already confirmed the stream is
+                                // delivering samples, so no settle sleep is needed. Keep the
+                                // window short — dictation should feel instant — and rely on
+                                // the rolling noise floor to keep refining the threshold
+                                // after the session starts.
+                                let calibration_duration = Duration::from_millis(250);
                                 let calibration_start = Instant::now();
                                 let mut ambient_rms_samples = Vec::new();
 
@@ -146,11 +187,22 @@ mod audio_worker {
                                     }
                                 }
 
-                                let ambient_rms = if ambient_rms_samples.is_empty() {
-                                    0.0
+                                // Use the MINIMUM chunk RMS as the ambient estimate, not the
+                                // mean. Users press the hotkey and start talking immediately,
+                                // so the calibration window often contains speech; the mean
+                                // then inflates the "ambient" level, which disables the
+                                // quiet-mic gain and pushes the auto threshold above actual
+                                // speech RMS (silent sessions: nothing ever transcribes).
+                                // The quietest 50ms chunk — an inter-word gap at worst — is a
+                                // far better noise-floor proxy.
+                                let ambient_rms = ambient_rms_samples
+                                    .iter()
+                                    .copied()
+                                    .fold(f32::INFINITY, f32::min);
+                                let ambient_rms = if ambient_rms.is_finite() {
+                                    ambient_rms
                                 } else {
-                                    ambient_rms_samples.iter().sum::<f32>()
-                                        / ambient_rms_samples.len() as f32
+                                    0.0
                                 };
 
                                 // Compute mic gain to compensate for quiet mics.
@@ -206,22 +258,28 @@ mod audio_worker {
                                     }
                                 );
 
-                                // Do not throw away the entire calibration buffer. On Windows,
-                                // users often start speaking immediately after pressing the
-                                // hotkey; draining everything here discards the start of the
-                                // utterance and can lead to "No speech detected".
-                                // Keep up to ~1s of preroll so phrase detection and STT can
-                                // recover the beginning of the sentence.
+                                // Do not throw away the calibration audio. Users start
+                                // speaking immediately after pressing the hotkey, so the
+                                // calibration window often contains the start of the
+                                // utterance. Keep up to ~1s of it and rewind analyzed_up_to
+                                // to 0 so the monitoring loop re-reads the kept audio and
+                                // feeds it through the dictation session. (Previously the
+                                // buffer was kept but analyzed_up_to still pointed past it,
+                                // so the preroll was never ingested and the first ~600ms of
+                                // every utterance was silently dropped.)
                                 {
                                     let mut buf =
                                         live_buf.lock().unwrap_or_else(|e| e.into_inner());
-                                    let preroll_samples =
-                                        (native_rate as usize) * (native_channels as usize);
-                                    if analyzed_up_to > preroll_samples {
-                                        let drop_count = analyzed_up_to - preroll_samples;
+                                    let ch = native_channels.max(1) as usize;
+                                    let preroll_samples = (native_rate as usize) * ch;
+                                    if buf.len() > preroll_samples {
+                                        // Align to channel frames so interleaved stereo
+                                        // stays in step for downmix.
+                                        let mut drop_count = buf.len() - preroll_samples;
+                                        drop_count -= drop_count % ch;
                                         buf.drain(..drop_count);
-                                        analyzed_up_to -= drop_count;
                                     }
+                                    analyzed_up_to = 0;
                                 }
 
                                 let mut session = DictationSession::new(
@@ -233,76 +291,198 @@ mod audio_worker {
                                     },
                                     native_rate,
                                 );
-                                let mut level_tick: u32 = 0;
-                                let mut saw_signal = false;
-                                let startup_deadline = Instant::now() + Duration::from_millis(1200);
-                                let mut warned_no_samples = false;
-                                let silence_deadline = Instant::now() + Duration::from_secs(3);
-                                let mut warned_digital_silence = false;
 
-                                loop {
-                                    // Check for manual Stop
-                                    if let Ok(Cmd::Stop) = cmd_rx.try_recv() {
-                                        // Feed any remaining samples through the dictation
-                                        // session before finalizing so phrase boundaries stay
-                                        // consistent with the live path.
-                                        let remaining = {
-                                            let mut buf =
-                                                live_buf.lock().unwrap_or_else(|e| e.into_inner());
-                                            if buf.len() > analyzed_up_to {
-                                                let mono = downmix_to_mono(
-                                                    &buf[analyzed_up_to..],
-                                                    native_channels,
-                                                );
-                                                buf.clear();
-                                                Some(if mic_gain > 1.0 {
-                                                    mono.iter()
-                                                        .map(|s| (s * mic_gain).clamp(-1.0, 1.0))
-                                                        .collect::<Vec<f32>>()
-                                                } else {
-                                                    mono
-                                                })
-                                            } else {
-                                                buf.clear();
-                                                None
-                                            }
-                                        };
-
-                                        if let Some(mono) = remaining {
-                                            for event in session.ingest(&mono) {
-                                                if let DictationEvent::PhraseReady(audio) = event
-                                                    && !audio.samples.is_empty()
-                                                {
-                                                    let _ = result_tx
-                                                        .send(AudioResult::PhraseReady(audio));
+                                // Attach Silero VAD when the model file is
+                                // present on disk. When unavailable (model
+                                // not yet downloaded, or the load failed),
+                                // we silently fall back to RMS detection so
+                                // the app keeps working.
+                                #[cfg(feature = "vad")]
+                                {
+                                    use murmur_core::audio::vad as silero;
+                                    if silero::is_downloaded() {
+                                        match silero::model_path() {
+                                            Ok(path) => {
+                                                let path_str = path.to_string_lossy().into_owned();
+                                                // Use the configured threshold; fall back to
+                                                // the Silero-recommended default when the
+                                                // setting is out of range.
+                                                let threshold =
+                                                    if (0.05..=0.95).contains(&vad_threshold) {
+                                                        vad_threshold
+                                                    } else {
+                                                        silero::DEFAULT_THRESHOLD
+                                                    };
+                                                match silero::VoiceActivityDetector::new(
+                                                    &path_str, threshold,
+                                                ) {
+                                                    Ok(vad) => {
+                                                        tracing::info!(
+                                                            "Attached Silero VAD to dictation session"
+                                                        );
+                                                        session = session.with_vad(vad);
+                                                    }
+                                                    Err(e) => {
+                                                        tracing::warn!(
+                                                            "Failed to load Silero VAD: {}. \
+                                                             Falling back to RMS detection.",
+                                                            e
+                                                        );
+                                                    }
                                                 }
                                             }
+                                            Err(e) => {
+                                                tracing::warn!(
+                                                    "Could not resolve VAD model path: {}",
+                                                    e
+                                                );
+                                            }
                                         }
-
-                                        if let Some(audio) = session.finish()
-                                            && !audio.samples.is_empty()
-                                        {
-                                            let _ = result_tx.send(AudioResult::PhraseReady(audio));
-                                        }
-
-                                        if let Err(e) = capture.stop() {
-                                            tracing::error!(
-                                                "Failed to stop audio capture on manual stop: {}",
-                                                e
-                                            );
-                                        }
-                                        let _ = result_tx.send(AudioResult::StreamingDone);
-                                        break;
+                                    } else {
+                                        tracing::debug!(
+                                            "Silero VAD model not yet downloaded; using RMS detection"
+                                        );
                                     }
-                                    // Read new samples, downmix to mono, apply mic gain, feed to phrase detector
-                                    let (events, chunk_rms, saw_new_samples) = {
+                                }
+                                let mut level_tick: u32 = 0;
+                                let mut saw_signal = false;
+                                // Rolling noise-floor refinement (auto-threshold mode only).
+                                // If startup calibration overshot because the user was
+                                // already talking, the quietest chunks observed during the
+                                // session pull the threshold back down. Never raises it.
+                                let auto_threshold = rms_threshold <= 0.0;
+                                let mut current_threshold = calibrated_threshold;
+                                let mut floor_window: VecDeque<f32> =
+                                    VecDeque::with_capacity(FLOOR_WINDOW_TICKS);
+                                let startup_deadline = Instant::now() + Duration::from_millis(1200);
+                                let mut consecutive_no_sample_ticks: u32 = 0;
+                                let silence_deadline = Instant::now() + Duration::from_secs(3);
+
+                                'monitor: loop {
+                                    // Check for commands. Handle every variant explicitly:
+                                    // silently dropping a StartStreaming here would leave its
+                                    // handshake waiting until timeout while the UI thinks a
+                                    // session is starting.
+                                    match cmd_rx.try_recv() {
+                                        Ok(Cmd::StartStreaming { .. }) => {
+                                            tracing::warn!(
+                                                "StartStreaming received while a session is active — rejecting"
+                                            );
+                                            let _ = result_tx.send(AudioResult::StartFailed(
+                                                "A recording session is already active".to_string(),
+                                            ));
+                                        }
+                                        Err(mpsc::TryRecvError::Empty) => {}
+                                        Err(mpsc::TryRecvError::Disconnected) => {
+                                            tracing::warn!(
+                                                "Command channel closed; stopping capture"
+                                            );
+                                            if let Err(e) = capture.stop() {
+                                                tracing::error!(
+                                                    "Failed to stop audio capture on channel close: {}",
+                                                    e
+                                                );
+                                            }
+                                            let _ = result_tx.send(AudioResult::StreamingDone);
+                                            break 'monitor;
+                                        }
+                                        Ok(Cmd::Stop) => {
+                                            // Feed any remaining samples through the dictation
+                                            // session before finalizing so phrase boundaries stay
+                                            // consistent with the live path.
+                                            let remaining = {
+                                                let mut buf = live_buf
+                                                    .lock()
+                                                    .unwrap_or_else(|e| e.into_inner());
+                                                if buf.len() > analyzed_up_to {
+                                                    let mono = downmix_to_mono(
+                                                        &buf[analyzed_up_to..],
+                                                        native_channels,
+                                                    );
+                                                    buf.clear();
+                                                    Some(if mic_gain > 1.0 {
+                                                        mono.iter()
+                                                            .map(|s| {
+                                                                (s * mic_gain).clamp(-1.0, 1.0)
+                                                            })
+                                                            .collect::<Vec<f32>>()
+                                                    } else {
+                                                        mono
+                                                    })
+                                                } else {
+                                                    buf.clear();
+                                                    None
+                                                }
+                                            };
+
+                                            if let Some(mono) = remaining {
+                                                for event in session.ingest(&mono) {
+                                                    if let DictationEvent::PhraseReady(audio) =
+                                                        event
+                                                        && !audio.samples.is_empty()
+                                                    {
+                                                        let _ = result_tx
+                                                            .send(AudioResult::PhraseReady(audio));
+                                                    }
+                                                }
+                                            }
+
+                                            if let Some(audio) = session.finish()
+                                                && !audio.samples.is_empty()
+                                            {
+                                                let _ =
+                                                    result_tx.send(AudioResult::PhraseReady(audio));
+                                            }
+
+                                            if let Err(e) = capture.stop() {
+                                                tracing::error!(
+                                                    "Failed to stop audio capture on manual stop: {}",
+                                                    e
+                                                );
+                                            }
+                                            let _ = result_tx.send(AudioResult::StreamingDone);
+                                            break 'monitor;
+                                        }
+                                    }
+                                    // Read new samples under the lock, then release it before
+                                    // doing any heavy work (downmix, gain, RMS, VAD inference,
+                                    // session ingest). The cpal callback runs on a realtime
+                                    // audio thread that pushes via the same Mutex; if we held
+                                    // the lock through ingest()'s VAD inference we'd stall the
+                                    // producer for milliseconds and drop samples.
+                                    let raw_new: Option<Vec<f32>> = {
                                         let mut buf =
                                             live_buf.lock().unwrap_or_else(|e| e.into_inner());
                                         if buf.len() > analyzed_up_to {
-                                            let mono = downmix_to_mono(
-                                                &buf[analyzed_up_to..],
-                                                native_channels,
-                                            );
+                                            let snapshot = buf[analyzed_up_to..].to_vec();
+                                            analyzed_up_to = buf.len();
+
+                                            // Memory hygiene: when we're still waiting for
+                                            // speech, drop everything older than ~1s of preroll
+                                            // so the buffer doesn't grow unbounded across long
+                                            // idle stretches. Done inside the lock so the
+                                            // producer's len/index assumptions stay correct.
+                                            // This is fast — O(n) memmove on a small slice.
+                                            let ch = native_channels.max(1) as usize;
+                                            let preroll_samples = (native_rate as usize) * ch;
+                                            if buf.len() > preroll_samples {
+                                                // Channel-aligned so interleaved frames stay
+                                                // in step for downmix.
+                                                let mut drop_count = buf.len() - preroll_samples;
+                                                drop_count -= drop_count % ch;
+                                                buf.drain(..drop_count);
+                                                analyzed_up_to -= drop_count;
+                                            }
+
+                                            Some(snapshot)
+                                        } else {
+                                            None
+                                        }
+                                    };
+
+                                    let (events, chunk_rms, saw_new_samples) = match raw_new {
+                                        Some(raw) => {
+                                            let mono = downmix_to_mono(&raw, native_channels);
                                             // Apply mic gain so PhraseDetector and UI see proper levels
                                             let mono = if mic_gain > 1.0 {
                                                 mono.iter()
@@ -312,58 +492,89 @@ mod audio_worker {
                                                 mono
                                             };
                                             let rms = compute_rms(&mono);
-                                            analyzed_up_to = buf.len();
-
-                                            // If we are still waiting for speech, discard old audio to prevent memory
-                                            // growth and avoid sending minutes of silence to the STT engine.
-                                            // Keep ~1 second of pre-roll history.
-                                            if rms < calibrated_threshold {
-                                                let preroll_samples = (native_rate as usize)
-                                                    * (native_channels as usize);
-                                                if buf.len() > preroll_samples {
-                                                    let drop_count = buf.len() - preroll_samples;
-                                                    buf.drain(..drop_count);
-                                                    analyzed_up_to -= drop_count;
-                                                }
-                                            }
-
                                             (session.ingest(&mono), rms, true)
-                                        } else {
-                                            (Vec::new(), 0.0, false)
                                         }
+                                        None => (Vec::new(), 0.0, false),
                                     };
 
                                     if saw_new_samples && chunk_rms > 0.002 && !saw_signal {
                                         saw_signal = true;
                                         let _ = result_tx.send(AudioResult::SignalDetected);
                                     }
+                                    if saw_new_samples {
+                                        consecutive_no_sample_ticks = 0;
+                                    } else {
+                                        consecutive_no_sample_ticks += 1;
+                                    }
 
                                     if !saw_signal
                                         && Instant::now() >= startup_deadline
-                                        && !saw_new_samples
-                                        && !warned_no_samples
+                                        && consecutive_no_sample_ticks >= 20
                                     {
-                                        warned_no_samples = true;
-                                        tracing::warn!(
-                                            "Audio stream started but no microphone samples arrived within startup window"
-                                        );
+                                        let msg =
+                                            "Microphone stream stopped delivering audio samples."
+                                                .to_string();
+                                        tracing::warn!("{}", msg);
+                                        let _ = result_tx.send(AudioResult::NoSignal(msg));
+                                        if let Err(e) = capture.stop() {
+                                            tracing::error!(
+                                                "Failed to stop audio capture after sample starvation: {}",
+                                                e
+                                            );
+                                        }
+                                        let _ = result_tx.send(AudioResult::StreamingDone);
+                                        break;
                                     }
 
                                     if !saw_signal
                                         && Instant::now() >= silence_deadline
                                         && saw_new_samples
-                                        && !warned_digital_silence
+                                        && chunk_rms <= 0.00005
+                                        && effective_ambient <= 0.00005
                                     {
-                                        warned_digital_silence = true;
                                         let msg = "Microphone stream is delivering digital silence. Check Windows microphone permissions, input device, mute switch, and input volume.".to_string();
                                         tracing::warn!("{}", msg);
                                         let _ = result_tx.send(AudioResult::NoSignal(msg));
+                                        if let Err(e) = capture.stop() {
+                                            tracing::error!(
+                                                "Failed to stop audio capture after digital silence: {}",
+                                                e
+                                            );
+                                        }
+                                        let _ = result_tx.send(AudioResult::StreamingDone);
+                                        break;
                                     }
 
                                     // Emit audio level every ~100ms (every 2nd tick)
                                     level_tick += 1;
                                     if level_tick.is_multiple_of(2) {
                                         let _ = result_tx.send(AudioResult::AudioLevel(chunk_rms));
+                                    }
+
+                                    if auto_threshold && saw_new_samples && chunk_rms > 0.0 {
+                                        if floor_window.len() >= FLOOR_WINDOW_TICKS {
+                                            let _ = floor_window.pop_front();
+                                        }
+                                        floor_window.push_back(chunk_rms);
+
+                                        if level_tick.is_multiple_of(20) && floor_window.len() >= 20
+                                        {
+                                            let floor = floor_window
+                                                .iter()
+                                                .copied()
+                                                .fold(f32::INFINITY, f32::min);
+                                            let candidate = (floor * 1.8).clamp(0.001, 0.015);
+                                            if candidate < current_threshold {
+                                                tracing::info!(
+                                                    "Lowering speech threshold {:.6} -> {:.6} (rolling noise floor {:.6})",
+                                                    current_threshold,
+                                                    candidate,
+                                                    floor
+                                                );
+                                                current_threshold = candidate;
+                                                session.set_speech_threshold(candidate);
+                                            }
+                                        }
                                     }
 
                                     for event in events {
@@ -393,7 +604,11 @@ mod audio_worker {
                                                     );
                                                 }
                                                 let _ = result_tx.send(AudioResult::StreamingDone);
-                                                break;
+                                                // Must break the monitoring loop, not just this
+                                                // event loop — a plain `break` here left the
+                                                // worker spinning forever, eating later
+                                                // StartStreaming commands.
+                                                break 'monitor;
                                             }
                                         }
                                     }
@@ -438,11 +653,16 @@ mod audio_worker {
             }
         }
 
-        /// Start streaming mode. Blocks until audio capture is ready.
-        pub fn start_streaming(
+        /// Queue a StartStreaming command. Non-blocking; called synchronously
+        /// from the toggle handler so the command channel's FIFO ordering
+        /// guarantees a later Stop toggle can never overtake the start.
+        /// Follow with `await_started()` (on a worker thread) to complete the
+        /// handshake.
+        pub fn send_start(
             &self,
             audio_device: Option<String>,
             rms_threshold: f32,
+            vad_threshold: f32,
             phrase_pause: Duration,
             session_timeout: Duration,
         ) -> Result<(), String> {
@@ -456,11 +676,16 @@ mod audio_worker {
                 .send(Cmd::StartStreaming {
                     audio_device,
                     rms_threshold,
+                    vad_threshold,
                     phrase_pause,
                     session_timeout,
                 })
-                .map_err(|e| format!("Audio worker channel closed: {}", e))?;
+                .map_err(|e| format!("Audio worker channel closed: {}", e))
+        }
 
+        /// Block until the previously queued StartStreaming command is
+        /// acknowledged with Started or StartFailed.
+        pub fn await_started(&self) -> Result<(), String> {
             let rx = self.result_rx.lock().unwrap_or_else(|e| e.into_inner());
             loop {
                 match rx.recv_timeout(Duration::from_secs(5)) {
@@ -506,6 +731,11 @@ struct AppState {
     recording: Mutex<bool>,
     settings: Mutex<Settings>,
     last_toggle: Mutex<Instant>,
+    /// Trailing text of the running transcript for the current streaming
+    /// session. Passed to whisper as `initial_prompt` so cross-phrase
+    /// punctuation/capitalization stays consistent. Cleared at session
+    /// start; updated after each accepted phrase. Capped to ~200 chars.
+    session_prev_text: Mutex<String>,
     /// The foreground window that was active when recording started.
     /// Used to restore focus before outputting text, so keystrokes go
     /// to the user's target app instead of the Murmur window.
@@ -576,6 +806,7 @@ fn get_status(state: State<'_, AppState>) -> serde_json::Value {
         audio_device,
         output_mode,
         developer_mode,
+        transcription_profile,
         phrase_pause_secs,
         session_timeout_secs,
         click_to_stop,
@@ -589,6 +820,7 @@ fn get_status(state: State<'_, AppState>) -> serde_json::Value {
             settings.audio_device.clone(),
             settings.output_mode,
             settings.developer_mode,
+            settings.transcription_profile,
             settings.phrase_pause_secs,
             settings.session_timeout_secs,
             settings.click_to_stop,
@@ -596,11 +828,12 @@ fn get_status(state: State<'_, AppState>) -> serde_json::Value {
         )
     };
 
+    // Read the lock-free flag instead of the engine mutex: transcription
+    // holds that mutex for seconds, and blocking here froze the UI's
+    // status polling mid-session.
     let model_ready = state
-        .engine
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .is_some();
+        .engine_loaded
+        .load(std::sync::atomic::Ordering::Acquire);
 
     serde_json::json!({
         "recording": recording,
@@ -612,6 +845,7 @@ fn get_status(state: State<'_, AppState>) -> serde_json::Value {
         "audio_device": audio_device,
         "output_mode": output_mode,
         "developer_mode": developer_mode,
+        "transcription_profile": transcription_profile,
         "phrase_pause_secs": phrase_pause_secs,
         "session_timeout_secs": session_timeout_secs,
         "click_to_stop": click_to_stop,
@@ -780,6 +1014,7 @@ fn update_settings(
     hotkey: Option<String>,
     audio_device: Option<String>,
     output_mode: Option<String>,
+    transcription_profile: Option<String>,
     phrase_pause_secs: Option<f32>,
     session_timeout_secs: Option<f32>,
     click_to_stop: Option<bool>,
@@ -850,6 +1085,16 @@ fn update_settings(
                 .as_deref()
                 .unwrap_or("<system default>")
         );
+    }
+
+    if let Some(profile_str) = transcription_profile {
+        let profile = match profile_str.as_str() {
+            "relaxed" => TranscriptionProfile::Relaxed,
+            "strict" => TranscriptionProfile::Strict,
+            _ => return Err(format!("Unknown transcription profile: {}", profile_str)),
+        };
+        settings.transcription_profile = profile;
+        tracing::info!("Transcription profile updated to: {:?}", profile);
     }
 
     if let Some(pp) = phrase_pause_secs {
@@ -983,8 +1228,16 @@ async fn download_and_init_model(
         ModelManager::default_dir().context("Failed to determine models directory")?,
     );
 
-    // For ONNX Runtime-based backends, ensure the runtime DLL is available
-    if model.backend() == Backend::Parakeet && !runtime::is_downloaded() {
+    // For any backend that uses Silero VAD or Parakeet, the ONNX Runtime
+    // DLL must be available. Trigger the download when either consumer is
+    // present so VAD works regardless of the STT backend the user picked.
+    #[cfg(feature = "full")]
+    let needs_ort =
+        model.backend() == Backend::Parakeet || !murmur_core::audio::vad::is_downloaded();
+    #[cfg(not(feature = "full"))]
+    let needs_ort = model.backend() == Backend::Parakeet;
+
+    if needs_ort && !runtime::is_downloaded() {
         let _ = app.emit(
             "model-download-progress",
             ModelDownloadProgress {
@@ -1019,6 +1272,28 @@ async fn download_and_init_model(
         })
         .await
         .context("ONNX Runtime download failed")?;
+    }
+
+    // Download the Silero VAD model (~2 MB) the first time. Cheap, and we
+    // need it before the next streaming session so the dictation worker
+    // can attach VAD instead of falling back to RMS.
+    #[cfg(feature = "full")]
+    {
+        if !murmur_core::audio::vad::is_downloaded() {
+            let _ = app.emit(
+                "model-download-progress",
+                ModelDownloadProgress {
+                    percent: 0,
+                    message: "Downloading voice activity detector...".to_string(),
+                    done: false,
+                    error: None,
+                },
+            );
+            if let Err(e) = murmur_core::audio::vad::download().await {
+                // Non-fatal: the app still works with RMS detection.
+                tracing::warn!("Silero VAD download failed ({}); will use RMS fallback", e);
+            }
+        }
     }
 
     // Download model files if not already present
@@ -1088,6 +1363,19 @@ async fn download_and_init_model(
         // Set model hint so the engine can tune parameters per model size
         // (e.g., temperature fallback for larger models).
         engine.set_model(model_for_hint);
+
+        // Pre-warm: run a short throwaway inference so thread pools and
+        // buffers are allocated now, not on the user's first phrase. The
+        // first real transcription is otherwise noticeably slower than
+        // steady state, which reads as "dictation didn't work".
+        let warmup = vec![0.0_f32; 8_000]; // 0.5s of silence @ 16kHz
+        let warm_start = Instant::now();
+        if let Err(e) = engine.transcribe(&warmup) {
+            tracing::debug!("Engine warm-up inference failed (non-fatal): {}", e);
+        } else {
+            tracing::info!("Engine warmed up in {}ms", warm_start.elapsed().as_millis());
+        }
+
         Ok::<SttEngine, anyhow::Error>(engine)
     })
     .await
@@ -1140,28 +1428,90 @@ fn output_text(
     text: &str,
     mode: murmur_core::output::OutputMode,
     #[cfg(windows)] previous_hwnd: usize,
+    #[cfg(windows)] last_external_hwnd: usize,
 ) -> anyhow::Result<()> {
     #[cfg(windows)]
-    restore_foreground_window(previous_hwnd);
+    {
+        let needs_focused_target = !matches!(
+            mode,
+            murmur_core::output::OutputMode::Clipboard | murmur_core::output::OutputMode::Stdout
+        );
+
+        if needs_focused_target {
+            // macOS-Dictation behaviour: type into whatever has focus right
+            // now. Murmur's windows are non-activating (focus: false), so the
+            // user's target app should still own focus through the whole
+            // record→transcribe cycle. We only ever try to switch focus when
+            // Murmur itself somehow ended up in front (e.g. user clicked our
+            // window mid-session). In that case prefer the live-tracked
+            // last-external window (refreshed every 150 ms by the foreground
+            // tracker) over the snapshot taken at recording start.
+            let current_fg = foreground_window();
+            let target_is_external = current_fg != 0 && !is_own_window(current_fg);
+
+            tracing::info!(
+                "output_text: mode={:?}, current_fg=0x{:x}, target_is_external={}, \
+                 previous_hwnd=0x{:x}, last_external_hwnd=0x{:x}",
+                mode,
+                current_fg,
+                target_is_external,
+                previous_hwnd,
+                last_external_hwnd
+            );
+
+            if !target_is_external {
+                let candidates = [last_external_hwnd, previous_hwnd];
+                let restored = candidates
+                    .iter()
+                    .any(|&h| h != 0 && !is_own_window(h) && restore_foreground_window(h));
+
+                if !restored {
+                    murmur_core::output::clipboard::ClipboardOutput::new()?.copy(text.trim())?;
+                    anyhow::bail!(
+                        "No target window available (Murmur is in front and no external \
+                         window is tracked); copied transcription to clipboard"
+                    );
+                }
+            }
+        }
+    }
 
     murmur_core::output::dispatch_output(text, mode)
 }
 
 /// Restore focus to the window the user was working in before recording.
 #[cfg(windows)]
-fn restore_foreground_window(hwnd: usize) {
+fn restore_foreground_window(hwnd: usize) -> bool {
     if hwnd == 0 {
-        return;
+        tracing::warn!("No saved foreground window; refusing to inject text into current window");
+        return false;
     }
 
     unsafe extern "system" {
+        fn AttachThreadInput(id_attach: u32, id_attach_to: u32, f_attach: i32) -> i32;
+        fn BringWindowToTop(hwnd: usize) -> i32;
+        fn GetCurrentThreadId() -> u32;
         fn SetForegroundWindow(hwnd: usize) -> i32;
         fn GetForegroundWindow() -> usize;
+        fn GetWindowThreadProcessId(hwnd: usize, lpdw_process_id: *mut u32) -> u32;
+        fn IsWindow(hwnd: usize) -> i32;
+        fn IsWindowVisible(hwnd: usize) -> i32;
+        fn ShowWindow(hwnd: usize, n_cmd_show: i32) -> i32;
+    }
+
+    const SW_RESTORE: i32 = 9;
+
+    if unsafe { IsWindow(hwnd) } == 0 || unsafe { IsWindowVisible(hwnd) } == 0 {
+        tracing::warn!(
+            "Saved output target is no longer a visible window: hwnd=0x{:x}",
+            hwnd
+        );
+        return false;
     }
 
     let current = unsafe { GetForegroundWindow() };
     if current == hwnd {
-        return; // Already focused
+        return true;
     }
 
     tracing::info!(
@@ -1170,13 +1520,54 @@ fn restore_foreground_window(hwnd: usize) {
         hwnd
     );
 
-    let result = unsafe { SetForegroundWindow(hwnd) };
-    if result == 0 {
-        tracing::warn!("SetForegroundWindow failed for hwnd=0x{:x}", hwnd);
+    unsafe {
+        ShowWindow(hwnd, SW_RESTORE);
+        BringWindowToTop(hwnd);
+        SetForegroundWindow(hwnd);
     }
 
-    // Brief pause for the focus change to take effect
-    std::thread::sleep(std::time::Duration::from_millis(50));
+    std::thread::sleep(std::time::Duration::from_millis(75));
+    if unsafe { GetForegroundWindow() } == hwnd {
+        return true;
+    }
+
+    let current_thread = unsafe { GetCurrentThreadId() };
+    let foreground = unsafe { GetForegroundWindow() };
+    let mut foreground_pid = 0u32;
+    let foreground_thread = unsafe { GetWindowThreadProcessId(foreground, &mut foreground_pid) };
+    let mut target_pid = 0u32;
+    let target_thread = unsafe { GetWindowThreadProcessId(hwnd, &mut target_pid) };
+
+    unsafe {
+        if foreground_thread != 0 && foreground_thread != current_thread {
+            AttachThreadInput(current_thread, foreground_thread, 1);
+        }
+        if target_thread != 0 && target_thread != current_thread {
+            AttachThreadInput(current_thread, target_thread, 1);
+        }
+
+        ShowWindow(hwnd, SW_RESTORE);
+        BringWindowToTop(hwnd);
+        SetForegroundWindow(hwnd);
+
+        if target_thread != 0 && target_thread != current_thread {
+            AttachThreadInput(current_thread, target_thread, 0);
+        }
+        if foreground_thread != 0 && foreground_thread != current_thread {
+            AttachThreadInput(current_thread, foreground_thread, 0);
+        }
+    }
+
+    std::thread::sleep(std::time::Duration::from_millis(75));
+    let restored = unsafe { GetForegroundWindow() } == hwnd;
+    if !restored {
+        tracing::warn!(
+            "Failed to restore target window; refusing to inject text. target=0x{:x}, current=0x{:x}",
+            hwnd,
+            unsafe { GetForegroundWindow() }
+        );
+    }
+    restored
 }
 
 #[cfg(windows)]
@@ -1295,9 +1686,8 @@ fn normalize_peak(samples: &[f32]) -> Vec<f32> {
 /// Removes silent frames from both ends so the STT engine doesn't waste
 /// capacity on dead air (which causes hallucinations, especially in larger models).
 /// Keeps a small pre-roll buffer (~50ms) before the first speech frame.
-fn trim_silence(samples: &[f32]) -> &[f32] {
+fn trim_silence(samples: &[f32], trim_threshold: f32) -> &[f32] {
     const FRAME_SIZE: usize = 512; // ~32ms at 16kHz
-    const TRIM_THRESHOLD: f32 = 0.005;
     const PREROLL_FRAMES: usize = 2; // ~64ms of context before speech
 
     if samples.len() < FRAME_SIZE {
@@ -1315,13 +1705,13 @@ fn trim_silence(samples: &[f32]) -> &[f32] {
     // Find first frame with speech
     let first_speech = frames
         .iter()
-        .position(|&rms| rms >= TRIM_THRESHOLD)
+        .position(|&rms| rms >= trim_threshold)
         .unwrap_or(0);
 
     // Find last frame with speech
     let last_speech = frames
         .iter()
-        .rposition(|&rms| rms >= TRIM_THRESHOLD)
+        .rposition(|&rms| rms >= trim_threshold)
         .unwrap_or(frames.len().saturating_sub(1));
 
     // Keep a small pre-roll before first speech
@@ -1338,8 +1728,8 @@ fn trim_silence(samples: &[f32]) -> &[f32] {
 
 /// Transcribe an audio buffer and return the text, or None if empty/error.
 ///
-/// All rejection/error paths log at `error` or `warn` level and emit a
-/// `transcription-error` event to the frontend so failures are visible.
+/// Infrastructure failures emit `transcription-error`. Benign chunk rejections
+/// (too short/quiet/noisy) are logged and skipped.
 fn transcribe_chunk(
     app: &tauri::AppHandle,
     audio: &murmur_core::audio::AudioBuffer,
@@ -1351,51 +1741,89 @@ fn transcribe_chunk(
     );
 
     if audio.samples.is_empty() {
-        let msg = "Empty audio buffer — nothing to transcribe";
-        tracing::error!("{}", msg);
-        emit_transcription_error(app, msg);
+        tracing::warn!("Empty audio buffer, skipping");
+        emit_transcription_diagnostic(app, "rejected", "empty_audio", None, None, None);
         return None;
     }
 
-    // Skip very short chunks that produce garbage/hallucinations
-    const MIN_AUDIO_SECS: f32 = 0.15;
-    // Cap audio length to keep inference latency bounded
-    const MAX_AUDIO_SAMPLES: usize = 20 * 16_000;
+    let state = app.state::<AppState>();
+    let (developer_mode, transcription_profile) = {
+        let settings = state.settings.lock().unwrap_or_else(|e| e.into_inner());
+        (settings.developer_mode, settings.transcription_profile)
+    };
+
+    // When whisper output is rejected as hallucination/non-speech, also drop
+    // the running decoder context. A bad phrase that already made it into
+    // `session_prev_text` gets fed back as the initial prompt and keeps
+    // inducing the same hallucination in every later phrase.
+    let clear_session_context = || {
+        state
+            .session_prev_text
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clear();
+    };
+    let (min_audio_secs, trim_threshold, min_peak, min_rms) = match transcription_profile {
+        TranscriptionProfile::Relaxed => (0.12_f32, 0.003_f32, 0.008_f32, 0.0008_f32),
+        TranscriptionProfile::Strict => (0.15_f32, 0.005_f32, 0.012_f32, 0.0012_f32),
+    };
+
+    // Skip very short chunks that produce garbage/hallucinations.
+    // Cap audio length to keep inference latency bounded. 25s leaves room
+    // for the dictation splitter's worst case (~21s) inside Whisper's 30s
+    // window. Keep the FRONT of the buffer: trimming from the start cut off
+    // the beginning of the user's sentence on long continuous speech.
+    const MAX_AUDIO_SAMPLES: usize = 25 * 16_000;
     let samples = if audio.samples.len() > MAX_AUDIO_SAMPLES {
         tracing::warn!(
-            "Truncating audio from {:.1}s to 20s (large chunk)",
+            "Truncating audio from {:.1}s to 25s (large chunk)",
             audio.samples.len() as f32 / 16000.0
         );
-        &audio.samples[audio.samples.len() - MAX_AUDIO_SAMPLES..]
+        &audio.samples[..MAX_AUDIO_SAMPLES]
     } else {
         &audio.samples
     };
 
     let raw_duration_secs = samples.len() as f32 / 16000.0;
 
-    if raw_duration_secs < MIN_AUDIO_SECS {
-        let msg = format!(
+    if raw_duration_secs < min_audio_secs {
+        tracing::debug!(
             "Audio too short ({:.2}s < {:.1}s minimum) — skipping",
-            raw_duration_secs, MIN_AUDIO_SECS
+            raw_duration_secs,
+            min_audio_secs
         );
-        tracing::warn!("{}", msg);
-        emit_transcription_error(app, &msg);
+        emit_transcription_diagnostic(
+            app,
+            "rejected",
+            "too_short_raw",
+            None,
+            None,
+            Some(raw_duration_secs),
+        );
         return None;
     }
 
     // Preprocessing pipeline:
     // 1. Trim leading/trailing silence to reduce hallucinations
     // 2. Normalize quiet audio so the STT engine can process it
-    let trimmed = trim_silence(samples);
+    let trimmed = trim_silence(samples, trim_threshold);
     let trimmed_duration = trimmed.len() as f32 / 16000.0;
 
-    if trimmed_duration < MIN_AUDIO_SECS {
-        let msg = format!(
+    if trimmed_duration < min_audio_secs {
+        tracing::debug!(
             "Audio too short after silence trim ({:.2}s < {:.1}s, raw was {:.2}s) — skipping",
-            trimmed_duration, MIN_AUDIO_SECS, raw_duration_secs,
+            trimmed_duration,
+            min_audio_secs,
+            raw_duration_secs,
         );
-        tracing::warn!("{}", msg);
-        emit_transcription_error(app, &msg);
+        emit_transcription_diagnostic(
+            app,
+            "rejected",
+            "too_short_trimmed",
+            None,
+            None,
+            Some(trimmed_duration),
+        );
         return None;
     }
 
@@ -1425,26 +1853,25 @@ fn transcribe_chunk(
     // Skip near-silent audio that would make Whisper take 30-40+ seconds
     // trying to decode noise, producing hallucinations. A real speaking
     // voice should have peak > 0.05 even on a quiet laptop mic.
-    const MIN_PEAK: f32 = 0.015;
-    const MIN_RMS: f32 = 0.0015;
-    if peak < MIN_PEAK || rms < MIN_RMS {
-        let msg = format!(
+    if peak < min_peak || rms < min_rms {
+        tracing::debug!(
             "Audio too quiet (peak={:.4} < {}, rms={:.4} < {}) — mic may not be picking up speech. \
              Try increasing your microphone volume in Windows Sound Settings.",
-            peak, MIN_PEAK, rms, MIN_RMS,
+            peak,
+            min_peak,
+            rms,
+            min_rms,
         );
-        tracing::warn!("{}", msg);
-        emit_transcription_error(app, &msg);
+        emit_transcription_diagnostic(
+            app,
+            "rejected",
+            "too_quiet",
+            Some(peak),
+            Some(rms),
+            Some(duration_secs),
+        );
         return None;
     }
-
-    let state = app.state::<AppState>();
-
-    let developer_mode = state
-        .settings
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .developer_mode;
 
     let mut engine_guard = state.engine.lock().unwrap_or_else(|e| e.into_inner());
     let engine = match engine_guard.as_mut() {
@@ -1453,6 +1880,14 @@ fn transcribe_chunk(
             let msg = "STT engine not initialized — cannot transcribe";
             tracing::error!("{}", msg);
             emit_transcription_error(app, msg);
+            emit_transcription_diagnostic(
+                app,
+                "rejected",
+                "engine_not_initialized",
+                Some(peak),
+                Some(rms),
+                Some(duration_secs),
+            );
             return None;
         }
     };
@@ -1462,6 +1897,22 @@ fn transcribe_chunk(
         duration_secs,
         engine.model_path()
     );
+
+    // Pass the trailing portion of the running session transcript as the
+    // decoder prompt so punctuation/capitalization remain consistent across
+    // phrase boundaries. This is whisper.cpp's intended streaming pattern;
+    // skipping it makes every chunk start "fresh" and produces choppy output.
+    {
+        let prev = state
+            .session_prev_text
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if prev.is_empty() {
+            engine.set_initial_prompt(None);
+        } else {
+            engine.set_initial_prompt(Some(prev.clone()));
+        }
+    }
 
     // Known Whisper hallucination phrases produced on silence/noise.
     // Larger models (medium, large-v3-turbo) produce a wider variety.
@@ -1478,11 +1929,16 @@ fn transcribe_chunk(
         "subtitle",
         "share this video",
         "don't forget to subscribe",
-        "bye",
-        "goodbye",
-        "you",
         "the end",
-        "so",
+    ];
+    const STRICT_EXTRA_HALLUCINATIONS: &[&str] = &["bye", "goodbye", "you", "so"];
+    // Breath/sigh artifacts: whole-phrase interjections that whisper emits
+    // for non-speech vocalizations. Only rejected when they are the ENTIRE
+    // phrase — "ugh, this is broken" passes through untouched.
+    const INTERJECTIONS: &[&str] = &[
+        "hmm", "hm", "mm", "mmm", "mm-hmm", "mhm", "uh", "um", "umm", "ugh", "ah", "aah", "oh",
+        "ooh", "huh", "ha", "haha", "ha ha", "phew", "whew", "ahem", "heh", "pfft", "shh", "tsk",
+        "whoo", "hoo", "argh", "eugh", "ew",
     ];
 
     let transcribe_result = engine.transcribe(&processed);
@@ -1501,8 +1957,145 @@ fn transcribe_chunk(
         Err(e) => tracing::error!("Engine transcribe call failed: {:#}", e),
     }
 
+    // Threshold for rejecting whisper output as hallucination based on the
+    // model's own no_speech_prob. Strict profile is more aggressive.
+    let no_speech_max = match transcription_profile {
+        TranscriptionProfile::Relaxed => 0.7_f32,
+        TranscriptionProfile::Strict => 0.55_f32,
+    };
+
     match transcribe_result {
         Ok(result) if !result.text.is_empty() => {
+            // Reject when whisper itself is confident there's no speech.
+            // Use the duration-weighted average across segments rather than
+            // a single segment to avoid one short fragment poisoning a real
+            // utterance.
+            let weighted_no_speech = {
+                // Only segments that report a probability participate in the
+                // average — counting probability-less segments in the total
+                // duration would silently dilute the result.
+                let total: f32 = result
+                    .segments
+                    .iter()
+                    .filter(|s| s.no_speech_prob.is_some())
+                    .map(|s| (s.end_cs - s.start_cs).max(0) as f32)
+                    .sum();
+                if total > 0.0 {
+                    let weighted: f32 = result
+                        .segments
+                        .iter()
+                        .filter_map(|s| {
+                            s.no_speech_prob
+                                .map(|p| p * ((s.end_cs - s.start_cs).max(0) as f32 / total))
+                        })
+                        .sum();
+                    Some(weighted)
+                } else {
+                    None
+                }
+            };
+
+            if let Some(p) = weighted_no_speech
+                && p > no_speech_max
+            {
+                tracing::warn!(
+                    "Rejected: whisper no_speech_prob = {:.2} > {:.2} ({:?})",
+                    p,
+                    no_speech_max,
+                    result.text
+                );
+                clear_session_context();
+                emit_transcription_diagnostic(
+                    app,
+                    "rejected",
+                    "no_speech_prob_high",
+                    Some(peak),
+                    Some(rms),
+                    Some(duration_secs),
+                );
+                return None;
+            }
+
+            // Decoder confidence: duration-weighted mean token probability
+            // across segments. Sighs/breaths make whisper guess — the text
+            // comes out with low token confidence even when no_speech_prob
+            // looks moderate. Be stricter on very short clips, where nearly
+            // all such hallucinations live; a real short "yes" or "okay"
+            // scores far above these limits.
+            let weighted_conf = {
+                let total: f32 = result
+                    .segments
+                    .iter()
+                    .filter(|s| s.avg_token_prob.is_some())
+                    .map(|s| (s.end_cs - s.start_cs).max(0) as f32)
+                    .sum();
+                if total > 0.0 {
+                    let weighted: f32 = result
+                        .segments
+                        .iter()
+                        .filter_map(|s| {
+                            s.avg_token_prob
+                                .map(|p| p * ((s.end_cs - s.start_cs).max(0) as f32 / total))
+                        })
+                        .sum();
+                    Some(weighted)
+                } else {
+                    None
+                }
+            };
+
+            let (min_conf, short_min_conf, short_max_no_speech) = match transcription_profile {
+                TranscriptionProfile::Relaxed => (0.40_f32, 0.55_f32, 0.40_f32),
+                TranscriptionProfile::Strict => (0.50_f32, 0.62_f32, 0.30_f32),
+            };
+            const SHORT_CLIP_SECS: f32 = 1.5;
+            let is_short = duration_secs < SHORT_CLIP_SECS;
+
+            let conf_limit = if is_short { short_min_conf } else { min_conf };
+            if let Some(c) = weighted_conf
+                && c < conf_limit
+            {
+                tracing::warn!(
+                    "Rejected: decoder confidence {:.2} < {:.2} ({:.2}s clip, {:?})",
+                    c,
+                    conf_limit,
+                    duration_secs,
+                    result.text
+                );
+                clear_session_context();
+                emit_transcription_diagnostic(
+                    app,
+                    "rejected",
+                    "low_confidence",
+                    Some(peak),
+                    Some(rms),
+                    Some(duration_secs),
+                );
+                return None;
+            }
+
+            if is_short
+                && let Some(p) = weighted_no_speech
+                && p > short_max_no_speech
+            {
+                tracing::warn!(
+                    "Rejected: short clip with elevated no_speech_prob {:.2} > {:.2} ({:?})",
+                    p,
+                    short_max_no_speech,
+                    result.text
+                );
+                clear_session_context();
+                emit_transcription_diagnostic(
+                    app,
+                    "rejected",
+                    "no_speech_short",
+                    Some(peak),
+                    Some(rms),
+                    Some(duration_secs),
+                );
+                return None;
+            }
+
             let text = if developer_mode {
                 let processed = PostProcessor::process(&result.text);
                 tracing::info!(
@@ -1522,22 +2115,57 @@ fn transcribe_chunk(
             };
             if text.is_empty() {
                 tracing::warn!("Transcription produced empty text after post-processing");
+                emit_transcription_diagnostic(
+                    app,
+                    "rejected",
+                    "empty_after_postprocess",
+                    Some(peak),
+                    Some(rms),
+                    Some(duration_secs),
+                );
                 return None;
             }
 
             // Filter known Whisper hallucinations
-            let normalized = text.trim().trim_end_matches(['.', '!', '?']).to_lowercase();
-            if HALLUCINATIONS.contains(&normalized.as_str()) {
+            let normalized = text
+                .trim()
+                .trim_end_matches(['.', '!', '?', ','])
+                .to_lowercase();
+            if HALLUCINATIONS.contains(&normalized.as_str())
+                || INTERJECTIONS.contains(&normalized.as_str())
+                || (matches!(transcription_profile, TranscriptionProfile::Strict)
+                    && STRICT_EXTRA_HALLUCINATIONS.contains(&normalized.as_str()))
+            {
                 tracing::warn!("Filtered hallucination (exact match): {:?}", text);
+                clear_session_context();
+                emit_transcription_diagnostic(
+                    app,
+                    "rejected",
+                    "hallucination_exact",
+                    Some(peak),
+                    Some(rms),
+                    Some(duration_secs),
+                );
                 return None;
             }
 
-            // Filter bracketed/asterisk patterns like "*laughs*", "*music*", "[music]"
+            // Filter bracketed/asterisk/parenthesized patterns like
+            // "*laughs*", "[music]", "(sighs)", "(breathing)"
             let stripped = normalized.trim();
             if (stripped.starts_with('*') && stripped.ends_with('*'))
                 || (stripped.starts_with('[') && stripped.ends_with(']'))
+                || (stripped.starts_with('(') && stripped.ends_with(')'))
             {
                 tracing::warn!("Filtered hallucination (bracketed): {:?}", text);
+                clear_session_context();
+                emit_transcription_diagnostic(
+                    app,
+                    "rejected",
+                    "hallucination_bracketed",
+                    Some(peak),
+                    Some(rms),
+                    Some(duration_secs),
+                );
                 return None;
             }
 
@@ -1547,6 +2175,15 @@ fn transcribe_chunk(
                 .all(|c| c.is_ascii_punctuation() || c.is_whitespace())
             {
                 tracing::warn!("Filtered hallucination (punctuation only): {:?}", text);
+                clear_session_context();
+                emit_transcription_diagnostic(
+                    app,
+                    "rejected",
+                    "hallucination_punctuation",
+                    Some(peak),
+                    Some(rms),
+                    Some(duration_secs),
+                );
                 return None;
             }
 
@@ -1555,6 +2192,15 @@ fn transcribe_chunk(
                 let words: Vec<&str> = stripped.split_whitespace().collect();
                 if words.len() >= 3 && words.iter().all(|w| *w == words[0]) {
                     tracing::warn!("Filtered hallucination (repeated word): {:?}", text);
+                    clear_session_context();
+                    emit_transcription_diagnostic(
+                        app,
+                        "rejected",
+                        "hallucination_repeated_word",
+                        Some(peak),
+                        Some(rms),
+                        Some(duration_secs),
+                    );
                     return None;
                 }
             }
@@ -1562,10 +2208,51 @@ fn transcribe_chunk(
             // Filter very short single-character outputs (noise artifacts)
             if stripped.len() == 1 && !stripped.chars().next().unwrap().is_alphanumeric() {
                 tracing::warn!("Filtered hallucination (single char): {:?}", text);
+                clear_session_context();
+                emit_transcription_diagnostic(
+                    app,
+                    "rejected",
+                    "hallucination_single_char",
+                    Some(peak),
+                    Some(rms),
+                    Some(duration_secs),
+                );
                 return None;
             }
 
             tracing::info!("Transcription accepted: '{}' ({} chars)", text, text.len());
+            emit_transcription_diagnostic(
+                app,
+                "accepted",
+                "accepted",
+                Some(peak),
+                Some(rms),
+                Some(duration_secs),
+            );
+
+            // Update the running session transcript so the next phrase
+            // gets it as `initial_prompt`. Cap to ~200 chars (whisper-cpp
+            // accepts longer but burns prompt tokens for no benefit).
+            {
+                let mut prev = state
+                    .session_prev_text
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
+                if !prev.is_empty() {
+                    prev.push(' ');
+                }
+                prev.push_str(&text);
+                if prev.len() > 200 {
+                    let start_byte = prev
+                        .char_indices()
+                        .rev()
+                        .nth(200)
+                        .map(|(i, _)| i)
+                        .unwrap_or(0);
+                    *prev = prev[start_byte..].trim_start().to_string();
+                }
+            }
+
             Some((text, result.processing_time_ms))
         }
         Ok(result) => {
@@ -1576,14 +2263,29 @@ fn transcribe_chunk(
                 peak,
                 rms,
             );
-            tracing::error!("{}", msg);
-            emit_transcription_error(app, &msg);
+            tracing::warn!("{}", msg);
+            emit_transcription_diagnostic(
+                app,
+                "rejected",
+                "engine_empty",
+                Some(peak),
+                Some(rms),
+                Some(duration_secs),
+            );
             None
         }
         Err(e) => {
             let msg = format!("Transcription engine error: {:#}", e);
             tracing::error!("{}", msg);
             emit_transcription_error(app, &msg);
+            emit_transcription_diagnostic(
+                app,
+                "rejected",
+                "engine_error",
+                Some(peak),
+                Some(rms),
+                Some(duration_secs),
+            );
             None
         }
     }
@@ -1594,6 +2296,27 @@ fn emit_transcription_error(app: &tauri::AppHandle, message: &str) {
     let _ = app.emit(
         "transcription-error",
         serde_json::json!({ "error": message }),
+    );
+}
+
+/// Emit diagnostic telemetry for transcription quality debugging.
+fn emit_transcription_diagnostic(
+    app: &tauri::AppHandle,
+    kind: &str,
+    reason: &str,
+    peak: Option<f32>,
+    rms: Option<f32>,
+    duration_secs: Option<f32>,
+) {
+    let _ = app.emit(
+        "transcription-diagnostic",
+        serde_json::json!({
+            "kind": kind,
+            "reason": reason,
+            "peak": peak,
+            "rms": rms,
+            "duration_secs": duration_secs,
+        }),
     );
 }
 
@@ -1626,7 +2349,11 @@ fn handle_toggle(app: &tauri::AppHandle) {
         // when streaming_worker receives StreamingDone.
         emit_recording_state(app, false, false);
 
-        if let Err(e) = state.audio.get().expect("audio initialized").request_stop() {
+        let stop_result = match state.audio.get() {
+            Some(audio) => audio.request_stop(),
+            None => Err("Audio worker not initialized".to_string()),
+        };
+        if let Err(e) = stop_result {
             tracing::error!("Failed to send stop command: {}", e);
             emit_recording_state(app, false, false);
             let _ = app.emit(
@@ -1664,6 +2391,40 @@ fn handle_toggle(app: &tauri::AppHandle) {
         }
 
         tracing::info!("Toggle: start streaming");
+
+        // Queue the StartStreaming command synchronously, before spawning the
+        // worker thread. The command channel is FIFO, so a later stop toggle's
+        // Cmd::Stop can never overtake the start — previously the start was
+        // sent from the spawned thread and a fast stop could win the race,
+        // leaving the mic recording while the UI showed idle.
+        let start_params = {
+            let settings = state.settings.lock().unwrap_or_else(|e| e.into_inner());
+            (
+                settings.audio_device.clone(),
+                settings.silence_rms_threshold,
+                settings.vad_threshold,
+                Duration::from_secs_f32(settings.phrase_pause_secs),
+                Duration::from_secs_f32(settings.session_timeout_secs),
+            )
+        };
+        let send_result = match state.audio.get() {
+            Some(audio) => {
+                let (device, rms, vad, pause, timeout) = start_params;
+                audio.send_start(device, rms, vad, pause, timeout)
+            }
+            None => Err("Audio worker not initialized".to_string()),
+        };
+        if let Err(e) = send_result {
+            tracing::error!("Failed to queue start command: {}", e);
+            *state.recording.lock().unwrap_or_else(|e| e.into_inner()) = false;
+            emit_recording_state(app, false, false);
+            let _ = app.emit(
+                "hotkey-error",
+                serde_json::json!({ "error": format!("Failed to start recording: {}", e) }),
+            );
+            return;
+        }
+
         emit_recording_state(app, true, false);
 
         let app_handle = app.clone();
@@ -1697,16 +2458,9 @@ fn handle_toggle(app: &tauri::AppHandle) {
 fn streaming_worker(app: &tauri::AppHandle) {
     let state = app.state::<AppState>();
 
-    let (audio_device, rms_threshold, phrase_pause, session_timeout, output_mode, model_id) = {
+    let (output_mode, model_id) = {
         let settings = state.settings.lock().unwrap_or_else(|e| e.into_inner());
-        (
-            settings.audio_device.clone(),
-            settings.silence_rms_threshold,
-            Duration::from_secs_f32(settings.phrase_pause_secs),
-            Duration::from_secs_f32(settings.session_timeout_secs),
-            settings.output_mode,
-            settings.model.id().to_string(),
-        )
+        (settings.output_mode, settings.model.id().to_string())
     };
 
     // Read the saved foreground window handle for focus restoration.
@@ -1717,23 +2471,30 @@ fn streaming_worker(app: &tauri::AppHandle) {
         .unwrap_or_else(|e| e.into_inner());
 
     tracing::info!(
-        "streaming_worker starting: model={}, rms_threshold={}, phrase_pause={:?}, \
-         session_timeout={:?}, output_mode={:?}, audio_device={:?}",
+        "streaming_worker starting: model={}, output_mode={:?}",
         model_id,
-        rms_threshold,
-        phrase_pause,
-        session_timeout,
         output_mode,
-        audio_device,
     );
 
-    // Start streaming (blocks until audio capture is ready)
-    if let Err(e) = state
-        .audio
-        .get()
-        .expect("audio initialized")
-        .start_streaming(audio_device, rms_threshold, phrase_pause, session_timeout)
+    // Reset the per-session decoder context so the first phrase of this
+    // session isn't biased by the last phrase of the previous one.
     {
+        let mut prev = state
+            .session_prev_text
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        prev.clear();
+    }
+
+    // The StartStreaming command was already queued by handle_toggle;
+    // block here until the worker acknowledges it.
+    let Some(audio) = state.audio.get() else {
+        tracing::error!("Audio worker not initialized in streaming_worker");
+        *state.recording.lock().unwrap_or_else(|e| e.into_inner()) = false;
+        emit_recording_state(app, false, false);
+        return;
+    };
+    if let Err(e) = audio.await_started() {
         tracing::error!("Failed to start streaming: {}", e);
         *state.recording.lock().unwrap_or_else(|e| e.into_inner()) = false;
         emit_recording_state(app, false, false);
@@ -1746,11 +2507,15 @@ fn streaming_worker(app: &tauri::AppHandle) {
 
     // Loop: receive PhraseReady / StreamingDone
     let mut had_transcription = false;
+    let mut saw_signal = false;
+    let mut had_phrase_audio = false;
+    let mut saw_no_signal = false;
     loop {
-        match state.audio.get().expect("audio initialized").recv_result() {
+        match audio.recv_result() {
             Ok(audio_worker::AudioResult::PhraseReady(audio)) => {
                 // We should still process this phrase if recording was JUST stopped.
                 // The worker flushes the last chunk on stop.
+                had_phrase_audio = true;
 
                 tracing::info!(
                     "Phrase ready: {} samples ({:.1}s of audio)",
@@ -1782,6 +2547,11 @@ fn streaming_worker(app: &tauri::AppHandle) {
                         text.len(),
                         output_mode
                     );
+                    #[cfg(windows)]
+                    let last_external_hwnd = *state
+                        .last_external_foreground
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner());
                     let output_result =
                         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                             output_text(
@@ -1789,6 +2559,8 @@ fn streaming_worker(app: &tauri::AppHandle) {
                                 output_mode,
                                 #[cfg(windows)]
                                 previous_hwnd,
+                                #[cfg(windows)]
+                                last_external_hwnd,
                             )
                         }));
                     match output_result {
@@ -1831,9 +2603,12 @@ fn streaming_worker(app: &tauri::AppHandle) {
                 let _ = app.emit("audio-level", rms);
             }
             Ok(audio_worker::AudioResult::SignalDetected) => {
+                saw_signal = true;
                 let _ = app.emit("audio-signal-detected", serde_json::json!({}));
             }
             Ok(audio_worker::AudioResult::NoSignal(message)) => {
+                saw_no_signal = true;
+                emit_transcription_diagnostic(app, "rejected", "no_signal", None, None, None);
                 let _ = app.emit(
                     "transcription-error",
                     serde_json::json!({ "error": message }),
@@ -1858,11 +2633,13 @@ fn streaming_worker(app: &tauri::AppHandle) {
     }
 
     // Notify user if no transcription was produced during the session
-    if !had_transcription {
-        let _ = app.emit(
-            "hotkey-error",
-            serde_json::json!({ "error": "No speech detected — check your microphone input" }),
-        );
+    if !had_transcription && !saw_no_signal {
+        let msg = if saw_signal || had_phrase_audio {
+            "Speech was detected, but transcription failed. Try speaking a bit slower/closer to the mic, or switch to a larger model."
+        } else {
+            "No speech detected — check your microphone input"
+        };
+        let _ = app.emit("hotkey-error", serde_json::json!({ "error": msg }));
     }
 
     // Cleanup
@@ -1900,8 +2677,90 @@ fn is_platform_double_tap_modifier(key: rdev::Key) -> bool {
     }
 }
 
+/// Which key participates in double-tap toggle detection.
 #[cfg(any(windows, target_os = "macos"))]
-fn handle_double_modifier_tap(app: &tauri::AppHandle, last_tap: &mut Option<Instant>) {
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum TapTarget {
+    /// The platform modifier, either side (Ctrl on Windows, Cmd on macOS).
+    Modifier,
+    /// One specific key (e.g. right Ctrl, or a bare letter); taps only count
+    /// while no other modifier is held and no other key was pressed in
+    /// between, so shortcuts (including Murmur's own Ctrl+V paste output)
+    /// never register as taps.
+    Key(rdev::Key),
+}
+
+#[cfg(any(windows, target_os = "macos"))]
+fn letter_to_rdev_key(letter: char) -> Option<rdev::Key> {
+    use rdev::Key::*;
+    Some(match letter {
+        'a' => KeyA,
+        'b' => KeyB,
+        'c' => KeyC,
+        'd' => KeyD,
+        'e' => KeyE,
+        'f' => KeyF,
+        'g' => KeyG,
+        'h' => KeyH,
+        'i' => KeyI,
+        'j' => KeyJ,
+        'k' => KeyK,
+        'l' => KeyL,
+        'm' => KeyM,
+        'n' => KeyN,
+        'o' => KeyO,
+        'p' => KeyP,
+        'q' => KeyQ,
+        'r' => KeyR,
+        's' => KeyS,
+        't' => KeyT,
+        'u' => KeyU,
+        'v' => KeyV,
+        'w' => KeyW,
+        'x' => KeyX,
+        'y' => KeyY,
+        'z' => KeyZ,
+        _ => return None,
+    })
+}
+
+/// Resolve the configured `double_tap_key` into a tap target. Unknown values
+/// fall back to the platform modifier.
+#[cfg(any(windows, target_os = "macos"))]
+fn tap_target_from_setting(value: &str) -> TapTarget {
+    let v = value.trim().to_lowercase();
+    match v.as_str() {
+        "" | "ctrl" | "control" | "cmd" | "command" | "super" | "meta" => TapTarget::Modifier,
+        // Right-side modifiers: never type characters and are virtually
+        // unused in shortcuts — the best default for double-tap toggling.
+        "rctrl" | "rightctrl" | "right_ctrl" | "right-ctrl" => {
+            TapTarget::Key(rdev::Key::ControlRight)
+        }
+        "rcmd" | "rightcmd" | "right_cmd" | "right-cmd" | "rmeta" => {
+            TapTarget::Key(rdev::Key::MetaRight)
+        }
+        "lctrl" | "leftctrl" | "left_ctrl" | "left-ctrl" => TapTarget::Key(rdev::Key::ControlLeft),
+        other => {
+            let mut chars = other.chars();
+            match (chars.next().and_then(letter_to_rdev_key), chars.next()) {
+                (Some(key), None) => TapTarget::Key(key),
+                _ => TapTarget::Modifier,
+            }
+        }
+    }
+}
+
+#[cfg(any(windows, target_os = "macos"))]
+fn is_modifier_key(key: rdev::Key) -> bool {
+    use rdev::Key::*;
+    matches!(
+        key,
+        ControlLeft | ControlRight | ShiftLeft | ShiftRight | Alt | AltGr | MetaLeft | MetaRight
+    )
+}
+
+#[cfg(any(windows, target_os = "macos"))]
+fn handle_double_tap(app: &tauri::AppHandle, last_tap: &mut Option<Instant>) {
     let now = Instant::now();
     let is_double_tap = last_tap
         .map(|last| now.duration_since(last) <= Duration::from_millis(450))
@@ -1920,17 +2779,90 @@ fn spawn_global_input_listener(app: tauri::AppHandle) {
     std::thread::spawn(move || {
         tracing::info!("Starting global input listener");
         let mut last_modifier_tap: Option<Instant> = None;
+        // True when any non-modifier key was pressed since the last modifier
+        // press. A Ctrl release that was part of a combo (Ctrl+C, Ctrl+V,
+        // Ctrl+Q, ...) must NOT count as a tap — otherwise quick shortcut
+        // sequences like copy-then-paste toggle recording at random.
+        let mut combo_used = false;
+        // Modifier keys currently held down. Letter taps only count when
+        // empty, so Ctrl+V (paste — including Murmur's own output) never
+        // toggles recording.
+        #[cfg(any(windows, target_os = "macos"))]
+        let mut held_modifiers: std::collections::HashSet<rdev::Key> =
+            std::collections::HashSet::new();
+        // Cached tap target; refreshed from settings on each key press
+        // (try_lock — keeps the hook non-blocking).
+        #[cfg(any(windows, target_os = "macos"))]
+        let mut tap_target = TapTarget::Modifier;
 
         if let Err(e) = rdev::listen(move |event| {
             let _ =
                 std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| match event.event_type {
                     #[cfg(any(windows, target_os = "macos"))]
-                    rdev::EventType::KeyRelease(key) if is_platform_double_tap_modifier(key) => {
-                        handle_double_modifier_tap(&app, &mut last_modifier_tap);
+                    rdev::EventType::KeyPress(key) => {
+                        if is_modifier_key(key) {
+                            held_modifiers.insert(key);
+                        }
+                        if let Some(state) = app.try_state::<AppState>()
+                            && let Ok(settings) = state.settings.try_lock()
+                        {
+                            tap_target = tap_target_from_setting(&settings.double_tap_key);
+                        }
+
+                        match tap_target {
+                            TapTarget::Modifier => {
+                                if is_platform_double_tap_modifier(key) {
+                                    combo_used = false;
+                                } else {
+                                    combo_used = true;
+                                    last_modifier_tap = None;
+                                }
+                            }
+                            TapTarget::Key(tap_key) => {
+                                if key == tap_key {
+                                    combo_used = false;
+                                } else {
+                                    combo_used = true;
+                                    last_modifier_tap = None;
+                                }
+                            }
+                        }
+                    }
+                    #[cfg(any(windows, target_os = "macos"))]
+                    rdev::EventType::KeyRelease(key) => {
+                        if is_modifier_key(key) {
+                            held_modifiers.remove(&key);
+                        }
+                        match tap_target {
+                            TapTarget::Modifier => {
+                                if is_platform_double_tap_modifier(key) {
+                                    if combo_used {
+                                        combo_used = false;
+                                        last_modifier_tap = None;
+                                    } else {
+                                        handle_double_tap(&app, &mut last_modifier_tap);
+                                    }
+                                }
+                            }
+                            TapTarget::Key(tap_key) => {
+                                if key == tap_key {
+                                    if combo_used || !held_modifiers.is_empty() {
+                                        // Part of a shortcut (e.g. Ctrl+V, or
+                                        // RCtrl+C) — never a tap.
+                                        combo_used = false;
+                                        last_modifier_tap = None;
+                                    } else {
+                                        handle_double_tap(&app, &mut last_modifier_tap);
+                                    }
+                                }
+                            }
+                        }
                     }
                     rdev::EventType::ButtonPress(
                         rdev::Button::Left | rdev::Button::Right | rdev::Button::Middle,
                     ) => {
+                        // A mouse click between taps invalidates them.
+                        last_modifier_tap = None;
                         let state = app.state::<AppState>();
                         let click_to_stop = state
                             .settings
@@ -1991,12 +2923,14 @@ pub fn run() -> anyhow::Result<()> {
     let mut settings = Settings::load(&config_path).context("Failed to load settings")?;
     if settings.output_mode == murmur_core::output::OutputMode::Stdout {
         // Desktop app should not default to display-only mode because users
-        // expect text to be delivered to the active app.
-        settings.output_mode = murmur_core::output::OutputMode::Keyboard;
+        // expect text to be delivered to the active app. `Auto` runs
+        // ClipboardPaste first (the macOS-Dictation-style reliable path)
+        // and only falls back to keyboard simulation if paste is rejected.
+        settings.output_mode = murmur_core::output::OutputMode::Auto;
         if let Err(e) = settings.save(&config_path) {
             tracing::warn!("Failed to persist output_mode migration from stdout: {}", e);
         }
-        tracing::info!("Migrated desktop output mode from stdout to keyboard");
+        tracing::info!("Migrated desktop output mode from stdout to auto");
     }
 
     let model = settings.model;
@@ -2023,6 +2957,7 @@ pub fn run() -> anyhow::Result<()> {
             recording: Mutex::new(false),
             settings: Mutex::new(settings),
             last_toggle: Mutex::new(Instant::now() - Duration::from_secs(10)),
+            session_prev_text: Mutex::new(String::new()),
             #[cfg(windows)]
             previous_foreground: Mutex::new(0),
             #[cfg(windows)]

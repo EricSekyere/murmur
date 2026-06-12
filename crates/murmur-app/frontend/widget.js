@@ -1,105 +1,158 @@
 const { invoke } = window.__TAURI__.core;
 const { listen } = window.__TAURI__.event;
-const { getCurrentWindow } = window.__TAURI__.window;
 
-const widget   = document.getElementById('widget');
-const micBtn   = document.getElementById('mic-btn');
-const label    = document.getElementById('state-label');
-const canvas   = document.getElementById('waveform');
-const ctx      = canvas.getContext('2d');
-
-// ─── Waveform State ──────────────────────────────────────────────────────────
-let currentRms  = 0;
-let targetRms   = 0;
-let wavePhase   = 0;
-let animHandle  = null;
-let currentState = 'idle';
+const widget = document.getElementById('widget');
+const micBtn = document.getElementById('mic-btn');
+const label  = document.getElementById('state-label');
+const canvas = document.getElementById('waveform');
+const ctx    = canvas.getContext('2d');
 
 // ─── State ───────────────────────────────────────────────────────────────────
 
-function applyState(name, text) {
-  if (name === currentState && name !== 'error') return;
-  currentState = name;
-  widget.className = `pill pill--${name}`;
+const BAR_COUNT = 22;
+const PUSH_INTERVAL_MS = 70; // ~14 new bars per second scroll speed
+
+let currentState = 'idle';
+// Monotonic token: every state change bumps it, so delayed resets
+// (error flashes) can detect they're stale and skip stomping a newer state.
+let stateToken = 0;
+
+let levels = new Array(BAR_COUNT).fill(0);
+let targetRms = 0;
+let smoothRms = 0;
+let lastPush = 0;
+let animHandle = null;
+
+let timerHandle = null;
+let recordStart = 0;
+let heardSpeech = false;
+
+function setLabel(text) {
   label.textContent = text;
+}
+
+function applyState(name, text) {
+  stateToken += 1;
+  if (name !== currentState) {
+    currentState = name;
+    widget.className = `pill pill--${name}`;
+  }
+  if (text !== undefined) setLabel(text);
+
+  micBtn.setAttribute(
+    'aria-label',
+    name === 'recording' ? 'Stop recording' : 'Start recording'
+  );
 
   if (name === 'recording') {
-    startWaveform();
+    startRecordingUi();
   } else {
-    stopWaveform();
+    stopRecordingUi();
   }
 }
 
-// ─── Waveform ────────────────────────────────────────────────────────────────
-
-function sizeCanvas() {
-  const dpr = window.devicePixelRatio || 1;
-  const r = canvas.getBoundingClientRect();
-  canvas.width  = r.width * dpr;
-  canvas.height = r.height * dpr;
-  ctx.scale(dpr, dpr);
+/** Show a transient state, then fall back to idle unless something newer happened. */
+function flashState(name, text, ms) {
+  applyState(name, text);
+  const token = stateToken;
+  setTimeout(() => {
+    if (stateToken === token) applyState('idle', 'murmur');
+  }, ms);
 }
 
-function drawWave() {
-  animHandle = requestAnimationFrame(drawWave);
+// ─── Recording UI: timer + waveform ──────────────────────────────────────────
 
-  currentRms += (targetRms - currentRms) * 0.2;
-  wavePhase  += 0.055;
-
-  const w   = canvas.getBoundingClientRect().width;
-  const h   = canvas.getBoundingClientRect().height;
-  const mid = h / 2;
-  const amp = Math.min(1, currentRms * 5);
-
-  ctx.clearRect(0, 0, w, h);
-
-  // Three layered sine waves
-  const layers = [
-    { freq: 0.09, shift: 0,   alpha: 0.85, peak: 12 },
-    { freq: 0.13, shift: 1.4, alpha: 0.45, peak: 9  },
-    { freq: 0.06, shift: 3.0, alpha: 0.22, peak: 7  },
-  ];
-
-  for (const l of layers) {
-    ctx.beginPath();
-    for (let x = 0; x <= w; x++) {
-      const env = Math.sin((x / w) * Math.PI);  // fade edges
-      const y = mid + Math.sin(x * l.freq + wavePhase + l.shift) * l.peak * amp * env;
-      x === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
-    }
-    ctx.strokeStyle = `rgba(239, 68, 68, ${l.alpha})`;
-    ctx.lineWidth = 1.8;
-    ctx.stroke();
+function startRecordingUi() {
+  if (!animHandle) {
+    sizeCanvas();
+    levels.fill(0);
+    smoothRms = 0;
+    targetRms = 0;
+    lastPush = 0;
+    animHandle = requestAnimationFrame(drawWave);
+  }
+  if (!timerHandle) {
+    recordStart = performance.now();
+    heardSpeech = false;
+    setLabel('listening');
+    timerHandle = setInterval(updateTimer, 250);
   }
 }
 
-function startWaveform() {
-  if (animHandle) return;
-  canvas.style.display = 'block';
-  sizeCanvas();
-  currentRms = 0;
-  targetRms  = 0;
-  wavePhase  = 0;
-  animHandle = requestAnimationFrame(drawWave);
-}
-
-function stopWaveform() {
+function stopRecordingUi() {
   if (animHandle) {
     cancelAnimationFrame(animHandle);
     animHandle = null;
   }
-  canvas.style.display = 'none';
-  currentRms = 0;
-  targetRms  = 0;
+  if (timerHandle) {
+    clearInterval(timerHandle);
+    timerHandle = null;
+  }
+  targetRms = 0;
+  smoothRms = 0;
 }
 
-// ─── Audio Level ─────────────────────────────────────────────────────────────
+function updateTimer() {
+  // Keep showing "listening" until the backend confirms it hears speech.
+  if (!heardSpeech) return;
+  const total = Math.floor((performance.now() - recordStart) / 1000);
+  const mm = Math.floor(total / 60);
+  const ss = String(total % 60).padStart(2, '0');
+  setLabel(`${mm}:${ss}`);
+}
 
-listen('audio-level', (event) => {
-  if (typeof event.payload === 'number' && currentState === 'recording') {
-    targetRms = event.payload;
+// ─── Waveform: scrolling level bars ──────────────────────────────────────────
+
+function sizeCanvas() {
+  const dpr = window.devicePixelRatio || 1;
+  const r = canvas.getBoundingClientRect();
+  canvas.width = Math.max(1, Math.round(r.width * dpr));
+  canvas.height = Math.max(1, Math.round(r.height * dpr));
+  // Setting width/height resets the transform; set it explicitly so
+  // repeated calls never accumulate scale.
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+
+function drawWave(ts) {
+  animHandle = requestAnimationFrame(drawWave);
+
+  smoothRms += (targetRms - smoothRms) * 0.25;
+  if (!lastPush || ts - lastPush >= PUSH_INTERVAL_MS) {
+    levels.push(smoothRms);
+    levels.shift();
+    lastPush = ts;
   }
-});
+
+  const r = canvas.getBoundingClientRect();
+  const w = r.width;
+  const h = r.height;
+  ctx.clearRect(0, 0, w, h);
+
+  const gap = 2.5;
+  const bw = (w - gap * (BAR_COUNT - 1)) / BAR_COUNT;
+
+  for (let i = 0; i < BAR_COUNT; i++) {
+    // Perceptual curve: RMS speech levels are small; lift them so a
+    // normal voice fills most of the bar height.
+    const v = Math.min(1, Math.pow(levels[i] * 6, 0.75));
+    const bh = Math.max(2, v * (h - 4));
+    const x = i * (bw + gap);
+    const y = (h - bh) / 2;
+
+    // Newest bars (right) are brightest; history fades out to the left.
+    const recency = i / (BAR_COUNT - 1);
+    ctx.globalAlpha = 0.22 + recency * 0.78;
+    ctx.fillStyle = '#f87171';
+    if (typeof ctx.roundRect === 'function') {
+      ctx.beginPath();
+      ctx.roundRect(x, y, bw, bh, bw / 2);
+      ctx.fill();
+    } else {
+      ctx.fillRect(x, y, bw, bh);
+    }
+  }
+  ctx.globalAlpha = 1;
+}
 
 // ─── Mic Button ──────────────────────────────────────────────────────────────
 
@@ -108,20 +161,28 @@ micBtn.addEventListener('click', async () => {
     await invoke('toggle_recording');
   } catch (err) {
     console.error('toggle_recording failed:', err);
-    applyState('error', 'error');
-    setTimeout(() => applyState('idle', 'murmur'), 2000);
+    flashState('error', 'error', 2200);
   }
 });
 
 // ─── Backend Events ──────────────────────────────────────────────────────────
 
+listen('audio-level', (event) => {
+  if (typeof event.payload === 'number' && currentState === 'recording') {
+    targetRms = event.payload;
+  }
+});
+
+listen('audio-signal-detected', () => {
+  heardSpeech = true;
+});
+
 listen('recording-state', (event) => {
   const { recording, processing } = event.payload;
-  if (recording && processing) {
-    // Brief processing flash mid-session — keep showing recording
-    applyState('recording', '');
-  } else if (recording) {
-    applyState('recording', '');
+  if (recording) {
+    // Recording (possibly with a mid-session transcription in flight) —
+    // keep the live waveform/timer rather than flashing a spinner.
+    applyState('recording');
   } else if (processing) {
     applyState('processing', 'thinking');
   } else {
@@ -134,21 +195,17 @@ listen('hotkey-transcribed', () => {
 });
 
 listen('hotkey-error', (event) => {
-  const msg = event.payload?.error;
-  // Don't flash error for "no speech" — just go idle quietly
-  if (msg && msg.includes('No speech')) {
+  const msg = event.payload?.error || '';
+  // "No speech" is an expected outcome, not an error — go idle quietly.
+  if (msg.includes('No speech')) {
     applyState('idle', 'murmur');
     return;
   }
-  applyState('error', 'error');
-  setTimeout(() => applyState('idle', 'murmur'), 2000);
-});
-
-listen('streaming-phrase', () => {
-  // Stay in recording if we're still going
-  if (currentState !== 'recording') {
-    applyState('recording', '');
+  if (msg.includes('still loading')) {
+    flashState('processing', 'loading model', 2200);
+    return;
   }
+  flashState('error', 'error', 2200);
 });
 
 listen('streaming-done', () => {
@@ -158,8 +215,24 @@ listen('streaming-done', () => {
 listen('transcription-error', (event) => {
   const msg = event.payload?.error || 'transcription error';
   console.error('Transcription error:', msg);
-  applyState('error', 'error');
-  setTimeout(() => {
-    if (currentState === 'error') applyState('idle', 'murmur');
-  }, 2000);
+  // Ignore chunk-level warnings while actively recording.
+  if (currentState === 'recording') {
+    return;
+  }
+  flashState('error', 'error', 2200);
 });
+
+// ─── Initial sync ────────────────────────────────────────────────────────────
+// If the widget (re)loads mid-session, reflect the real backend state
+// instead of assuming idle.
+
+(async () => {
+  try {
+    const status = await invoke('get_status');
+    if (status && status.recording) {
+      applyState('recording');
+    }
+  } catch (_) {
+    // Backend not ready yet — stay idle; events will correct us.
+  }
+})();

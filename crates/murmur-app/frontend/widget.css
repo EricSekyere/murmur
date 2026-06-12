@@ -3,13 +3,14 @@
 
 /* ─── Variables ─────────────────────────────────────────────────────────── */
 :root {
-  --accent: #8b5cf6;
-  --record: #ef4444;
-  --processing: #f59e0b;
+  --accent: #a78bfa;
+  --accent-deep: #8b5cf6;
+  --record: #f87171;
+  --record-deep: #ef4444;
+  --processing: #fbbf24;
   --text: #f0f0f5;
-  --text-dim: rgba(255, 255, 255, 0.4);
-  --bg: rgba(12, 12, 18, 0.92);
-  --border: rgba(255, 255, 255, 0.07);
+  --text-dim: rgba(255, 255, 255, 0.45);
+  --border: rgba(255, 255, 255, 0.08);
   --ease: cubic-bezier(0.16, 1, 0.3, 1);
   --spring: cubic-bezier(0.34, 1.56, 0.64, 1);
 }
@@ -35,17 +36,24 @@ html, body {
   position: relative;
   display: flex;
   align-items: center;
-  height: 42px;
-  border-radius: 21px;
-  background: var(--bg);
+  height: 44px;
+  border-radius: 22px;
+  /* Layered glass: a top sheen over a deep, slightly blue-black body. */
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.07), rgba(255, 255, 255, 0) 42%),
+    linear-gradient(180deg, rgba(24, 24, 36, 0.97), rgba(13, 13, 22, 0.97));
   border: 1px solid var(--border);
-  padding: 3px 10px 3px 3px;
+  padding: 3px 12px 3px 3px;
   gap: 0;
   cursor: grab;
   transition: width 0.45s var(--ease),
               border-color 0.35s ease,
               box-shadow 0.4s ease;
   overflow: hidden;
+  box-shadow:
+    0 10px 28px rgba(0, 0, 0, 0.45),
+    0 2px 8px rgba(0, 0, 0, 0.3),
+    inset 0 1px 0 rgba(255, 255, 255, 0.05);
 }
 
 .pill:active { cursor: grabbing; }
@@ -54,7 +62,7 @@ html, body {
 .pill__ring {
   position: absolute;
   inset: -1px;
-  border-radius: 22px;
+  border-radius: 23px;
   pointer-events: none;
   z-index: 0;
   opacity: 0;
@@ -64,8 +72,8 @@ html, body {
 /* ─── Orb ───────────────────────────────────────────────────────────────── */
 .pill__orb {
   position: relative;
-  width: 36px;
-  height: 36px;
+  width: 38px;
+  height: 38px;
   border-radius: 50%;
   border: none;
   background: rgba(255, 255, 255, 0.05);
@@ -76,7 +84,8 @@ html, body {
   justify-content: center;
   flex-shrink: 0;
   z-index: 2;
-  transition: all 0.3s var(--spring);
+  transition: background 0.3s ease, color 0.3s ease,
+              box-shadow 0.3s ease, transform 0.3s var(--spring);
 }
 
 .pill__orb:hover {
@@ -87,6 +96,22 @@ html, body {
 
 .pill__orb:active {
   transform: scale(0.93);
+}
+
+.pill__orb:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* Sonar ping ring, only animated while recording. */
+.pill__orb::after {
+  content: "";
+  position: absolute;
+  inset: -2px;
+  border-radius: 50%;
+  border: 1.5px solid transparent;
+  opacity: 0;
+  pointer-events: none;
 }
 
 /* ─── Icons ─────────────────────────────────────────────────────────────── */
@@ -104,8 +129,10 @@ html, body {
 /* ─── Waveform ──────────────────────────────────────────────────────────── */
 .pill__wave {
   display: none;
-  height: 34px;
+  width: 84px;
+  height: 32px;
   flex-shrink: 0;
+  margin-left: 6px;
   z-index: 1;
 }
 
@@ -115,9 +142,10 @@ html, body {
   font-weight: 600;
   letter-spacing: 0.05em;
   text-transform: lowercase;
+  font-variant-numeric: tabular-nums;
   color: var(--text-dim);
   white-space: nowrap;
-  padding: 0 4px 0 8px;
+  padding: 0 2px 0 8px;
   z-index: 1;
   transition: color 0.3s ease, opacity 0.25s ease;
 }
@@ -126,60 +154,80 @@ html, body {
    IDLE
    ═══════════════════════════════════════════════════════════════════════════ */
 .pill--idle {
-  width: 128px;
-  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.35);
+  width: 132px;
 }
 
 .pill--idle .pill__orb {
-  background: rgba(139, 92, 246, 0.12);
+  background: linear-gradient(180deg, rgba(167, 139, 250, 0.18), rgba(139, 92, 246, 0.1));
   color: var(--accent);
+  animation: orb-breathe 4.5s ease-in-out infinite;
+}
+
+.pill--idle:hover .pill__orb {
+  background: linear-gradient(180deg, rgba(167, 139, 250, 0.26), rgba(139, 92, 246, 0.16));
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
    RECORDING
    ═══════════════════════════════════════════════════════════════════════════ */
 .pill--recording {
-  width: 170px;
-  border-color: rgba(239, 68, 68, 0.2);
-  box-shadow: 0 0 20px rgba(239, 68, 68, 0.12),
-              0 2px 12px rgba(0, 0, 0, 0.35);
+  width: 192px;
+  border-color: rgba(248, 113, 113, 0.22);
+  box-shadow:
+    0 0 22px rgba(239, 68, 68, 0.14),
+    0 10px 28px rgba(0, 0, 0, 0.45),
+    inset 0 1px 0 rgba(255, 255, 255, 0.05);
 }
 
 .pill--recording .pill__ring {
   opacity: 1;
-  box-shadow: inset 0 0 0 1px rgba(239, 68, 68, 0.15);
+  box-shadow: inset 0 0 0 1px rgba(248, 113, 113, 0.14),
+              inset 0 0 18px rgba(239, 68, 68, 0.07);
 }
 
 .pill--recording .pill__orb {
-  background: var(--record);
+  background: linear-gradient(180deg, #f87171, #dc2626);
   color: white;
-  box-shadow: 0 0 14px rgba(239, 68, 68, 0.4);
+  box-shadow: 0 0 14px rgba(239, 68, 68, 0.45);
   animation: orb-pulse 2s infinite ease-in-out;
+}
+
+.pill--recording .pill__orb::after {
+  border-color: rgba(248, 113, 113, 0.55);
+  animation: sonar 1.7s ease-out infinite;
 }
 
 .pill--recording .pill__icon--mic  { opacity: 0; transform: scale(0.4); }
 .pill--recording .pill__icon--stop { opacity: 1; transform: scale(1); }
 
 .pill--recording .pill__wave  { display: block; }
-.pill--recording .pill__label { display: none; }
+
+.pill--recording .pill__label {
+  color: rgba(248, 113, 113, 0.9);
+  font-weight: 600;
+  min-width: 34px;
+  text-align: right;
+}
 
 /* ═══════════════════════════════════════════════════════════════════════════
    PROCESSING
    ═══════════════════════════════════════════════════════════════════════════ */
 .pill--processing {
-  width: 144px;
-  border-color: rgba(245, 158, 11, 0.2);
-  box-shadow: 0 0 16px rgba(245, 158, 11, 0.1),
-              0 2px 12px rgba(0, 0, 0, 0.35);
+  width: 150px;
+  border-color: rgba(251, 191, 36, 0.2);
+  box-shadow:
+    0 0 16px rgba(245, 158, 11, 0.1),
+    0 10px 28px rgba(0, 0, 0, 0.45),
+    inset 0 1px 0 rgba(255, 255, 255, 0.05);
 }
 
 .pill--processing .pill__ring {
   opacity: 0.6;
-  box-shadow: inset 0 0 0 1px rgba(245, 158, 11, 0.15);
+  box-shadow: inset 0 0 0 1px rgba(251, 191, 36, 0.14);
 }
 
 .pill--processing .pill__orb {
-  background: rgba(245, 158, 11, 0.12);
+  background: linear-gradient(180deg, rgba(251, 191, 36, 0.18), rgba(245, 158, 11, 0.1));
   color: var(--processing);
 }
 
@@ -188,38 +236,60 @@ html, body {
 
 .pill--processing .pill__label {
   color: var(--processing);
-  animation: fade-pulse 1.6s infinite ease-in-out;
+}
+
+/* Animated ellipsis while thinking. */
+.pill--processing .pill__label::after {
+  content: "";
+  display: inline-block;
+  width: 1.1em;
+  text-align: left;
+  animation: dots 1.4s steps(4, end) infinite;
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
    ERROR
    ═══════════════════════════════════════════════════════════════════════════ */
 .pill--error {
-  width: 128px;
-  border-color: rgba(239, 68, 68, 0.4);
+  width: 150px;
+  border-color: rgba(248, 113, 113, 0.4);
   animation: shake 0.35s var(--spring);
 }
 
 .pill--error .pill__orb {
-  background: var(--record);
+  background: linear-gradient(180deg, #f87171, #dc2626);
   color: white;
 }
 
 .pill--error .pill__label { color: var(--record); }
 
 /* ─── Animations ────────────────────────────────────────────────────────── */
+@keyframes orb-breathe {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(139, 92, 246, 0); }
+  50%      { box-shadow: 0 0 14px 1px rgba(139, 92, 246, 0.22); }
+}
+
 @keyframes orb-pulse {
   0%, 100% { box-shadow: 0 0 14px rgba(239, 68, 68, 0.4); }
-  50%      { box-shadow: 0 0 22px rgba(239, 68, 68, 0.6); }
+  50%      { box-shadow: 0 0 24px rgba(239, 68, 68, 0.65); }
+}
+
+@keyframes sonar {
+  0%   { transform: scale(1);    opacity: 0.8; }
+  70%  { transform: scale(1.45); opacity: 0; }
+  100% { transform: scale(1.45); opacity: 0; }
 }
 
 @keyframes spin {
   to { transform: rotate(360deg); }
 }
 
-@keyframes fade-pulse {
-  0%, 100% { opacity: 1; }
-  50%      { opacity: 0.45; }
+@keyframes dots {
+  0%   { content: ""; }
+  25%  { content: "."; }
+  50%  { content: ".."; }
+  75%  { content: "..."; }
+  100% { content: ""; }
 }
 
 @keyframes shake {
@@ -228,4 +298,14 @@ html, body {
   40% { transform: translateX(3px); }
   60% { transform: translateX(-2px); }
   80% { transform: translateX(2px); }
+}
+
+/* ─── Reduced Motion ────────────────────────────────────────────────────── */
+@media (prefers-reduced-motion: reduce) {
+  .pill { transition: none; }
+  .pill--idle .pill__orb,
+  .pill--recording .pill__orb,
+  .pill--error { animation: none; }
+  .pill--recording .pill__orb::after { animation: none; opacity: 0; }
+  .pill--processing .pill__label::after { animation: none; content: "..."; }
 }

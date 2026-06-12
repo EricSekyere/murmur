@@ -19,6 +19,22 @@ let vizActive = false;
 let animationFrameHandle = null;
 let currentRms = 0;
 let targetRms = 0;
+let lastTranscriptionErrorAt = 0;
+let lastTranscriptionError = '';
+const diagnostics = {
+  liveRms: 0,
+  peakRms: 0,
+  accepted: 0,
+  rejected: 0,
+  reasons: {
+    too_short: 0,
+    too_quiet: 0,
+    hallucination: 0,
+    engine: 0,
+    no_signal: 0,
+    other: 0,
+  },
+};
 
 // ─── DOM Refs ────────────────────────────────────────────────────────────────
 const modelBanner       = document.getElementById('model-banner');
@@ -52,6 +68,8 @@ const settingsPanel     = document.getElementById('settings-panel');
 const modelList         = document.getElementById('model-list');
 const analyticsToggle   = document.getElementById('analytics-toggle');
 const analyticsPanel    = document.getElementById('analytics-panel');
+const diagnosticsToggle = document.getElementById('diagnostics-toggle');
+const diagnosticsPanel  = document.getElementById('diagnostics-panel');
 const devModeBadge      = document.getElementById('dev-mode-badge');
 const developerModeToggle = document.getElementById('developer-mode-toggle');
 
@@ -59,6 +77,7 @@ const developerModeToggle = document.getElementById('developer-mode-toggle');
 const hotkeyInput       = document.getElementById('hotkey-input');
 const hotkeySave        = document.getElementById('hotkey-save');
 const outputModeSelect  = document.getElementById('output-mode-select');
+const transcriptionProfileSelect = document.getElementById('transcription-profile-select');
 const audioDeviceSelect = document.getElementById('audio-device-select');
 const phrasePauseRange  = document.getElementById('phrase-pause-range');
 const phrasePauseValue  = document.getElementById('phrase-pause-value');
@@ -68,6 +87,7 @@ const clickToStopToggle = document.getElementById('click-to-stop-toggle');
 const showWidgetToggle  = document.getElementById('show-widget-toggle');
 const micQuality        = document.getElementById('mic-quality');
 const micQualityText    = document.getElementById('mic-quality-text');
+const diagnosticsReset  = document.getElementById('diagnostics-reset');
 
 // ─── State Machine ───────────────────────────────────────────────────────────
 const STATE_CONFIG = {
@@ -430,6 +450,26 @@ listen('hotkey-error', (event) => {
   applyState('error');
 });
 
+listen('transcription-error', (event) => {
+  const msg = event?.payload?.error || 'Transcription issue';
+  const now = Date.now();
+
+  // Avoid spamming the same warning repeatedly during a session.
+  if (msg === lastTranscriptionError && now - lastTranscriptionErrorAt < 2000) return;
+  lastTranscriptionError = msg;
+  lastTranscriptionErrorAt = now;
+
+  showToast(msg, 'error', 3500);
+
+  // Keep recording UX stable; only show error state when idle.
+  if (uiState !== 'recording' && uiState !== 'processing') {
+    applyState('error');
+    setTimeout(() => {
+      if (uiState === 'error') applyState('idle');
+    }, 1500);
+  }
+});
+
 // ─── Streaming Events ────────────────────────────────────────────────────
 listen('streaming-phrase', (event) => {
   const { text, processing_time_ms } = event.payload;
@@ -506,6 +546,9 @@ settingsToggle.addEventListener('click', async () => {
         // Map stdout → auto for the desktop app dropdown.
         outputModeSelect.value = status.output_mode === 'stdout' ? 'auto' : status.output_mode;
       }
+      if (status.transcription_profile) {
+        transcriptionProfileSelect.value = status.transcription_profile;
+      }
       if (status.phrase_pause_secs != null) {
         phrasePauseRange.value = status.phrase_pause_secs;
         phrasePauseValue.textContent = `${parseFloat(status.phrase_pause_secs).toFixed(1)}s`;
@@ -520,10 +563,8 @@ settingsToggle.addEventListener('click', async () => {
       if (status.show_widget != null) {
         showWidgetToggle.checked = status.show_widget;
       }
-      if (status.developer_mode) {
-        developerModeToggle.checked = true;
-        devModeBadge.hidden = false;
-      }
+      developerModeToggle.checked = !!status.developer_mode;
+      devModeBadge.hidden = !status.developer_mode;
     } catch (err) {
       console.error('Failed to get settings:', err);
     }
@@ -584,6 +625,39 @@ outputModeSelect.addEventListener('change', async () => {
     await invoke('update_settings', { output_mode: mode });
     outputModeDisplay.textContent = mode;
     showToast(`Output: ${mode}`, 'success');
+  } catch (err) {
+    showToast(`Failed: ${err}`, 'error');
+  }
+});
+
+listen('transcription-diagnostic', (event) => {
+  const payload = event?.payload || {};
+  const kind = payload.kind;
+  const reason = payload.reason || '';
+
+  if (kind === 'accepted') {
+    diagnostics.accepted += 1;
+  } else if (kind === 'rejected') {
+    diagnostics.rejected += 1;
+    const bucket = classifyDiagnosticReason(reason);
+    diagnostics.reasons[bucket] += 1;
+  }
+
+  if (typeof payload.rms === 'number') {
+    diagnostics.liveRms = payload.rms;
+    if (payload.rms > diagnostics.peakRms) diagnostics.peakRms = payload.rms;
+  }
+
+  if (!diagnosticsPanel.hidden) {
+    renderDiagnostics();
+  }
+});
+
+transcriptionProfileSelect.addEventListener('change', async () => {
+  const profile = transcriptionProfileSelect.value;
+  try {
+    await invoke('update_settings', { transcription_profile: profile });
+    showToast(`Profile: ${profile}`, 'success');
   } catch (err) {
     showToast(`Failed: ${err}`, 'error');
   }
@@ -682,6 +756,9 @@ listen('audio-level', (event) => {
 
   // Feed the visualization
   targetRms = level;
+  diagnostics.liveRms = level;
+  if (level > diagnostics.peakRms) diagnostics.peakRms = level;
+  if (!diagnosticsPanel.hidden) renderDiagnostics();
 
   micQuality.hidden = false;
   // Thresholds tuned for gained audio levels (mic gain normalization
@@ -706,6 +783,20 @@ analyticsToggle.addEventListener('click', () => {
   if (!expanded) {
     renderAnalytics();
   }
+});
+
+diagnosticsToggle.addEventListener('click', () => {
+  const expanded = diagnosticsToggle.getAttribute('aria-expanded') === 'true';
+  diagnosticsToggle.setAttribute('aria-expanded', String(!expanded));
+  diagnosticsPanel.hidden = expanded;
+  if (!expanded) {
+    renderDiagnostics();
+  }
+});
+
+diagnosticsReset.addEventListener('click', () => {
+  resetDiagnostics();
+  showToast('Diagnostics reset', 'success', 1800);
 });
 
 // ─── Model Selector ─────────────────────────────────────────────────────────
@@ -1067,10 +1158,53 @@ function renderAnalytics() {
   }
 }
 
+function classifyDiagnosticReason(reason) {
+  if (!reason) return 'other';
+  if (reason.startsWith('too_short')) return 'too_short';
+  if (reason === 'too_quiet') return 'too_quiet';
+  if (reason.startsWith('hallucination')) return 'hallucination';
+  if (reason.startsWith('engine')) return 'engine';
+  if (reason === 'no_signal') return 'no_signal';
+  return 'other';
+}
+
+function renderDiagnostics() {
+  const setText = (id, value) => {
+    const el = document.getElementById(id);
+    if (el) el.textContent = value;
+  };
+
+  setText('diag-live-rms', diagnostics.liveRms.toFixed(4));
+  setText('diag-peak-rms', diagnostics.peakRms.toFixed(4));
+  setText('diag-accepted', String(diagnostics.accepted));
+  setText('diag-rejected', String(diagnostics.rejected));
+  setText('diag-reason-too-short', String(diagnostics.reasons.too_short));
+  setText('diag-reason-too-quiet', String(diagnostics.reasons.too_quiet));
+  setText('diag-reason-hallucination', String(diagnostics.reasons.hallucination));
+  setText('diag-reason-engine', String(diagnostics.reasons.engine));
+  setText('diag-reason-no-signal', String(diagnostics.reasons.no_signal));
+  setText('diag-reason-other', String(diagnostics.reasons.other));
+}
+
+function resetDiagnostics() {
+  diagnostics.liveRms = 0;
+  diagnostics.peakRms = 0;
+  diagnostics.accepted = 0;
+  diagnostics.rejected = 0;
+  diagnostics.reasons.too_short = 0;
+  diagnostics.reasons.too_quiet = 0;
+  diagnostics.reasons.hallucination = 0;
+  diagnostics.reasons.engine = 0;
+  diagnostics.reasons.no_signal = 0;
+  diagnostics.reasons.other = 0;
+  renderDiagnostics();
+}
+
 // ─── Initialize ──────────────────────────────────────────────────────────────
 async function init() {
   createVoiceBars();
   renderAnalytics();
+  renderDiagnostics();
   try {
     const status = await invoke('get_status');
     updateModelBanner(status);
@@ -1080,10 +1214,11 @@ async function init() {
     if (status.output_mode) {
       outputModeDisplay.textContent = status.output_mode === 'stdout' ? 'auto' : status.output_mode;
     }
-    if (status.developer_mode) {
-      developerModeToggle.checked = true;
-      devModeBadge.hidden = false;
+    if (status.transcription_profile) {
+      transcriptionProfileSelect.value = status.transcription_profile;
     }
+    developerModeToggle.checked = !!status.developer_mode;
+    devModeBadge.hidden = !status.developer_mode;
   } catch (err) {
     console.error('Failed to get status:', err);
     updateModelBanner({ model_ready: false, model: 'small.en', recording: false, mode: 'idle' });

@@ -218,6 +218,20 @@
             </div>
           </div>
 
+          <!-- Transcription Profile -->
+          <div class="settings-group">
+            <div class="settings-row">
+              <div class="settings-row__text">
+                <label class="settings-label">Transcription Profile</label>
+                <span class="settings-hint">Relaxed catches quieter speech. Strict filters more aggressively.</span>
+              </div>
+              <select id="transcription-profile-select" class="settings-select">
+                <option value="relaxed">Relaxed (recommended)</option>
+                <option value="strict">Strict</option>
+              </select>
+            </div>
+          </div>
+
           <!-- Audio Device -->
           <div class="settings-group">
             <div class="settings-row">
@@ -304,6 +318,76 @@
                 <input type="checkbox" id="developer-mode-toggle">
                 <span class="toggle-switch__slider"></span>
               </label>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Diagnostics -->
+      <section id="diagnostics-section" class="collapsible">
+        <button class="collapsible__trigger" id="diagnostics-toggle" aria-expanded="false">
+          <span class="collapsible__title">Diagnostics</span>
+          <svg class="collapsible__chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <polyline points="6 9 12 15 18 9"/>
+          </svg>
+        </button>
+        <div id="diagnostics-panel" class="analytics-panel" hidden>
+          <div class="analytics-group">
+            <h3 class="analytics-group__title">Signal</h3>
+            <div class="analytics-grid">
+              <div class="stat-card">
+                <span class="stat-card__value" id="diag-live-rms">0.0000</span>
+                <span class="stat-card__label">Live RMS</span>
+              </div>
+              <div class="stat-card">
+                <span class="stat-card__value" id="diag-peak-rms">0.0000</span>
+                <span class="stat-card__label">Peak RMS</span>
+              </div>
+            </div>
+          </div>
+          <div class="analytics-group">
+            <h3 class="analytics-group__title">Transcription</h3>
+            <div class="analytics-grid">
+              <div class="stat-card">
+                <span class="stat-card__value" id="diag-accepted">0</span>
+                <span class="stat-card__label">Accepted</span>
+              </div>
+              <div class="stat-card">
+                <span class="stat-card__value" id="diag-rejected">0</span>
+                <span class="stat-card__label">Rejected</span>
+              </div>
+            </div>
+          </div>
+          <div class="analytics-group">
+            <h3 class="analytics-group__title">Rejection Reasons</h3>
+            <div class="analytics-grid">
+              <div class="stat-card">
+                <span class="stat-card__value" id="diag-reason-too-short">0</span>
+                <span class="stat-card__label">Too Short</span>
+              </div>
+              <div class="stat-card">
+                <span class="stat-card__value" id="diag-reason-too-quiet">0</span>
+                <span class="stat-card__label">Too Quiet</span>
+              </div>
+              <div class="stat-card">
+                <span class="stat-card__value" id="diag-reason-hallucination">0</span>
+                <span class="stat-card__label">Hallucination</span>
+              </div>
+              <div class="stat-card">
+                <span class="stat-card__value" id="diag-reason-engine">0</span>
+                <span class="stat-card__label">Engine</span>
+              </div>
+              <div class="stat-card">
+                <span class="stat-card__value" id="diag-reason-no-signal">0</span>
+                <span class="stat-card__label">No Signal</span>
+              </div>
+              <div class="stat-card">
+                <span class="stat-card__value" id="diag-reason-other">0</span>
+                <span class="stat-card__label">Other</span>
+              </div>
+            </div>
+            <div class="diagnostics-actions">
+              <button id="diagnostics-reset" class="btn-small">Reset Counters</button>
             </div>
           </div>
         </div>
