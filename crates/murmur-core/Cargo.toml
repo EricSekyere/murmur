@@ -14,8 +14,12 @@ full = ["audio", "stt", "vad", "keyboard", "parakeet"]
 audio = ["dep:cpal"]
 # Speech-to-text via whisper.cpp (requires cmake + libclang)
 stt = ["dep:whisper-rs"]
-# Voice activity detection via ONNX Runtime
-vad = ["dep:ort", "dep:zip", "dep:flate2", "dep:tar"]
+# CUDA GPU acceleration for whisper.cpp (requires CUDA toolkit + nvcc at
+# build time, NVIDIA driver + CUDA runtime DLLs at run time)
+cuda = ["stt", "whisper-rs/cuda"]
+# Voice activity detection via ONNX Runtime. Requires `audio` for the
+# in-tree resampler used to feed Silero v5 at its required 16 kHz.
+vad = ["audio", "dep:ort", "dep:zip", "dep:flate2", "dep:tar"]
 # Parakeet STT backend via ONNX Runtime (also needs ort directly for init_from)
 parakeet = ["dep:parakeet-rs", "dep:ort", "dep:zip", "dep:flate2", "dep:tar"]
 # Keystroke simulation
