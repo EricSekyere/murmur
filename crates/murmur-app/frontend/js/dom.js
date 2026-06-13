@@ -57,3 +57,4 @@ const doubleTapKeySelect = document.getElementById('double-tap-key-select');
 const vocabularyInput    = document.getElementById('vocabulary-input');
 const vocabularySave     = document.getElementById('vocabulary-save');
 const soundFeedbackToggle = document.getElementById('sound-feedback-toggle');
+const macosPermissions   = document.getElementById('macos-permissions');

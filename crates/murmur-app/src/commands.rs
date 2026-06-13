@@ -45,6 +45,7 @@ pub(crate) fn get_status(state: State<'_, AppState>) -> serde_json::Value {
         "double_tap_key": settings.double_tap_key,
         "custom_vocabulary": settings.custom_vocabulary,
         "sound_feedback": settings.sound_feedback,
+        "os": std::env::consts::OS,
     })
 }
 
@@ -375,4 +376,33 @@ pub(crate) fn set_widget_visible(
     settings.show_widget = visible;
     save_settings(&settings);
     Ok(())
+}
+
+/// Open the relevant macOS System Settings privacy pane so the user can grant
+/// a permission. No-op on other platforms.
+#[tauri::command]
+pub(crate) fn open_privacy_settings(pane: String) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        let anchor = match pane.as_str() {
+            "microphone" => "Privacy_Microphone",
+            "accessibility" => "Privacy_Accessibility",
+            "input-monitoring" => "Privacy_ListenEvent",
+            other => return Err(format!("Unknown privacy pane: {}", other)),
+        };
+        let url = format!(
+            "x-apple.systempreferences:com.apple.preference.security?{}",
+            anchor
+        );
+        std::process::Command::new("open")
+            .arg(url)
+            .spawn()
+            .map_err(|e| format!("Failed to open System Settings: {}", e))?;
+        Ok(())
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = pane;
+        Ok(())
+    }
 }

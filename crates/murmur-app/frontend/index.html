@@ -252,6 +252,33 @@
               </svg>
             </button>
             <div id="settings-panel" class="settings-panel" hidden>
+              <!-- macOS Permissions (shown only on macOS) -->
+              <div class="settings-group settings-group--permissions" id="macos-permissions" hidden>
+                <label class="settings-label">macOS Permissions</label>
+                <span class="settings-hint">Murmur needs these granted in System Settings. Click to open the right pane, add Murmur, and toggle it on.</span>
+                <div class="perm-row">
+                  <div class="perm-row__text">
+                    <strong>Microphone</strong>
+                    <span>To hear and transcribe your speech.</span>
+                  </div>
+                  <button class="btn-small" data-perm="microphone">Open</button>
+                </div>
+                <div class="perm-row">
+                  <div class="perm-row__text">
+                    <strong>Accessibility</strong>
+                    <span>To type transcribed text into other apps.</span>
+                  </div>
+                  <button class="btn-small" data-perm="accessibility">Open</button>
+                </div>
+                <div class="perm-row">
+                  <div class="perm-row__text">
+                    <strong>Input Monitoring</strong>
+                    <span>For the double-tap and global hotkey.</span>
+                  </div>
+                  <button class="btn-small" data-perm="input-monitoring">Open</button>
+                </div>
+              </div>
+
               <!-- Hotkey -->
               <div class="settings-group">
                 <div class="settings-row">

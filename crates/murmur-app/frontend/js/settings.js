@@ -49,6 +49,7 @@ settingsToggle.addEventListener('click', async () => {
     if (status.sound_feedback != null) {
       soundFeedbackToggle.checked = status.sound_feedback;
     }
+    macosPermissions.hidden = status.os !== 'macos';
     developerModeToggle.checked = !!status.developer_mode;
     devModeBadge.hidden = !status.developer_mode;
   } catch (err) {
@@ -218,6 +219,17 @@ doubleTapKeySelect.addEventListener('change', async () => {
     showToast(`Failed: ${err}`, 'error');
   }
 });
+
+// macOS permission deep-links open the matching System Settings pane.
+for (const btn of macosPermissions.querySelectorAll('[data-perm]')) {
+  btn.addEventListener('click', async () => {
+    try {
+      await invoke('open_privacy_settings', { pane: btn.dataset.perm });
+    } catch (err) {
+      showToast(`Could not open Settings: ${err}`, 'error');
+    }
+  });
+}
 
 soundFeedbackToggle.addEventListener('change', async () => {
   const enabled = soundFeedbackToggle.checked;

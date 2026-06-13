@@ -608,6 +608,45 @@
   margin-top: 8px;
 }
 
+/* macOS permission rows */
+.settings-group--permissions {
+  border: 1px solid var(--color-accent-glow);
+  background: var(--color-accent-dim);
+  border-radius: var(--radius-md);
+  padding: 12px;
+}
+
+.perm-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 0;
+  border-top: 1px solid var(--color-border);
+}
+
+.perm-row:first-of-type {
+  margin-top: 4px;
+}
+
+.perm-row__text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.perm-row__text strong {
+  font-size: 0.82rem;
+  color: var(--color-text);
+  font-weight: 600;
+}
+
+.perm-row__text span {
+  font-size: 0.72rem;
+  color: var(--color-text-muted);
+}
+
 .btn-small {
   background: var(--color-surface-raised);
   border: 1px solid var(--color-border);
