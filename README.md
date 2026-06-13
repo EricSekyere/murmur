@@ -31,13 +31,27 @@ Each phrase is transcribed when you pause and typed into the active window; stop
 
 ## Building from source
 
+### Windows
+
 Prerequisites: Rust 1.93+, CMake, LLVM/libclang, `cargo install tauri-cli --version '^2'`. Optional: CUDA Toolkit 12.x (auto-detected, enables GPU Whisper), NSIS (installer bundling).
 
 ```sh
 ./build.sh
 ```
 
-`build.sh` handles the non-obvious parts — forcing optimized MSVC flags for whisper.cpp and wiring up CUDA — see its comments for details.
+`build.sh` handles the non-obvious parts. It forces optimized MSVC flags for whisper.cpp and wires up CUDA. See its comments for details.
+
+### macOS
+
+Run this on a Mac (the app cannot cross-compile from another OS). Prerequisites: Xcode command line tools (`xcode-select --install`), CMake (`brew install cmake`), Rust (rustup.rs), and `cargo install tauri-cli --version '^2'`.
+
+```sh
+./build-macos.sh
+```
+
+This builds an unsigned `Murmur.app` and `.dmg` for the host architecture. Whisper runs on Metal and Accelerate; the Parakeet backend is Windows-only and is excluded. On first launch, right-click the app and choose Open to get past Gatekeeper, then grant Microphone, Accessibility, and Input Monitoring under System Settings, Privacy and Security.
+
+### Common
 
 ```sh
 cargo check --workspace                   # default features
