@@ -1,0 +1,81 @@
+name: Release macOS
+
+# Signed + notarized macOS release. Dormant until activated: the job is
+# gated on the repository variable MACOS_RELEASE_ENABLED, so this file does
+# nothing (and never fails a release) until you set that variable and add
+# the Apple secrets below.
+#
+# ── Activate when you have an Apple Developer account ($99/yr) ──
+#
+# 1. Create a "Developer ID Application" certificate in your Apple Developer
+#    account, export it as a .p12 (with a password), then base64-encode it:
+#       base64 -i cert.p12 | pbcopy
+#
+# 2. Add these repository secrets (Settings > Secrets and variables > Actions):
+#       APPLE_CERTIFICATE            base64 of the .p12
+#       APPLE_CERTIFICATE_PASSWORD   the .p12 password
+#       APPLE_SIGNING_IDENTITY       e.g. "Developer ID Application: Your Name (TEAMID)"
+#       APPLE_ID                     your Apple ID email
+#       APPLE_PASSWORD               an app-specific password (appleid.apple.com)
+#       APPLE_TEAM_ID                your 10-character Team ID
+#    TAURI_SIGNING_PRIVATE_KEY already exists from the Windows release and
+#    signs the macOS updater artifact too.
+#
+# 3. Add the repository variable (same page, Variables tab):
+#       MACOS_RELEASE_ENABLED = true
+#
+# After that, pushing a v* tag builds, signs, notarizes, and attaches the
+# macOS .dmg + updater artifact to the same GitHub Release as Windows.
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release-macos:
+    if: ${{ vars.MACOS_RELEASE_ENABLED == 'true' }}
+    runs-on: macos-14 # Apple Silicon
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+
+      - name: Install CMake
+        run: brew list cmake >/dev/null 2>&1 || brew install cmake
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target"
+
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Updater artifact signing (same key as Windows).
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          # Code signing (Developer ID Application).
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          # Notarization (Apple ID + app-specific password).
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        with:
+          projectPath: crates/murmur-app
+          tagName: ${{ github.ref_name }}
+          releaseName: "Murmur ${{ github.ref_name }}"
+          # Attach to the existing release created by the Windows job.
+          releaseDraft: false
+          prerelease: false
+          # arm64 (Apple Silicon). To also cover Intel Macs, switch the
+          # target to universal-apple-darwin and add x86_64-apple-darwin to
+          # the toolchain targets above (builds whisper.cpp for both arches).
+          args: --target aarch64-apple-darwin --bundles app,dmg -- --no-default-features --features macos
