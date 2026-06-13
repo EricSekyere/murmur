@@ -1,0 +1,6 @@
+# Shell scripts must keep LF line endings so they run on macOS and Linux
+# regardless of the committer's platform (CRLF breaks the shebang).
+*.sh text eol=lf
+
+# Let Git handle normal text normalization elsewhere.
+* text=auto
