@@ -56,9 +56,17 @@ impl ClipboardPasteOutput {
         // Wait for the paste to be processed by the target application.
         std::thread::sleep(std::time::Duration::from_millis(100));
 
-        // Restore original clipboard content.
-        if let Some(prev) = previous {
-            let _ = clipboard.set_text(&prev);
+        // Restore the original clipboard content. If there was nothing
+        // restorable (the clipboard was empty or held non-text content like
+        // an image), clear it instead of leaving our dictated text behind —
+        // otherwise the transcription silently lands on the user's clipboard.
+        match previous {
+            Some(prev) => {
+                let _ = clipboard.set_text(&prev);
+            }
+            None => {
+                let _ = clipboard.clear();
+            }
         }
 
         paste_result

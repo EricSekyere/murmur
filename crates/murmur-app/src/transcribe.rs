@@ -378,6 +378,13 @@ fn hallucination_reason(text: &str, profile: TranscriptionProfile) -> Option<&'s
         return Some("hallucination_repeated_word");
     }
 
+    // Repeated short phrases like "all right, all right, all right, all right"
+    // are a classic whisper hallucination on silence/noise that the
+    // single-word check above misses.
+    if is_repetitive(&words) {
+        return Some("hallucination_repetitive");
+    }
+
     if stripped.len() == 1
         && stripped
             .chars()
@@ -387,6 +394,45 @@ fn hallucination_reason(text: &str, profile: TranscriptionProfile) -> Option<&'s
         return Some("hallucination_single_char");
     }
     None
+}
+
+/// Detect text that is a short phrase repeated over and over, a classic
+/// whisper hallucination on silence. Trips on either an exact 1-4 word
+/// phrase repeated 3+ times, or six-plus words with very low lexical
+/// diversity (each distinct word appearing 3+ times on average), which
+/// catches near-repetitions. Words are compared with surrounding
+/// punctuation stripped so commas in "all right, all right" don't hide it.
+fn is_repetitive(words: &[&str]) -> bool {
+    let clean: Vec<&str> = words
+        .iter()
+        .map(|w| w.trim_matches(|c: char| c.is_ascii_punctuation()))
+        .filter(|w| !w.is_empty())
+        .collect();
+    let n = clean.len();
+    if n < 4 {
+        return false;
+    }
+
+    // Exact short-phrase repetition.
+    for plen in 1..=(n / 2).min(4) {
+        if !n.is_multiple_of(plen) || n / plen < 3 {
+            continue;
+        }
+        if clean.chunks(plen).all(|chunk| chunk == &clean[..plen]) {
+            return true;
+        }
+    }
+
+    // Low lexical diversity over a longer span.
+    if n >= 6 {
+        let mut distinct = clean.clone();
+        distinct.sort_unstable();
+        distinct.dedup();
+        if distinct.len() * 3 <= n {
+            return true;
+        }
+    }
+    false
 }
 
 /// Reject a result and drop the running decoder context: a bad phrase fed
@@ -513,6 +559,37 @@ mod tests {
     fn repeated_words_rejected() {
         assert!(hallucination_reason("the the the", TranscriptionProfile::Relaxed).is_some());
         assert!(hallucination_reason("the dog barked", TranscriptionProfile::Relaxed).is_none());
+    }
+
+    #[test]
+    fn repeated_phrases_rejected() {
+        // The idle-recording hallucination the single-word check misses.
+        for text in [
+            "all right, all right, all right, all right",
+            "All right. All right. All right.",
+            "you know, you know, you know",
+            "I think I think I think",
+        ] {
+            assert!(
+                hallucination_reason(text, TranscriptionProfile::Relaxed).is_some(),
+                "should reject: {text:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn real_sentences_with_some_repetition_kept() {
+        for text in [
+            "the cat sat on the mat",
+            "no, I really can't do that today",
+            "let me check the logs and get back to you",
+            "very very good work on this",
+        ] {
+            assert!(
+                hallucination_reason(text, TranscriptionProfile::Relaxed).is_none(),
+                "should keep: {text:?}"
+            );
+        }
     }
 
     #[test]
