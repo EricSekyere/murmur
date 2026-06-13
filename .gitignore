@@ -32,3 +32,9 @@ desktop.ini
 
 # Tauri
 /crates/murmur-app/gen/
+
+# Tauri updater private signing key — NEVER commit
+crates/murmur-app/.tauri-signing-key.key
+
+UPDATER_SETUP.local.md
+crates/murmur-app/.tauri-signing-key.key.pub

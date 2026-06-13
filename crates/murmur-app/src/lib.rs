@@ -10,6 +10,7 @@ mod model_setup;
 mod session;
 mod state;
 mod transcribe;
+mod updater;
 
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -42,6 +43,8 @@ pub fn run() -> anyhow::Result<()> {
     let engine_for_setup = Arc::clone(&engine);
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(move |app, _shortcut, event| {
@@ -57,6 +60,7 @@ pub fn run() -> anyhow::Result<()> {
             settings: Mutex::new(settings),
             last_toggle: Mutex::new(Instant::now() - Duration::from_secs(10)),
             session_prev_text: Mutex::new(String::new()),
+            last_delivered_len: Mutex::new(0),
             #[cfg(windows)]
             previous_foreground: Mutex::new(0),
             #[cfg(windows)]
@@ -83,6 +87,7 @@ pub fn run() -> anyhow::Result<()> {
             commands::update_settings,
             commands::list_audio_devices,
             commands::set_widget_visible,
+            updater::install_update,
         ])
         .setup(move |app| setup_app(app, engine_for_setup, model, &hotkey, show_widget_on_start))
         .run(tauri::generate_context!())
@@ -156,6 +161,7 @@ fn setup_app(
 
     model_setup::spawn_download_and_init(app.handle().clone(), engine, model);
     input::spawn_global_input_listener(app.handle().clone());
+    updater::spawn_startup_check(app.handle().clone());
 
     tracing::info!("Murmur app started");
     Ok(())

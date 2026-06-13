@@ -17,6 +17,9 @@
     "global-shortcut:allow-unregister",
     "global-shortcut:allow-unregister-all",
     "core:window:allow-start-dragging",
-    "app:default"
+    "app:default",
+    "updater:default",
+    "process:default",
+    "process:allow-restart"
   ]
 }

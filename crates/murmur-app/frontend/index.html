@@ -31,6 +31,13 @@
       <button class="banner__dismiss" id="dismiss-error" aria-label="Dismiss error">&#215;</button>
     </div>
 
+    <!-- Update Banner: shown when a new version is available -->
+    <div id="update-banner" class="banner banner--update" hidden>
+      <span class="banner__text" id="update-message">A new version is available.</span>
+      <button class="btn-small" id="update-install">Update &amp; Restart</button>
+      <button class="banner__dismiss" id="update-dismiss" aria-label="Dismiss">&#215;</button>
+    </div>
+
     <!-- Dashboard Shell -->
     <div class="shell">
 
@@ -275,6 +282,35 @@
                 </div>
               </div>
 
+              <!-- Activation Mode -->
+              <div class="settings-group">
+                <div class="settings-row">
+                  <div class="settings-row__text">
+                    <label class="settings-label">Activation</label>
+                    <span class="settings-hint">Toggle: tap key twice to start/stop. Hold: push-to-talk while held.</span>
+                  </div>
+                  <select id="activation-mode-select" class="settings-select">
+                    <option value="toggle">Toggle (double-tap)</option>
+                    <option value="hold">Hold (push-to-talk)</option>
+                  </select>
+                </div>
+              </div>
+
+              <!-- Activation Key -->
+              <div class="settings-group">
+                <div class="settings-row">
+                  <div class="settings-row__text">
+                    <label class="settings-label">Activation Key</label>
+                    <span class="settings-hint">Key for double-tap / push-to-talk.</span>
+                  </div>
+                  <select id="double-tap-key-select" class="settings-select">
+                    <option value="rctrl">Right Ctrl</option>
+                    <option value="lctrl">Left Ctrl</option>
+                    <option value="ctrl">Either Ctrl</option>
+                  </select>
+                </div>
+              </div>
+
               <!-- Transcription Profile -->
               <div class="settings-group">
                 <div class="settings-row">
@@ -355,6 +391,18 @@
                     <input type="checkbox" id="show-widget-toggle" checked>
                     <span class="toggle-switch__slider"></span>
                   </label>
+                </div>
+              </div>
+
+              <!-- Personal Dictionary -->
+              <div class="settings-group">
+                <div class="settings-row__text">
+                  <label class="settings-label" for="vocabulary-input">Personal Dictionary</label>
+                  <span class="settings-hint">Names, jargon, or terms the model gets wrong. One per line — they bias transcription toward correct spelling.</span>
+                </div>
+                <textarea id="vocabulary-input" class="settings-textarea" rows="4" placeholder="GitHub&#10;Kubernetes&#10;Eric Sekyere"></textarea>
+                <div class="settings-actions">
+                  <button id="vocabulary-save" class="btn-small" disabled>Save Dictionary</button>
                 </div>
               </div>
 
@@ -460,6 +508,67 @@
     <!-- Toast notifications -->
     <div id="toast-container" class="toast-container" aria-live="polite"></div>
 
+    <!-- First-run onboarding overlay -->
+    <div id="onboarding" class="onboarding" hidden>
+      <div class="onboarding__card">
+        <div class="onboarding__steps">
+          <span class="onboarding__dot onboarding__dot--active" data-step="0"></span>
+          <span class="onboarding__dot" data-step="1"></span>
+          <span class="onboarding__dot" data-step="2"></span>
+        </div>
+
+        <!-- Step 1: Welcome -->
+        <div class="onboarding__panel onboarding__panel--active" data-step="0">
+          <h2 class="onboarding__title">Welcome to Murmur</h2>
+          <p class="onboarding__text">Private, on-device dictation. Speak and your words appear in whatever app you're using — nothing leaves your machine.</p>
+          <ul class="onboarding__list">
+            <li><kbd>Double-tap Right Ctrl</kbd> to start and stop</li>
+            <li>Or press your hotkey <kbd id="onboarding-hotkey">ctrl+q</kbd></li>
+            <li>Say <em>"new line"</em>, <em>"new paragraph"</em>, or <em>"scratch that"</em> while dictating</li>
+          </ul>
+          <div class="onboarding__actions">
+            <button class="btn-small onboarding__skip" id="onboarding-skip">Skip</button>
+            <button class="model-card__btn onboarding__next" data-next="1">Next</button>
+          </div>
+        </div>
+
+        <!-- Step 2: Mic test -->
+        <div class="onboarding__panel" data-step="1">
+          <h2 class="onboarding__title">Test your microphone</h2>
+          <p class="onboarding__text">Click the mic, say a sentence, then pause. Your words should appear below.</p>
+          <div class="onboarding__mic-row">
+            <button id="onboarding-mic" class="mic-btn mic-btn--idle onboarding__mic" aria-label="Test microphone">
+              <svg class="mic-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
+                <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+                <line x1="12" y1="19" x2="12" y2="23"/>
+                <line x1="8" y1="23" x2="16" y2="23"/>
+              </svg>
+            </button>
+            <div id="onboarding-result" class="onboarding__result">Waiting for the model to finish loading…</div>
+          </div>
+          <div class="onboarding__actions">
+            <button class="btn-small onboarding__skip" data-next="2">Back</button>
+            <button class="model-card__btn onboarding__next" data-next="2">Next</button>
+          </div>
+        </div>
+
+        <!-- Step 3: Tips -->
+        <div class="onboarding__panel" data-step="2">
+          <h2 class="onboarding__title">You're set</h2>
+          <ul class="onboarding__list">
+            <li>Add names and jargon under <strong>Settings → Personal Dictionary</strong></li>
+            <li>Switch toggle vs push-to-talk under <strong>Settings → Activation</strong></li>
+            <li>Pick a larger model for accuracy or a smaller one for speed</li>
+            <li>The floating pill stays on top so you can dictate from anywhere</li>
+          </ul>
+          <div class="onboarding__actions">
+            <button class="model-card__btn onboarding__next" id="onboarding-done">Start dictating</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
   </div>
   <script src="js/dom.js"></script>
   <script src="js/ui.js"></script>
@@ -467,7 +576,9 @@
   <script src="js/transcription.js"></script>
   <script src="js/settings.js"></script>
   <script src="js/analytics.js"></script>
+  <script src="js/updater.js"></script>
   <script src="js/main.js"></script>
   <script src="js/dashboard.js"></script>
+  <script src="js/onboarding.js"></script>
 </body>
 </html>
