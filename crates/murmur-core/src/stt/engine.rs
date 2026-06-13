@@ -1,4 +1,4 @@
-#[cfg(any(feature = "stt", feature = "parakeet"))]
+﻿#[cfg(any(feature = "stt", feature = "parakeet"))]
 use anyhow::Context;
 use anyhow::Result;
 #[cfg(any(feature = "stt", feature = "parakeet"))]
@@ -50,6 +50,9 @@ pub struct SttEngine {
     /// preserve punctuation/capitalization continuity across phrases.
     /// Should be the trailing ~200 chars of the prior session transcript.
     initial_prompt: Option<String>,
+    /// Comma-separated user glossary (names, jargon) included in the prompt
+    /// so whisper spells them correctly.
+    vocabulary: Option<String>,
 }
 
 /// Samples in 1ms at 16kHz. Used for leading-silence padding.
@@ -122,6 +125,7 @@ impl SttEngine {
                 model_path: model_path.to_string(),
                 model: None,
                 initial_prompt: None,
+                vocabulary: None,
             })
         }
 
@@ -134,6 +138,7 @@ impl SttEngine {
                 model_path: model_path.to_string(),
                 model: None,
                 initial_prompt: None,
+                vocabulary: None,
             })
         }
     }
@@ -186,6 +191,7 @@ impl SttEngine {
                 model_path: model_dir.to_string(),
                 model: None,
                 initial_prompt: None,
+                vocabulary: None,
             })
         }
 
@@ -198,6 +204,7 @@ impl SttEngine {
                 model_path: model_dir.to_string(),
                 model: None,
                 initial_prompt: None,
+                vocabulary: None,
             })
         }
     }
@@ -218,6 +225,22 @@ impl SttEngine {
     /// to clear (e.g., on a fresh session).
     pub fn set_initial_prompt(&mut self, prompt: Option<String>) {
         self.initial_prompt = prompt;
+    }
+
+    /// Set the user glossary. Words are joined into a comma-separated clause
+    /// that biases whisper's decoder toward their spelling. Pass an empty
+    /// slice to clear.
+    pub fn set_vocabulary(&mut self, words: &[String]) {
+        let cleaned: Vec<&str> = words
+            .iter()
+            .map(|w| w.trim())
+            .filter(|w| !w.is_empty())
+            .collect();
+        self.vocabulary = if cleaned.is_empty() {
+            None
+        } else {
+            Some(cleaned.join(", "))
+        };
     }
 
     /// Transcribe raw PCM audio samples (16kHz mono f32) to text.
@@ -269,6 +292,7 @@ impl SttEngine {
                 start,
                 self.model,
                 self.initial_prompt.as_deref(),
+                self.vocabulary.as_deref(),
             ),
             #[cfg(feature = "parakeet")]
             EngineInner::Parakeet { engine } => Self::transcribe_parakeet(engine, input, start),
@@ -296,6 +320,7 @@ impl SttEngine {
     }
 
     #[cfg(feature = "stt")]
+    #[allow(clippy::too_many_arguments)]
     fn transcribe_whisper(
         ctx: &WhisperContext,
         n_threads: i32,
@@ -303,6 +328,7 @@ impl SttEngine {
         start: Instant,
         model: Option<SttModel>,
         initial_prompt: Option<&str>,
+        vocabulary: Option<&str>,
     ) -> Result<TranscriptionResult> {
         let mut state = ctx
             .create_state()
@@ -348,10 +374,17 @@ impl SttEngine {
         // has provided session context (the trailing portion of the prior
         // transcript), append it so cross-phrase punctuation/capitalization
         // stays consistent — this is whisper.cpp's intended streaming pattern.
-        let style_hint = "Use proper punctuation and capitalization.";
-        let prompt_owned: String;
-        let prompt: &str = if let Some(prev) = initial_prompt.filter(|s| !s.trim().is_empty()) {
-            // Cap at ~200 chars to keep prompt token budget under control.
+        // Base style hint, optionally extended with a user glossary so names
+        // and jargon spell correctly. Both are prepended to the rolling
+        // session context (whisper.cpp's streaming pattern).
+        let mut prompt = String::from("Use proper punctuation and capitalization.");
+        if let Some(glossary) = vocabulary.filter(|g| !g.trim().is_empty()) {
+            prompt.push_str(" Vocabulary: ");
+            prompt.push_str(glossary.trim());
+            prompt.push('.');
+        }
+        if let Some(prev) = initial_prompt.filter(|s| !s.trim().is_empty()) {
+            // Cap at ~200 chars to keep the prompt token budget bounded.
             let trimmed = prev.trim();
             let start_byte = trimmed
                 .char_indices()
@@ -359,12 +392,10 @@ impl SttEngine {
                 .nth(200)
                 .map(|(i, _)| i)
                 .unwrap_or(0);
-            prompt_owned = format!("{} {}", style_hint, &trimmed[start_byte..]);
-            &prompt_owned
-        } else {
-            style_hint
-        };
-        params.set_initial_prompt(prompt);
+            prompt.push(' ');
+            prompt.push_str(&trimmed[start_byte..]);
+        }
+        params.set_initial_prompt(&prompt);
         params.set_temperature(0.0);
         if is_large {
             // Larger models (medium, large-v3-turbo) hit more edge cases where

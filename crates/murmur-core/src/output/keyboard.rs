@@ -56,6 +56,111 @@ impl KeyboardOutput {
     }
 }
 
+/// Press Enter `count` times in the focused window (for "new line" /
+/// "new paragraph" voice commands).
+pub fn press_enter(count: usize) -> Result<()> {
+    if count == 0 {
+        return Ok(());
+    }
+    #[cfg(windows)]
+    {
+        const VK_RETURN: u16 = 0x0D;
+        send_vk_taps(VK_RETURN, count)
+    }
+    #[cfg(not(windows))]
+    {
+        send_enigo_key(enigo::Key::Return, count)
+    }
+}
+
+/// Press Backspace `count` times in the focused window (for "scratch that").
+pub fn press_backspace(count: usize) -> Result<()> {
+    if count == 0 {
+        return Ok(());
+    }
+    #[cfg(windows)]
+    {
+        const VK_BACK: u16 = 0x08;
+        send_vk_taps(VK_BACK, count)
+    }
+    #[cfg(not(windows))]
+    {
+        send_enigo_key(enigo::Key::Backspace, count)
+    }
+}
+
+#[cfg(not(windows))]
+fn send_enigo_key(key: enigo::Key, count: usize) -> Result<()> {
+    use enigo::{Enigo, Keyboard, Settings};
+    let mut enigo = Enigo::new(&Settings::default())?;
+    for _ in 0..count {
+        enigo.key(key, enigo::Direction::Click)?;
+    }
+    Ok(())
+}
+
+/// Send `count` down+up pairs of a single virtual-key via SendInput.
+#[cfg(windows)]
+fn send_vk_taps(vk: u16, count: usize) -> Result<()> {
+    use std::mem;
+
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    struct KeybdInput {
+        w_vk: u16,
+        w_scan: u16,
+        dw_flags: u32,
+        time: u32,
+        dw_extra_info: usize,
+    }
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    struct Input {
+        input_type: u32,
+        _padding: u32,
+        ki: KeybdInput,
+        _extra: u32,
+    }
+
+    const INPUT_KEYBOARD: u32 = 1;
+    const KEYEVENTF_KEYUP: u32 = 0x0002;
+
+    unsafe extern "system" {
+        fn SendInput(c_inputs: u32, p_inputs: *const Input, cb_size: i32) -> u32;
+    }
+
+    let event = |flags: u32| Input {
+        input_type: INPUT_KEYBOARD,
+        _padding: 0,
+        ki: KeybdInput {
+            w_vk: vk,
+            w_scan: 0,
+            dw_flags: flags,
+            time: 0,
+            dw_extra_info: 0,
+        },
+        _extra: 0,
+    };
+
+    let mut inputs = Vec::with_capacity(count * 2);
+    for _ in 0..count {
+        inputs.push(event(0));
+        inputs.push(event(KEYEVENTF_KEYUP));
+    }
+
+    let sent = unsafe {
+        SendInput(
+            inputs.len() as u32,
+            inputs.as_ptr(),
+            mem::size_of::<Input>() as i32,
+        )
+    };
+    if sent == 0 {
+        anyhow::bail!("SendInput failed for key taps (target may be elevated)");
+    }
+    Ok(())
+}
+
 /// Log the foreground window title and class for diagnostics.
 /// Public wrapper for use by other output modules.
 #[cfg(windows)]

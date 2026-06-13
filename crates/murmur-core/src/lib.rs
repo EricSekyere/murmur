@@ -4,3 +4,4 @@ pub mod dictation;
 pub mod hotkey;
 pub mod output;
 pub mod stt;
+pub mod voice_commands;

@@ -85,6 +85,17 @@ pub struct Settings {
     /// virtually never part of shortcuts.
     #[serde(default = "default_double_tap_key")]
     pub double_tap_key: String,
+
+    /// How the double-tap/hold key activates recording:
+    /// "toggle" (tap twice to start, twice to stop) or
+    /// "hold" (push-to-talk: record while the key is held).
+    #[serde(default = "default_activation_mode")]
+    pub activation_mode: String,
+
+    /// Words whisper tends to get wrong (names, jargon). Injected into the
+    /// decoder prompt as a glossary so they transcribe correctly.
+    #[serde(default)]
+    pub custom_vocabulary: Vec<String>,
 }
 
 fn default_hotkey() -> String {
@@ -128,6 +139,10 @@ fn default_true() -> bool {
     true
 }
 
+fn default_activation_mode() -> String {
+    "toggle".to_string()
+}
+
 fn default_pre_output_delay_ms() -> u64 {
     80
 }
@@ -161,6 +176,8 @@ impl Default for Settings {
             show_widget: true,
             pre_output_delay_ms: default_pre_output_delay_ms(),
             double_tap_key: default_double_tap_key(),
+            activation_mode: default_activation_mode(),
+            custom_vocabulary: Vec::new(),
         }
     }
 }
