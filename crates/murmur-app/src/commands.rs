@@ -44,6 +44,7 @@ pub(crate) fn get_status(state: State<'_, AppState>) -> serde_json::Value {
         "activation_mode": settings.activation_mode,
         "double_tap_key": settings.double_tap_key,
         "custom_vocabulary": settings.custom_vocabulary,
+        "sound_feedback": settings.sound_feedback,
     })
 }
 
@@ -197,6 +198,7 @@ pub(crate) fn update_settings(
     activation_mode: Option<String>,
     double_tap_key: Option<String>,
     custom_vocabulary: Option<Vec<String>>,
+    sound_feedback: Option<bool>,
 ) -> Result<(), String> {
     let mut settings = state.settings.lock().unwrap_or_else(|e| e.into_inner());
 
@@ -252,6 +254,9 @@ pub(crate) fn update_settings(
             .filter(|w| !w.is_empty())
             .take(100)
             .collect();
+    }
+    if let Some(sf) = sound_feedback {
+        settings.sound_feedback = sf;
     }
 
     if let Ok(path) = Settings::default_path() {

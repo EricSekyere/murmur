@@ -8,6 +8,7 @@ mod focus;
 mod input;
 mod model_setup;
 mod session;
+mod sound;
 mod state;
 mod transcribe;
 mod updater;

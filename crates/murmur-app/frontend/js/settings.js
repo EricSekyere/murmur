@@ -46,6 +46,9 @@ settingsToggle.addEventListener('click', async () => {
       vocabularyInput.value = status.custom_vocabulary.join('\n');
       vocabularySave.disabled = true;
     }
+    if (status.sound_feedback != null) {
+      soundFeedbackToggle.checked = status.sound_feedback;
+    }
     developerModeToggle.checked = !!status.developer_mode;
     devModeBadge.hidden = !status.developer_mode;
   } catch (err) {
@@ -212,6 +215,16 @@ doubleTapKeySelect.addEventListener('change', async () => {
     await invoke('update_settings', { double_tap_key: doubleTapKeySelect.value });
     showToast('Activation key updated', 'success');
   } catch (err) {
+    showToast(`Failed: ${err}`, 'error');
+  }
+});
+
+soundFeedbackToggle.addEventListener('change', async () => {
+  const enabled = soundFeedbackToggle.checked;
+  try {
+    await invoke('update_settings', { sound_feedback: enabled });
+  } catch (err) {
+    soundFeedbackToggle.checked = !enabled;
     showToast(`Failed: ${err}`, 'error');
   }
 });

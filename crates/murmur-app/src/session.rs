@@ -152,11 +152,10 @@ struct SessionStats {
 /// each, and deliver the text to the focused application.
 fn streaming_worker(app: &tauri::AppHandle) {
     let state = app.state::<AppState>();
-    let output_mode = state
-        .settings
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .output_mode;
+    let (output_mode, sound_feedback) = {
+        let settings = state.settings.lock().unwrap_or_else(|e| e.into_inner());
+        (settings.output_mode, settings.sound_feedback)
+    };
 
     #[cfg(windows)]
     let previous_hwnd = *state
@@ -188,6 +187,11 @@ fn streaming_worker(app: &tauri::AppHandle) {
         emit_recording_state(app, false, false);
         emit_hotkey_error(app, &format!("Failed to start recording: {}", e));
         return;
+    }
+
+    // Recording is live — play the start cue if enabled.
+    if sound_feedback {
+        crate::sound::play_start();
     }
 
     let mut stats = SessionStats::default();
@@ -234,7 +238,7 @@ fn streaming_worker(app: &tauri::AppHandle) {
         }
     }
 
-    finish_streaming(app, &state, &stats);
+    finish_streaming(app, &state, &stats, sound_feedback);
 }
 
 /// Transcribe one phrase and deliver the result. Phrases that arrive after
@@ -400,7 +404,15 @@ fn deliver_output(
     }
 }
 
-fn finish_streaming(app: &tauri::AppHandle, state: &AppState, stats: &SessionStats) {
+fn finish_streaming(
+    app: &tauri::AppHandle,
+    state: &AppState,
+    stats: &SessionStats,
+    sound_feedback: bool,
+) {
+    if sound_feedback {
+        crate::sound::play_stop();
+    }
     if !stats.had_transcription && !stats.saw_no_signal {
         let msg = if stats.saw_signal || stats.had_phrase_audio {
             "Speech was detected, but transcription failed. Try speaking a bit slower/closer to the mic, or switch to a larger model."

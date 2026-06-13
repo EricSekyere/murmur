@@ -96,6 +96,10 @@ pub struct Settings {
     /// decoder prompt as a glossary so they transcribe correctly.
     #[serde(default)]
     pub custom_vocabulary: Vec<String>,
+
+    /// Play a short chime when recording starts and stops.
+    #[serde(default = "default_true")]
+    pub sound_feedback: bool,
 }
 
 fn default_hotkey() -> String {
@@ -178,6 +182,7 @@ impl Default for Settings {
             double_tap_key: default_double_tap_key(),
             activation_mode: default_activation_mode(),
             custom_vocabulary: Vec::new(),
+            sound_feedback: true,
         }
     }
 }

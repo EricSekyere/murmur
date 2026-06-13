@@ -26,6 +26,17 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
+      # whisper-rs uses bindgen, which needs libclang. The runner usually
+      # ships LLVM, but install it if missing and export the path so the
+      # build never fails on "libclang.dll not found".
+      - name: Ensure LLVM/libclang
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "C:\Program Files\LLVM\bin\libclang.dll")) {
+            choco install llvm --no-progress -y
+          }
+          "LIBCLANG_PATH=C:\Program Files\LLVM\bin" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: ". -> target"
