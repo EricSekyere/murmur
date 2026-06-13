@@ -13,6 +13,9 @@ vad = ["murmur-core/vad"]
 # CUDA GPU acceleration for whisper (build.sh enables this automatically
 # when the CUDA toolkit is installed)
 cuda = ["murmur-core/cuda"]
+# macOS build: everything except Parakeet, whose DirectML execution
+# provider is Windows-only. Whisper runs on Metal/Accelerate on macOS.
+macos = ["murmur-core/audio", "murmur-core/stt", "murmur-core/keyboard", "vad"]
 
 [lib]
 name = "murmur_app_lib"

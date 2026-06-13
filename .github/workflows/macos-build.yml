@@ -1,0 +1,46 @@
+name: macOS build
+
+# Compile feedback loop for the macOS port. Runs on the macos-port branch
+# and PRs into it. Produces an unsigned .app/.dmg as a downloadable
+# artifact for on-device testing (signing and notarization come later).
+
+on:
+  push:
+    branches:
+      - macos-port
+  pull_request:
+    branches:
+      - macos-port
+  workflow_dispatch:
+
+jobs:
+  build-macos:
+    runs-on: macos-14 # Apple Silicon
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+
+      - name: Install CMake
+        run: brew list cmake >/dev/null 2>&1 || brew install cmake
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target"
+
+      # Build only (no tagName), Parakeet excluded via the macos feature set.
+      - uses: tauri-apps/tauri-action@v0
+        with:
+          projectPath: crates/murmur-app
+          args: --no-default-features --features macos --target aarch64-apple-darwin
+
+      - name: Upload app bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: murmur-macos-aarch64
+          path: |
+            target/aarch64-apple-darwin/release/bundle/dmg/*.dmg
+            target/aarch64-apple-darwin/release/bundle/macos/*.app
+          if-no-files-found: warn
