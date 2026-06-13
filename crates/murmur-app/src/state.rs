@@ -21,6 +21,10 @@ pub(crate) struct AppState {
     /// `initial_prompt` so cross-phrase punctuation stays consistent.
     /// Cleared at session start; capped to ~200 chars.
     pub session_prev_text: Mutex<String>,
+    /// Character count of the last text phrase delivered to the focused
+    /// window, so "scratch that" can backspace exactly that many characters.
+    /// Reset to 0 by commands and at session start.
+    pub last_delivered_len: Mutex<usize>,
     /// Foreground window at recording start; output falls back to it when
     /// Murmur itself holds focus at delivery time.
     #[cfg(windows)]

@@ -52,3 +52,7 @@ const showWidgetToggle   = document.getElementById('show-widget-toggle');
 const micQuality         = document.getElementById('mic-quality');
 const micQualityText     = document.getElementById('mic-quality-text');
 const diagnosticsReset   = document.getElementById('diagnostics-reset');
+const activationModeSelect = document.getElementById('activation-mode-select');
+const doubleTapKeySelect = document.getElementById('double-tap-key-select');
+const vocabularyInput    = document.getElementById('vocabulary-input');
+const vocabularySave     = document.getElementById('vocabulary-save');

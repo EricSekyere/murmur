@@ -111,6 +111,7 @@ listen('recording-state', (event) => {
       transcriptionHandled = false;
       transcriptionOutput.innerHTML = '';
       lastTranscription = '';
+      sessionPhrases = [];
       copyTranscription.disabled = true;
       wordCount.hidden = true;
       procTime.hidden = true;
@@ -178,17 +179,38 @@ listen('transcription-error', (event) => {
   }
 });
 
+// Rebuild the transcript preview from the accumulated phrase segments.
+// '\n' segments render as line breaks; text segments join with spaces.
+function renderSessionTranscript() {
+  let html = '';
+  let needsSpace = false;
+  for (const seg of sessionPhrases) {
+    if (seg === '\n') {
+      html += '<br>';
+      needsSpace = false;
+    } else {
+      if (needsSpace) html += ' ';
+      html += escapeHtml(seg);
+      needsSpace = true;
+    }
+  }
+  transcriptionOutput.innerHTML = html || '<span class="placeholder">Listening…</span>';
+  lastTranscription = sessionPhrases.filter(s => s !== '\n').join(' ');
+  copyTranscription.disabled = lastTranscription.length === 0;
+}
+
+function escapeHtml(s) {
+  const div = document.createElement('div');
+  div.textContent = s;
+  return div.innerHTML;
+}
+
 listen('streaming-phrase', (event) => {
   const { text, processing_time_ms } = event.payload;
   if (!text) return;
 
-  if (transcriptionOutput.querySelector('.placeholder')) {
-    transcriptionOutput.innerHTML = '';
-  }
-  const existing = transcriptionOutput.textContent;
-  transcriptionOutput.textContent = existing ? `${existing} ${text}` : text;
-  lastTranscription = transcriptionOutput.textContent;
-  copyTranscription.disabled = false;
+  sessionPhrases.push(text);
+  renderSessionTranscript();
 
   if (currentSession) {
     currentSession.phraseCount++;
@@ -202,11 +224,28 @@ listen('streaming-phrase', (event) => {
   applyState('recording');
 });
 
+listen('voice-command', (event) => {
+  const command = event.payload?.command;
+  if (command === 'new line') {
+    sessionPhrases.push('\n');
+  } else if (command === 'new paragraph') {
+    sessionPhrases.push('\n', '\n');
+  } else if (command === 'scratch that') {
+    // Remove trailing line breaks, then the last text segment.
+    while (sessionPhrases.length && sessionPhrases[sessionPhrases.length - 1] === '\n') {
+      sessionPhrases.pop();
+    }
+    sessionPhrases.pop();
+  }
+  renderSessionTranscript();
+  applyState('recording');
+});
+
 listen('streaming-done', () => {
   stopDurationTimer();
   stopVisualization();
 
-  const finalText = transcriptionOutput.textContent.trim();
+  const finalText = lastTranscription.trim();
   if (finalText) {
     const words = finalText.split(/\s+/).length;
     wordCount.textContent = `${words} word${words !== 1 ? 's' : ''}`;

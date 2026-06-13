@@ -4,6 +4,7 @@
 use std::time::{Duration, Instant};
 
 use murmur_core::output::OutputMode;
+use murmur_core::voice_commands::{self, VoiceCommand};
 use tauri::{Emitter, Manager};
 
 use crate::audio_worker::{AudioResult, StartParams, panic_message};
@@ -35,6 +36,29 @@ pub(crate) fn handle_toggle(app: &tauri::AppHandle) {
         drop(recording);
         start_session(app, &state);
     }
+}
+
+/// Push-to-talk: start recording if idle. Idempotent — a held key that
+/// auto-repeats won't restart an active session.
+pub(crate) fn begin_recording(app: &tauri::AppHandle) {
+    let state = app.state::<AppState>();
+    let already = *state.recording.lock().unwrap_or_else(|e| e.into_inner());
+    if already {
+        return;
+    }
+    start_session(app, &state);
+}
+
+/// Push-to-talk: stop recording if active. Idempotent.
+pub(crate) fn end_recording(app: &tauri::AppHandle) {
+    let state = app.state::<AppState>();
+    let mut recording = state.recording.lock().unwrap_or_else(|e| e.into_inner());
+    if !*recording {
+        return;
+    }
+    *recording = false;
+    drop(recording);
+    stop_session(app, &state);
 }
 
 fn stop_session(app: &tauri::AppHandle, state: &AppState) {
@@ -147,6 +171,10 @@ fn streaming_worker(app: &tauri::AppHandle) {
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .clear();
+    *state
+        .last_delivered_len
+        .lock()
+        .unwrap_or_else(|e| e.into_inner()) = 0;
 
     let Some(audio) = state.audio.get() else {
         tracing::error!("Audio worker not initialized in streaming_worker");
@@ -230,24 +258,106 @@ fn handle_phrase(
 
     if let Some((text, processing_time_ms)) = transcribe_chunk(app, buffer) {
         stats.had_transcription = true;
-        deliver_output(
-            app,
-            state,
-            &text,
-            output_mode,
-            #[cfg(windows)]
-            previous_hwnd,
-        );
-        let _ = app.emit(
-            "streaming-phrase",
-            serde_json::json!({ "text": text, "processing_time_ms": processing_time_ms }),
-        );
+        match voice_commands::parse(&text) {
+            VoiceCommand::Text => deliver_text(
+                app,
+                state,
+                &text,
+                output_mode,
+                processing_time_ms,
+                #[cfg(windows)]
+                previous_hwnd,
+            ),
+            command => execute_command(app, state, command),
+        }
     }
 
     let still_recording = *state.recording.lock().unwrap_or_else(|e| e.into_inner());
     if still_recording {
         emit_recording_state(app, true, false);
     }
+}
+
+/// Deliver a normal text phrase to the focused window and record how many
+/// characters landed so "scratch that" can undo exactly this phrase.
+fn deliver_text(
+    app: &tauri::AppHandle,
+    state: &AppState,
+    text: &str,
+    output_mode: OutputMode,
+    processing_time_ms: u64,
+    #[cfg(windows)] previous_hwnd: usize,
+) {
+    deliver_output(
+        app,
+        state,
+        text,
+        output_mode,
+        #[cfg(windows)]
+        previous_hwnd,
+    );
+
+    // Focused modes append a trailing space (dispatch_output); clipboard-only
+    // doesn't type, so there is nothing to scratch.
+    let delivered = if matches!(output_mode, OutputMode::Clipboard | OutputMode::Stdout) {
+        0
+    } else {
+        text.trim().chars().count() + 1
+    };
+    *state
+        .last_delivered_len
+        .lock()
+        .unwrap_or_else(|e| e.into_inner()) = delivered;
+
+    let _ = app.emit(
+        "streaming-phrase",
+        serde_json::json!({ "text": text, "processing_time_ms": processing_time_ms }),
+    );
+}
+
+/// Run a spoken editing command (new line, new paragraph, scratch that).
+fn execute_command(app: &tauri::AppHandle, state: &AppState, command: VoiceCommand) {
+    use murmur_core::output::keyboard;
+
+    let result = match command {
+        VoiceCommand::NewLine => keyboard::press_enter(1),
+        VoiceCommand::NewParagraph => keyboard::press_enter(2),
+        VoiceCommand::ScratchThat => {
+            let count = *state
+                .last_delivered_len
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            // A correction invalidates the decoder context — start fresh so
+            // the model doesn't keep biasing toward deleted words.
+            state
+                .session_prev_text
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .clear();
+            keyboard::press_backspace(count)
+        }
+        VoiceCommand::Text => return,
+    };
+    if let Err(e) = result {
+        tracing::error!("Voice command failed: {}", e);
+        emit_hotkey_error(app, &format!("Voice command failed: {}", e));
+    }
+
+    // After any command, there is no longer a coherent "last phrase" to
+    // scratch (a second "scratch that" should not run).
+    *state
+        .last_delivered_len
+        .lock()
+        .unwrap_or_else(|e| e.into_inner()) = 0;
+
+    let label = match command {
+        VoiceCommand::NewLine => "new line",
+        VoiceCommand::NewParagraph => "new paragraph",
+        VoiceCommand::ScratchThat => "scratch that",
+        VoiceCommand::Text => "",
+    };
+    tracing::info!("Executed voice command: {}", label);
+    let _ = app.emit("voice-command", serde_json::json!({ "command": label }));
 }
 
 fn deliver_output(

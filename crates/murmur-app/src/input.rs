@@ -193,24 +193,38 @@ pub(crate) fn spawn_global_input_listener(app: tauri::AppHandle) {
         tracing::info!("Starting global input listener");
         #[cfg(any(windows, target_os = "macos"))]
         let mut tracker = TapTracker::new();
+        // In hold (push-to-talk) mode, true while the activation key is down.
+        #[cfg(any(windows, target_os = "macos"))]
+        let mut hold_active = false;
 
         if let Err(e) = rdev::listen(move |event| {
             let _ =
                 std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| match event.event_type {
                     #[cfg(any(windows, target_os = "macos"))]
                     rdev::EventType::KeyPress(key) => {
-                        // Refresh the target from settings (try_lock keeps
+                        // Refresh target + mode from settings (try_lock keeps
                         // the hook non-blocking; stale-by-one-event is fine).
-                        if let Some(state) = app.try_state::<AppState>()
-                            && let Ok(settings) = state.settings.try_lock()
-                        {
-                            tracker.target = tap_target_from_setting(&settings.double_tap_key);
+                        let hold_mode = sync_activation(&app, &mut tracker.target);
+                        if hold_mode {
+                            // Auto-repeat resends KeyPress; begin_recording is
+                            // idempotent, so a held key won't restart.
+                            if tracker.is_target(key) && !hold_active {
+                                hold_active = true;
+                                handle_hold_start(&app);
+                            }
+                        } else {
+                            tracker.on_key_press(key);
                         }
-                        tracker.on_key_press(key);
                     }
                     #[cfg(any(windows, target_os = "macos"))]
                     rdev::EventType::KeyRelease(key) => {
-                        if tracker.on_key_release(key) {
+                        let hold_mode = sync_activation(&app, &mut tracker.target);
+                        if hold_mode {
+                            if tracker.is_target(key) && hold_active {
+                                hold_active = false;
+                                handle_hold_stop(&app);
+                            }
+                        } else if tracker.on_key_release(key) {
                             handle_toggle(&app);
                             show_widget_window(&app);
                         }
@@ -228,6 +242,30 @@ pub(crate) fn spawn_global_input_listener(app: tauri::AppHandle) {
             tracing::error!("Global input listener failed: {:?}", e);
         }
     });
+}
+
+/// Refresh the tap target from settings and report whether hold (PTT) mode
+/// is active. Returns false on lock contention (treat as toggle).
+#[cfg(any(windows, target_os = "macos"))]
+fn sync_activation(app: &tauri::AppHandle, target: &mut TapTarget) -> bool {
+    if let Some(state) = app.try_state::<AppState>()
+        && let Ok(settings) = state.settings.try_lock()
+    {
+        *target = tap_target_from_setting(&settings.double_tap_key);
+        return settings.activation_mode == "hold";
+    }
+    false
+}
+
+#[cfg(any(windows, target_os = "macos"))]
+fn handle_hold_start(app: &tauri::AppHandle) {
+    crate::session::begin_recording(app);
+    show_widget_window(app);
+}
+
+#[cfg(any(windows, target_os = "macos"))]
+fn handle_hold_stop(app: &tauri::AppHandle) {
+    crate::session::end_recording(app);
 }
 
 fn handle_click_to_stop(app: &tauri::AppHandle) {

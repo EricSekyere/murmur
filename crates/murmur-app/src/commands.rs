@@ -41,6 +41,9 @@ pub(crate) fn get_status(state: State<'_, AppState>) -> serde_json::Value {
         "session_timeout_secs": settings.session_timeout_secs,
         "click_to_stop": settings.click_to_stop,
         "show_widget": settings.show_widget,
+        "activation_mode": settings.activation_mode,
+        "double_tap_key": settings.double_tap_key,
+        "custom_vocabulary": settings.custom_vocabulary,
     })
 }
 
@@ -191,6 +194,9 @@ pub(crate) fn update_settings(
     session_timeout_secs: Option<f32>,
     click_to_stop: Option<bool>,
     show_widget: Option<bool>,
+    activation_mode: Option<String>,
+    double_tap_key: Option<String>,
+    custom_vocabulary: Option<Vec<String>>,
 ) -> Result<(), String> {
     let mut settings = state.settings.lock().unwrap_or_else(|e| e.into_inner());
 
@@ -225,6 +231,27 @@ pub(crate) fn update_settings(
     if let Some(sw) = show_widget {
         settings.show_widget = sw;
         set_widget_window_visible(&app, sw);
+    }
+    if let Some(mode) = activation_mode {
+        if mode != "toggle" && mode != "hold" {
+            return Err(format!("Unknown activation mode: {}", mode));
+        }
+        settings.activation_mode = mode;
+    }
+    if let Some(key) = double_tap_key {
+        let trimmed = key.trim();
+        if !trimmed.is_empty() {
+            settings.double_tap_key = trimmed.to_lowercase();
+        }
+    }
+    if let Some(vocab) = custom_vocabulary {
+        // Trim, drop blanks, cap at 100 entries to keep the prompt bounded.
+        settings.custom_vocabulary = vocab
+            .into_iter()
+            .map(|w| w.trim().to_string())
+            .filter(|w| !w.is_empty())
+            .take(100)
+            .collect();
     }
 
     if let Ok(path) = Settings::default_path() {

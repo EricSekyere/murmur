@@ -93,14 +93,18 @@ pub(crate) fn transcribe_chunk(
     audio: &murmur_core::audio::AudioBuffer,
 ) -> Option<(String, u64)> {
     let state = app.state::<AppState>();
-    let (developer_mode, profile) = {
+    let (developer_mode, profile, vocabulary) = {
         let settings = state.settings.lock().unwrap_or_else(|e| e.into_inner());
-        (settings.developer_mode, settings.transcription_profile)
+        (
+            settings.developer_mode,
+            settings.transcription_profile,
+            settings.custom_vocabulary.clone(),
+        )
     };
     let limits = ProfileLimits::for_profile(profile);
 
     let prepared = preprocess(app, audio, &limits)?;
-    let result = run_engine(app, &state, &prepared)?;
+    let result = run_engine(app, &state, &prepared, &vocabulary)?;
 
     if let Some(reason) = quality_reject_reason(&result, &limits, prepared.duration_secs) {
         return reject(app, &state, reason, &prepared, Some(&result.text));
@@ -206,6 +210,7 @@ fn run_engine(
     app: &tauri::AppHandle,
     state: &AppState,
     prepared: &PreparedAudio,
+    vocabulary: &[String],
 ) -> Option<TranscriptionResult> {
     let mut engine_guard = state.engine.lock().unwrap_or_else(|e| e.into_inner());
     let Some(engine) = engine_guard.as_mut() else {
@@ -216,6 +221,7 @@ fn run_engine(
         return None;
     };
 
+    engine.set_vocabulary(vocabulary);
     let prev = state
         .session_prev_text
         .lock()

@@ -9,6 +9,7 @@ let lastTranscription = '';
 let history = [];                  // max 10, newest first
 let transcriptionHandled = false;  // guard: prevent double-display from invoke + event
 let currentSession = null;
+let sessionPhrases = [];           // delivered segments this session; '\n' marks line breaks
 
 let vizActive = false;
 let animationFrameHandle = null;

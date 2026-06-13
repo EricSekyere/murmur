@@ -34,6 +34,18 @@ settingsToggle.addEventListener('click', async () => {
     if (status.show_widget != null) {
       showWidgetToggle.checked = status.show_widget;
     }
+    if (status.activation_mode) {
+      activationModeSelect.value = status.activation_mode;
+    }
+    if (status.double_tap_key) {
+      doubleTapKeySelect.value = ['rctrl', 'lctrl', 'ctrl'].includes(status.double_tap_key)
+        ? status.double_tap_key
+        : 'rctrl';
+    }
+    if (Array.isArray(status.custom_vocabulary)) {
+      vocabularyInput.value = status.custom_vocabulary.join('\n');
+      vocabularySave.disabled = true;
+    }
     developerModeToggle.checked = !!status.developer_mode;
     devModeBadge.hidden = !status.developer_mode;
   } catch (err) {
@@ -181,6 +193,44 @@ showWidgetToggle.addEventListener('change', async () => {
     await invoke('set_widget_visible', { visible });
   } catch (err) {
     showWidgetToggle.checked = !visible;
+    showToast(`Failed: ${err}`, 'error');
+  }
+});
+
+activationModeSelect.addEventListener('change', async () => {
+  const mode = activationModeSelect.value;
+  try {
+    await invoke('update_settings', { activation_mode: mode });
+    showToast(mode === 'hold' ? 'Push-to-talk enabled' : 'Toggle mode enabled', 'success');
+  } catch (err) {
+    showToast(`Failed: ${err}`, 'error');
+  }
+});
+
+doubleTapKeySelect.addEventListener('change', async () => {
+  try {
+    await invoke('update_settings', { double_tap_key: doubleTapKeySelect.value });
+    showToast('Activation key updated', 'success');
+  } catch (err) {
+    showToast(`Failed: ${err}`, 'error');
+  }
+});
+
+vocabularyInput.addEventListener('input', () => {
+  vocabularySave.disabled = false;
+});
+
+vocabularySave.addEventListener('click', async () => {
+  const words = vocabularyInput.value
+    .split('\n')
+    .map(w => w.trim())
+    .filter(w => w.length > 0);
+  vocabularySave.disabled = true;
+  try {
+    await invoke('update_settings', { custom_vocabulary: words });
+    showToast(`Dictionary saved (${words.length} ${words.length === 1 ? 'term' : 'terms'})`, 'success');
+  } catch (err) {
+    vocabularySave.disabled = false;
     showToast(`Failed: ${err}`, 'error');
   }
 });

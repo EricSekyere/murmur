@@ -580,6 +580,34 @@
   cursor: pointer;
 }
 
+.settings-textarea {
+  width: 100%;
+  margin-top: 8px;
+  background: var(--color-surface-raised);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  color: var(--color-text);
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  line-height: 1.6;
+  padding: 8px 10px;
+  outline: none;
+  resize: vertical;
+  min-height: 76px;
+  transition: border-color var(--transition-fast);
+}
+
+.settings-textarea:focus {
+  border-color: var(--color-accent);
+  box-shadow: 0 0 0 2px var(--color-accent-dim);
+}
+
+.settings-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 8px;
+}
+
 .btn-small {
   background: var(--color-surface-raised);
   border: 1px solid var(--color-border);
