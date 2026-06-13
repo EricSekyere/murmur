@@ -10,7 +10,11 @@ permissions:
 
 jobs:
   release-windows:
-    runs-on: windows-latest
+    # Pinned to windows-2022: the "Visual Studio 17 2022" CMake generator
+    # below needs a VS 2022 toolset CMake can detect, which windows-latest
+    # (now a newer image) no longer provides — CMake fails with "could not
+    # find any instance of Visual Studio".
+    runs-on: windows-2022
     env:
       LIBCLANG_PATH: C:\Program Files\LLVM\bin
       # whisper.cpp must compile optimized: with CMAKE_GENERATOR unset,
