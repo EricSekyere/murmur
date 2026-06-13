@@ -30,11 +30,14 @@ jobs:
         with:
           workspaces: ". -> target"
 
-      # Build only (no tagName), Parakeet excluded via the macos feature set.
+      # Build only (no tagName). --target and --bundles are tauri build
+      # flags (--bundles overrides the Windows-only nsis target); the cargo
+      # flags after `--` select the macos feature set (no Parakeet, whose
+      # DirectML provider is Windows-only).
       - uses: tauri-apps/tauri-action@v0
         with:
           projectPath: crates/murmur-app
-          args: --no-default-features --features macos --target aarch64-apple-darwin
+          args: --target aarch64-apple-darwin --bundles app,dmg -- --no-default-features --features macos
 
       - name: Upload app bundle
         uses: actions/upload-artifact@v4

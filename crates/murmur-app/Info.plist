@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- Shown when macOS prompts for microphone access. Required: macOS
+       terminates apps that use the microphone without this string. -->
+  <key>NSMicrophoneUsageDescription</key>
+  <string>Murmur listens to your microphone only while you are dictating, to transcribe your speech on-device.</string>
+</dict>
+</plist>
