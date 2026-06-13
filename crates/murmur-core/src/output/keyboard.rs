@@ -553,9 +553,15 @@ fn clipboard_paste(text: &str) -> Result<()> {
 
     std::thread::sleep(std::time::Duration::from_millis(150));
 
-    // Restore original clipboard
-    if let Some(prev) = previous {
-        let _ = clipboard.set_text(&prev);
+    // Restore the original clipboard, or clear it when there was nothing
+    // restorable, so the dictated text is never left behind.
+    match previous {
+        Some(prev) => {
+            let _ = clipboard.set_text(&prev);
+        }
+        None => {
+            let _ = clipboard.clear();
+        }
     }
 
     Ok(())
