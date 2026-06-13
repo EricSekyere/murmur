@@ -10,19 +10,19 @@ permissions:
 
 jobs:
   release-windows:
-    # Pinned to windows-2022: the "Visual Studio 17 2022" CMake generator
-    # below needs a VS 2022 toolset CMake can detect, which windows-latest
-    # (now a newer image) no longer provides — CMake fails with "could not
-    # find any instance of Visual Studio".
     runs-on: windows-2022
     env:
       LIBCLANG_PATH: C:\Program Files\LLVM\bin
-      # whisper.cpp must compile optimized: with CMAKE_GENERATOR unset,
-      # cmake-rs overrides the MSVC Release flags and strips /O2 (see
-      # build.sh for the full story). AVX2 covers every Intel/AMD CPU
-      # since ~2013; the CI build is CPU-only so it runs on any machine
-      # (the CUDA build remains a local build.sh option).
-      CMAKE_GENERATOR: Visual Studio 17 2022
+      # whisper.cpp must compile optimized. Setting CMAKE_GENERATOR to any
+      # value stops cmake-rs from overriding CMAKE_*_FLAGS_RELEASE and
+      # stripping /O2 (the cause of an earlier ~100x slowdown — see build.sh).
+      # Ninja is used instead of the "Visual Studio" generator because CMake's
+      # VS-instance detection fails on hosted runners ("could not find any
+      # instance of Visual Studio"). Ninja just compiles with cl.exe from the
+      # MSVC dev environment set up below — no VS detection involved. CMake's
+      # default CMAKE_C_FLAGS_RELEASE (/O2 /Ob2 /DNDEBUG) still applies, so the
+      # build stays optimized. AVX2 covers every Intel/AMD CPU since ~2013.
+      CMAKE_GENERATOR: Ninja
       CFLAGS: /DNDEBUG /arch:AVX2
       CXXFLAGS: /DNDEBUG /arch:AVX2
     steps:
@@ -41,6 +41,19 @@ jobs:
           }
           "LIBCLANG_PATH=C:\Program Files\LLVM\bin" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
+      # Put cl.exe and the MSVC headers/libs on PATH for the Ninja build.
+      - name: Set up MSVC environment
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Ensure Ninja
+        shell: pwsh
+        run: |
+          if (-not (Get-Command ninja -ErrorAction SilentlyContinue)) {
+            choco install ninja --no-progress -y
+          }
+
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: ". -> target"
@@ -48,9 +61,9 @@ jobs:
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Updater signing. Add these as repository secrets:
-          #   TAURI_SIGNING_PRIVATE_KEY          contents of .tauri-signing-key.key
-          #   TAURI_SIGNING_PRIVATE_KEY_PASSWORD password (empty if none)
+          # Updater signing — repository secret TAURI_SIGNING_PRIVATE_KEY.
+          # The key has no password, so the password secret can be absent
+          # (it resolves to an empty string, which the signer accepts).
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
