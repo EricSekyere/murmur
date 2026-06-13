@@ -51,8 +51,10 @@ cargo fmt --all
 info "Building Murmur for macOS ($TARGET)..."
 cd "$ROOT/crates/murmur-app"
 # Parakeet is excluded (its DirectML provider is Windows-only); Whisper runs
-# on Metal/Accelerate. cargo flags go after `--`.
-cargo tauri build --target "$TARGET" --bundles app,dmg -- \
+# on Metal/Accelerate. Updater artifacts are disabled because local builds
+# have no signing key (releases sign them in CI). cargo flags go after `--`.
+cargo tauri build --target "$TARGET" --bundles app,dmg \
+  --config '{"bundle":{"createUpdaterArtifacts":false}}' -- \
   --no-default-features --features macos
 
 echo ""
