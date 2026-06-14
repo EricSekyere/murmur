@@ -98,33 +98,13 @@ pub fn dispatch_output(text: &str, mode: OutputMode) -> anyhow::Result<()> {
     );
 
     match mode {
-        OutputMode::Auto => {
-            // macOS-Dictation-style: paste reliably. Ctrl+V is accepted by
-            // virtually every text-accepting surface on Windows (terminals,
-            // browsers, IDEs, Electron apps, elevated windows via clipboard
-            // sharing) and is immune to keyboard-layout differences and
-            // stuck-modifier interference. SendInput Unicode is kept as a
-            // fallback for the rare app that suppresses paste.
-            let text_with_space = format!("{} ", trimmed);
-
-            if let Err(e) = paste::ClipboardPasteOutput::new().paste_text(&text_with_space) {
-                tracing::warn!(
-                    "Auto: clipboard+paste failed, falling back to keyboard simulation: {}",
-                    e
-                );
-                let kb_result = keyboard::KeyboardOutput::new()
-                    .and_then(|mut kb| kb.type_text(&text_with_space));
-
-                if let Err(e2) = kb_result {
-                    tracing::warn!(
-                        "Auto: keyboard fallback also failed, copying to clipboard: {}",
-                        e2
-                    );
-                    clipboard::ClipboardOutput::new()?.copy(trimmed)?;
-                }
-            }
-        }
-        OutputMode::Keyboard => {
+        // Auto and Keyboard share the same strategy: type directly with
+        // SendInput Unicode (which never touches the clipboard) for normal
+        // windows, and only fall back to clipboard+paste for terminal-like
+        // windows where direct typing is unreliable. Typing directly avoids
+        // the clipboard-update race that could otherwise paste the user's
+        // previous clipboard content into the target app.
+        OutputMode::Auto | OutputMode::Keyboard => {
             let text_with_space = format!("{} ", trimmed);
 
             #[cfg(windows)]
