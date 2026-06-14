@@ -44,8 +44,34 @@ impl ClipboardPasteOutput {
             .set_text(text)
             .context("Failed to set clipboard text")?;
 
-        // Brief pause to let the clipboard update propagate.
-        std::thread::sleep(std::time::Duration::from_millis(30));
+        // Wait until the clipboard actually reports our text before pasting.
+        // A fixed sleep is unreliable: if Ctrl+V fires before the OS finishes
+        // updating the clipboard, it pastes the user's *previous* clipboard
+        // content into the target window. Poll up to ~250ms for confirmation.
+        let mut confirmed = false;
+        for _ in 0..25 {
+            if clipboard.get_text().is_ok_and(|t| t == text) {
+                confirmed = true;
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        if !confirmed {
+            tracing::warn!(
+                "Clipboard did not confirm our text; skipping paste to avoid pasting stale content"
+            );
+            // Restore the original content and bail; the caller's fallback
+            // chain (keyboard typing) will deliver the text instead.
+            match previous {
+                Some(prev) => {
+                    let _ = clipboard.set_text(&prev);
+                }
+                None => {
+                    let _ = clipboard.clear();
+                }
+            }
+            anyhow::bail!("Clipboard update not confirmed; refusing to paste stale content");
+        }
 
         // Release any stuck modifier keys before simulating Ctrl+V.
         #[cfg(windows)]
