@@ -1,7 +1,9 @@
 # Rust
 /target/
 **/*.rs.bk
-Cargo.lock
+# Cargo.lock IS committed: this is an application, and a committed lock
+# gives reproducible CI builds (without it, CI resolves fresh deps and can
+# pick up a newly published, broken transitive crate).
 
 # Models (downloaded at runtime)
 /models/*.bin
