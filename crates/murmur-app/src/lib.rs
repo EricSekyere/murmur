@@ -39,6 +39,10 @@ pub fn run() -> anyhow::Result<()> {
     let hotkey = settings.hotkey.clone();
     let show_widget_on_start = settings.show_widget;
 
+    let history_path = murmur_core::history::History::default_path()
+        .context("Failed to determine history path")?;
+    let history = murmur_core::history::History::load(&history_path);
+
     // Engine loads in the background so startup is instant; the UI shows a
     // loading banner until it is ready.
     let engine: Arc<Mutex<Option<SttEngine>>> = Arc::new(Mutex::new(None));
@@ -63,6 +67,8 @@ pub fn run() -> anyhow::Result<()> {
             last_toggle: Mutex::new(Instant::now() - Duration::from_secs(10)),
             session_prev_text: Mutex::new(String::new()),
             last_delivered_len: Mutex::new(0),
+            history: Mutex::new(history),
+            history_path,
             #[cfg(windows)]
             previous_foreground: Mutex::new(0),
             #[cfg(windows)]
@@ -80,6 +86,8 @@ pub fn run() -> anyhow::Result<()> {
         .invoke_handler(tauri::generate_handler![
             commands::get_status,
             commands::toggle_recording,
+            commands::get_history,
+            commands::clear_history,
             commands::get_config,
             commands::download_model,
             commands::list_models,

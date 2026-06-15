@@ -61,6 +61,27 @@ pub(crate) fn toggle_recording(app: tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+/// Recent history entries matching `query` (case-insensitive substring; empty
+/// or omitted matches all), newest first, capped at `limit` (default 200).
+#[tauri::command]
+pub(crate) fn get_history(
+    state: State<'_, AppState>,
+    query: Option<String>,
+    limit: Option<usize>,
+) -> serde_json::Value {
+    let history = state.history.lock().unwrap_or_else(|e| e.into_inner());
+    let entries = history.search(query.as_deref().unwrap_or(""), limit.unwrap_or(200));
+    serde_json::json!({ "entries": entries })
+}
+
+/// Clear all stored history and persist the empty log.
+#[tauri::command]
+pub(crate) fn clear_history(state: State<'_, AppState>) -> Result<(), String> {
+    let mut history = state.history.lock().unwrap_or_else(|e| e.into_inner());
+    history.clear();
+    history.save(&state.history_path).map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 pub(crate) fn get_config(state: State<'_, AppState>) -> Result<serde_json::Value, String> {
     let settings = state.settings.lock().unwrap_or_else(|e| e.into_inner());

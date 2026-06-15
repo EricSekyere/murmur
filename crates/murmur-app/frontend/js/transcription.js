@@ -23,7 +23,7 @@ function displayTranscription(text, processingTimeMs) {
     ? `${(processingTimeMs / 1000).toFixed(1)}s`
     : '';
 
-  addToHistory(lastTranscription, words);
+  loadHistory();
   applyState('done');
 
   setTimeout(() => {
@@ -31,18 +31,48 @@ function displayTranscription(text, processingTimeMs) {
   }, 2000);
 }
 
-function addToHistory(text, words) {
-  if (!text.trim()) return;
-  history.unshift({ text, words, timestamp: Date.now() });
-  if (history.length > 10) history.pop();
+// Load (optionally filtered) history from the persistent backend store.
+async function loadHistory() {
+  try {
+    const result = await invoke('get_history', { query: historyQuery, limit: 200 });
+    history = result.entries || [];
+  } catch (err) {
+    console.error('Failed to load history:', err);
+    history = [];
+  }
   renderHistory();
 }
 
-function relativeTime(timestamp) {
-  const delta = Math.floor((Date.now() - timestamp) / 1000);
+let historySearchTimer = null;
+function onHistorySearch(value) {
+  historyQuery = value;
+  clearTimeout(historySearchTimer);
+  historySearchTimer = setTimeout(loadHistory, 150);
+}
+
+async function clearHistory() {
+  try {
+    await invoke('clear_history');
+    history = [];
+    renderHistory();
+    showToast('History cleared', 'success');
+  } catch (err) {
+    showToast(`Failed: ${err}`, 'error');
+  }
+}
+
+function relativeTime(timestampMs) {
+  const delta = Math.floor((Date.now() - timestampMs) / 1000);
   if (delta < 60)   return 'just now';
   if (delta < 3600) return `${Math.floor(delta / 60)}m ago`;
-  return `${Math.floor(delta / 3600)}h ago`;
+  if (delta < 86400) return `${Math.floor(delta / 3600)}h ago`;
+  return `${Math.floor(delta / 86400)}d ago`;
+}
+
+// Strip the ".exe" and path from a process name for a cleaner app label.
+function appLabel(app) {
+  if (!app) return '';
+  return app.replace(/\.exe$/i, '');
 }
 
 function renderHistory() {
@@ -50,6 +80,10 @@ function renderHistory() {
 
   if (history.length === 0) {
     historyCount.hidden = true;
+    const li = document.createElement('li');
+    li.className = 'history-empty';
+    li.textContent = historyQuery ? 'No matches.' : 'No history yet.';
+    historyList.appendChild(li);
     return;
   }
 
@@ -67,9 +101,12 @@ function renderHistory() {
       : entry.text;
     textSpan.title = entry.text;
 
-    const timeSpan = document.createElement('span');
-    timeSpan.className = 'history-item__time';
-    timeSpan.textContent = relativeTime(entry.timestamp);
+    const meta = document.createElement('span');
+    meta.className = 'history-item__time';
+    const label = appLabel(entry.app);
+    meta.textContent = label
+      ? `${label} · ${relativeTime(entry.timestamp_ms)}`
+      : relativeTime(entry.timestamp_ms);
 
     const copyBtn = document.createElement('button');
     copyBtn.className = 'history-item__copy';
@@ -78,7 +115,7 @@ function renderHistory() {
     copyBtn.addEventListener('click', () => copyToClipboard(entry.text, copyBtn));
 
     li.appendChild(textSpan);
-    li.appendChild(timeSpan);
+    li.appendChild(meta);
     li.appendChild(copyBtn);
     historyList.appendChild(li);
   }
@@ -98,9 +135,19 @@ copyTranscription.addEventListener('click', () => {
 
 historyToggle.addEventListener('click', () => {
   const expanded = historyToggle.getAttribute('aria-expanded') === 'true';
-  historyToggle.setAttribute('aria-expanded', String(!expanded));
-  historyList.hidden = expanded;
+  const nowExpanded = !expanded;
+  historyToggle.setAttribute('aria-expanded', String(nowExpanded));
+  historyList.hidden = !nowExpanded;
+  if (historyControls) historyControls.hidden = !nowExpanded;
+  if (nowExpanded) loadHistory();
 });
+
+if (historySearch) {
+  historySearch.addEventListener('input', () => onHistorySearch(historySearch.value));
+}
+if (historyClear) {
+  historyClear.addEventListener('click', clearHistory);
+}
 
 listen('recording-state', (event) => {
   const { recording, processing } = event.payload;
@@ -268,7 +315,7 @@ listen('streaming-done', () => {
   if (finalText) {
     const words = finalText.split(/\s+/).length;
     wordCount.textContent = `${words} word${words !== 1 ? 's' : ''}`;
-    addToHistory(finalText, words);
+    loadHistory();
     applyState('done');
     setTimeout(() => {
       if (uiState === 'done') applyState('idle');

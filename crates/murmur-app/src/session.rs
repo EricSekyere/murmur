@@ -343,10 +343,35 @@ fn deliver_text(
         .lock()
         .unwrap_or_else(|e| e.into_inner()) = delivered;
 
+    record_history(state, text);
+
     let _ = app.emit(
         "streaming-phrase",
         serde_json::json!({ "text": text, "processing_time_ms": processing_time_ms }),
     );
+}
+
+/// Append a delivered phrase to the persistent history and save it. Best
+/// effort: a failed write is logged, never surfaced to the user.
+fn record_history(state: &AppState, text: &str) {
+    let app_name = current_app_name();
+    let mut history = state.history.lock().unwrap_or_else(|e| e.into_inner());
+    history.add(text, app_name);
+    if let Err(e) = history.save(&state.history_path) {
+        tracing::warn!("Failed to save history: {}", e);
+    }
+}
+
+/// Name of the foreground application receiving the text, when available.
+#[cfg(windows)]
+fn current_app_name() -> Option<String> {
+    murmur_core::output::keyboard::foreground_window_info_public()
+        .and_then(|info| info.process_name)
+}
+
+#[cfg(not(windows))]
+fn current_app_name() -> Option<String> {
+    None
 }
 
 /// Run a spoken editing command (new line, new paragraph, scratch that).

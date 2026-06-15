@@ -201,6 +201,41 @@
 
 .history-count[hidden] { display: none; }
 
+/* ─── History search controls ───────────────────────────────────────────── */
+.history-controls {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.history-controls[hidden] { display: none; }
+
+.history-search {
+  flex: 1;
+  padding: 8px 12px;
+  font-size: 0.82rem;
+  color: var(--color-text);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  outline: none;
+  transition: border-color var(--transition-fast);
+}
+
+.history-search::placeholder { color: var(--color-text-muted); }
+
+.history-search:focus {
+  border-color: var(--color-accent);
+}
+
+.history-empty {
+  list-style: none;
+  padding: 18px 14px;
+  text-align: center;
+  font-size: 0.82rem;
+  color: var(--color-text-muted);
+}
+
 .history-list {
   list-style: none;
   display: flex;
