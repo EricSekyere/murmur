@@ -49,6 +49,9 @@ pub(crate) fn get_status(state: State<'_, AppState>) -> serde_json::Value {
         "vad_threshold": settings.vad_threshold,
         "live_preview": settings.live_preview,
         "snippets": settings.snippets,
+        "language": settings.language,
+        "translate_to_english": settings.translate_to_english,
+        "model_multilingual": settings.model.is_multilingual(),
     })
 }
 
@@ -206,6 +209,8 @@ pub(crate) fn update_settings(
     vad_threshold: Option<f32>,
     live_preview: Option<bool>,
     snippets: Option<Vec<Snippet>>,
+    language: Option<String>,
+    translate_to_english: Option<bool>,
 ) -> Result<(), String> {
     let mut settings = state.settings.lock().unwrap_or_else(|e| e.into_inner());
 
@@ -285,6 +290,15 @@ pub(crate) fn update_settings(
             .filter(|s| !s.trigger.is_empty() && !s.expansion.is_empty())
             .take(100)
             .collect();
+    }
+    if let Some(lang) = language {
+        let trimmed = lang.trim();
+        if !trimmed.is_empty() {
+            settings.language = trimmed.to_lowercase();
+        }
+    }
+    if let Some(tr) = translate_to_english {
+        settings.translate_to_english = tr;
     }
 
     if let Ok(path) = Settings::default_path() {

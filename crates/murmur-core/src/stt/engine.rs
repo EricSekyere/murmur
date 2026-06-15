@@ -53,6 +53,11 @@ pub struct SttEngine {
     /// Comma-separated user glossary (names, jargon) included in the prompt
     /// so whisper spells them correctly.
     vocabulary: Option<String>,
+    /// Spoken-language hint: `None` or "auto" auto-detects, "en"/"es"/… force
+    /// a language. Ignored for English-only models (always "en").
+    language: Option<String>,
+    /// Translate the recognized speech to English (multilingual models only).
+    translate: bool,
 }
 
 /// Samples in 1ms at 16kHz. Used for leading-silence padding.
@@ -126,6 +131,8 @@ impl SttEngine {
                 model: None,
                 initial_prompt: None,
                 vocabulary: None,
+                language: None,
+                translate: false,
             })
         }
 
@@ -139,6 +146,8 @@ impl SttEngine {
                 model: None,
                 initial_prompt: None,
                 vocabulary: None,
+                language: None,
+                translate: false,
             })
         }
     }
@@ -192,6 +201,8 @@ impl SttEngine {
                 model: None,
                 initial_prompt: None,
                 vocabulary: None,
+                language: None,
+                translate: false,
             })
         }
 
@@ -205,6 +216,8 @@ impl SttEngine {
                 model: None,
                 initial_prompt: None,
                 vocabulary: None,
+                language: None,
+                translate: false,
             })
         }
     }
@@ -241,6 +254,18 @@ impl SttEngine {
         } else {
             Some(cleaned.join(", "))
         };
+    }
+
+    /// Set the spoken-language hint. `None` or "auto" auto-detects; a code like
+    /// "es" forces a language. Only honored by multilingual models.
+    pub fn set_language(&mut self, language: Option<String>) {
+        self.language = language.filter(|l| !l.trim().is_empty());
+    }
+
+    /// Translate recognized speech to English. Only honored by multilingual
+    /// models; English-only models always transcribe verbatim.
+    pub fn set_translate(&mut self, translate: bool) {
+        self.translate = translate;
     }
 
     /// Transcribe raw PCM audio samples (16kHz mono f32) to text.
@@ -293,6 +318,8 @@ impl SttEngine {
                 self.model,
                 self.initial_prompt.as_deref(),
                 self.vocabulary.as_deref(),
+                self.language.as_deref(),
+                self.translate,
             ),
             #[cfg(feature = "parakeet")]
             EngineInner::Parakeet { engine } => Self::transcribe_parakeet(engine, input, start),
@@ -329,6 +356,8 @@ impl SttEngine {
         model: Option<SttModel>,
         initial_prompt: Option<&str>,
         vocabulary: Option<&str>,
+        language: Option<&str>,
+        translate: bool,
     ) -> Result<TranscriptionResult> {
         let mut state = ctx
             .create_state()
@@ -356,8 +385,16 @@ impl SttEngine {
             })
         };
         params.set_n_threads(n_threads);
-        params.set_language(Some("en"));
-        params.set_translate(false);
+        // Language/translation only apply to multilingual checkpoints; the
+        // `.en` models can't do either, so force English and no translation.
+        let multilingual = model.map(|m| m.is_multilingual()).unwrap_or(false);
+        let (effective_lang, effective_translate) = if multilingual {
+            (language.unwrap_or("auto"), translate)
+        } else {
+            ("en", false)
+        };
+        params.set_language(Some(effective_lang));
+        params.set_translate(effective_translate);
         params.set_print_special(false);
         params.set_print_progress(false);
         params.set_print_realtime(false);
@@ -377,9 +414,18 @@ impl SttEngine {
         // Base style hint, optionally extended with a user glossary so names
         // and jargon spell correctly. Both are prepended to the rolling
         // session context (whisper.cpp's streaming pattern).
-        let mut prompt = String::from("Use proper punctuation and capitalization.");
+        // The English style hint only helps when the output is English; on a
+        // non-English transcription it can nudge whisper to code-switch.
+        let output_is_english = effective_translate || effective_lang == "en";
+        let mut prompt = String::new();
+        if output_is_english {
+            prompt.push_str("Use proper punctuation and capitalization.");
+        }
         if let Some(glossary) = vocabulary.filter(|g| !g.trim().is_empty()) {
-            prompt.push_str(" Vocabulary: ");
+            if !prompt.is_empty() {
+                prompt.push(' ');
+            }
+            prompt.push_str("Vocabulary: ");
             prompt.push_str(glossary.trim());
             prompt.push('.');
         }
@@ -392,10 +438,14 @@ impl SttEngine {
                 .nth(200)
                 .map(|(i, _)| i)
                 .unwrap_or(0);
-            prompt.push(' ');
+            if !prompt.is_empty() {
+                prompt.push(' ');
+            }
             prompt.push_str(&trimmed[start_byte..]);
         }
-        params.set_initial_prompt(&prompt);
+        if !prompt.is_empty() {
+            params.set_initial_prompt(&prompt);
+        }
         params.set_temperature(0.0);
         if is_large {
             // Larger models (medium, large-v3-turbo) hit more edge cases where

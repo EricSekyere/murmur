@@ -20,6 +20,11 @@ settingsToggle.addEventListener('click', async () => {
     if (status.transcription_profile) {
       transcriptionProfileSelect.value = status.transcription_profile;
     }
+    if (status.language) {
+      languageSelect.value = status.language;
+    }
+    translateToggle.checked = !!status.translate_to_english;
+    applyMultilingualState(!!status.model_multilingual);
     if (status.phrase_pause_secs != null) {
       phrasePauseRange.value = status.phrase_pause_secs;
       phrasePauseValue.textContent = `${parseFloat(status.phrase_pause_secs).toFixed(1)}s`;
@@ -129,6 +134,39 @@ transcriptionProfileSelect.addEventListener('change', async () => {
     await invoke('update_settings', { transcription_profile: profile });
     showToast(`Profile: ${profile}`, 'success');
   } catch (err) {
+    showToast(`Failed: ${err}`, 'error');
+  }
+});
+
+// Language and translation only work with a multilingual model; reflect that
+// by dimming the controls and noting it in the hint when an English-only
+// model is active.
+function applyMultilingualState(multilingual) {
+  languageSelect.disabled = !multilingual;
+  translateToggle.disabled = !multilingual;
+  if (languageHint) {
+    languageHint.textContent = multilingual
+      ? 'Auto-detect, or pick a language. Powered by the multilingual model.'
+      : 'Needs the multilingual model (Large v3 Turbo). The English models only do English.';
+  }
+}
+
+languageSelect.addEventListener('change', async () => {
+  const language = languageSelect.value;
+  try {
+    await invoke('update_settings', { language });
+    showToast(`Language: ${languageSelect.options[languageSelect.selectedIndex].text}`, 'success');
+  } catch (err) {
+    showToast(`Failed: ${err}`, 'error');
+  }
+});
+
+translateToggle.addEventListener('change', async () => {
+  const enabled = translateToggle.checked;
+  try {
+    await invoke('update_settings', { translate_to_english: enabled });
+  } catch (err) {
+    translateToggle.checked = !enabled;
     showToast(`Failed: ${err}`, 'error');
   }
 });
@@ -445,6 +483,10 @@ listen('model-changed', (event) => {
     micBtn.disabled = uiState === 'processing';
     showToast(`Switched to ${data.model_name}`, 'success');
     loadModelList();
+    // The new model may differ in multilingual support; refresh the controls.
+    invoke('get_status')
+      .then(s => applyMultilingualState(!!s.model_multilingual))
+      .catch(() => {});
   } else {
     modelReady = false;
     modelInfo.textContent = `Loading: ${data.model_name}...`;

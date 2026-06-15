@@ -111,6 +111,15 @@ pub struct Settings {
     /// typed. Matched only when the trigger is the entire phrase.
     #[serde(default)]
     pub snippets: Vec<Snippet>,
+
+    /// Spoken language: "auto" to detect, or a code like "en"/"es"/"fr".
+    /// Only honored by multilingual models (the `.en` models are English-only).
+    #[serde(default = "default_language")]
+    pub language: String,
+
+    /// Translate recognized speech to English (multilingual models only).
+    #[serde(default)]
+    pub translate_to_english: bool,
 }
 
 fn default_hotkey() -> String {
@@ -160,6 +169,10 @@ fn default_activation_mode() -> String {
     "toggle".to_string()
 }
 
+fn default_language() -> String {
+    "en".to_string()
+}
+
 fn default_pre_output_delay_ms() -> u64 {
     80
 }
@@ -198,6 +211,8 @@ impl Default for Settings {
             sound_feedback: true,
             live_preview: true,
             snippets: Vec::new(),
+            language: default_language(),
+            translate_to_english: false,
         }
     }
 }

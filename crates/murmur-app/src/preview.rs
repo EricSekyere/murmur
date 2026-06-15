@@ -47,11 +47,18 @@ fn transcribe_preview(state: &AppState, audio: &AudioBuffer) -> Option<String> {
     if audio.samples.len() < MIN_PREVIEW_SAMPLES {
         return None;
     }
+    let (language, translate) = {
+        let settings = state.settings.lock().unwrap_or_else(|e| e.into_inner());
+        (settings.language.clone(), settings.translate_to_english)
+    };
     let mut guard = state.engine.try_lock().ok()?;
     let engine = guard.as_mut()?;
     // No decoder prompt: a preview must not pollute the running session
     // context that the final-phrase path feeds back as `initial_prompt`.
     engine.set_initial_prompt(None);
+    // Mirror the language/translate settings so the preview matches the final.
+    engine.set_language(Some(language));
+    engine.set_translate(translate);
     let result = engine.transcribe(&audio.samples).ok()?;
     let text = result.text.trim();
     (!text.is_empty()).then(|| text.to_string())

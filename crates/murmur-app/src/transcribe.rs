@@ -93,18 +93,20 @@ pub(crate) fn transcribe_chunk(
     audio: &murmur_core::audio::AudioBuffer,
 ) -> Option<(String, u64)> {
     let state = app.state::<AppState>();
-    let (developer_mode, profile, vocabulary) = {
+    let (developer_mode, profile, vocabulary, language, translate) = {
         let settings = state.settings.lock().unwrap_or_else(|e| e.into_inner());
         (
             settings.developer_mode,
             settings.transcription_profile,
             settings.custom_vocabulary.clone(),
+            settings.language.clone(),
+            settings.translate_to_english,
         )
     };
     let limits = ProfileLimits::for_profile(profile);
 
     let prepared = preprocess(app, audio, &limits)?;
-    let result = run_engine(app, &state, &prepared, &vocabulary)?;
+    let result = run_engine(app, &state, &prepared, &vocabulary, &language, translate)?;
 
     if let Some(reason) = quality_reject_reason(&result, &limits, prepared.duration_secs) {
         return reject(app, &state, reason, &prepared, Some(&result.text));
@@ -211,6 +213,8 @@ fn run_engine(
     state: &AppState,
     prepared: &PreparedAudio,
     vocabulary: &[String],
+    language: &str,
+    translate: bool,
 ) -> Option<TranscriptionResult> {
     let mut engine_guard = state.engine.lock().unwrap_or_else(|e| e.into_inner());
     let Some(engine) = engine_guard.as_mut() else {
@@ -222,6 +226,8 @@ fn run_engine(
     };
 
     engine.set_vocabulary(vocabulary);
+    engine.set_language(Some(language.to_string()));
+    engine.set_translate(translate);
     let prev = state
         .session_prev_text
         .lock()
