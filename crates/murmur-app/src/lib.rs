@@ -7,6 +7,7 @@ mod commands;
 mod focus;
 mod input;
 mod model_setup;
+mod preview;
 mod session;
 mod sound;
 mod state;

@@ -100,6 +100,11 @@ pub struct Settings {
     /// Play a short chime when recording starts and stops.
     #[serde(default = "default_true")]
     pub sound_feedback: bool,
+
+    /// Show interim transcription as you speak, before the phrase is final.
+    /// Adds a little GPU/CPU work per session; disable for the lowest latency.
+    #[serde(default = "default_true")]
+    pub live_preview: bool,
 }
 
 fn default_hotkey() -> String {
@@ -185,6 +190,7 @@ impl Default for Settings {
             activation_mode: default_activation_mode(),
             custom_vocabulary: Vec::new(),
             sound_feedback: true,
+            live_preview: true,
         }
     }
 }

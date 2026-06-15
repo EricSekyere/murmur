@@ -1,11 +1,52 @@
 const { invoke } = window.__TAURI__.core;
 const { listen } = window.__TAURI__.event;
+const { getCurrentWindow } = window.__TAURI__.window;
+// LogicalSize lives in the `dpi` module and is re-exported by `window`;
+// resolve from whichever the runtime exposes.
+const LogicalSize =
+  (window.__TAURI__.dpi && window.__TAURI__.dpi.LogicalSize) ||
+  window.__TAURI__.window.LogicalSize;
 
 const widget = document.getElementById('widget');
 const micBtn = document.getElementById('mic-btn');
 const label  = document.getElementById('state-label');
 const canvas = document.getElementById('waveform');
 const ctx    = canvas.getContext('2d');
+const caption     = document.getElementById('caption');
+const captionText = document.getElementById('caption-text');
+
+// ─── Live caption: grow the window to show interim text, shrink when done ────
+
+const appWindow = getCurrentWindow();
+// Must match tauri.conf.json's widget window size.
+const COMPACT_SIZE = { w: 176, h: 50 };
+const EXPANDED_SIZE = { w: 320, h: 128 };
+let captionExpanded = false;
+
+async function resizeWidget(size) {
+  try {
+    await appWindow.setSize(new LogicalSize(size.w, size.h));
+  } catch (err) {
+    console.warn('Widget resize failed:', err);
+  }
+}
+
+function showCaption(text) {
+  captionText.textContent = text;
+  if (!captionExpanded) {
+    captionExpanded = true;
+    caption.hidden = false;
+    resizeWidget(EXPANDED_SIZE);
+  }
+}
+
+function hideCaption() {
+  if (!captionExpanded) return;
+  captionExpanded = false;
+  caption.hidden = true;
+  captionText.textContent = '';
+  resizeWidget(COMPACT_SIZE);
+}
 
 // ─── State ───────────────────────────────────────────────────────────────────
 
@@ -48,6 +89,8 @@ function applyState(name, text) {
     startRecordingUi();
   } else {
     stopRecordingUi();
+    // The caption is only meaningful while actively dictating.
+    hideCaption();
   }
 }
 
@@ -175,6 +218,19 @@ listen('audio-level', (event) => {
 
 listen('audio-signal-detected', () => {
   heardSpeech = true;
+});
+
+listen('streaming-partial', (event) => {
+  const text = event.payload?.text;
+  if (!text || currentState !== 'recording') return;
+  showCaption(text);
+});
+
+listen('streaming-phrase', (event) => {
+  const text = event.payload?.text;
+  if (!text || currentState !== 'recording') return;
+  // Keep the confirmed phrase on screen until the next interim replaces it.
+  showCaption(text);
 });
 
 listen('recording-state', (event) => {

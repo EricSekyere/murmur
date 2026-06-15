@@ -112,6 +112,7 @@ listen('recording-state', (event) => {
       transcriptionOutput.innerHTML = '';
       lastTranscription = '';
       sessionPhrases = [];
+      interimText = '';
       copyTranscription.disabled = true;
       wordCount.hidden = true;
       procTime.hidden = true;
@@ -194,6 +195,12 @@ function renderSessionTranscript() {
       needsSpace = true;
     }
   }
+  // Interim text streams in dimmed, ahead of the confirmed phrases, so the
+  // panel reads as a single sentence forming live.
+  if (interimText) {
+    if (needsSpace) html += ' ';
+    html += `<span class="interim">${escapeHtml(interimText)}</span>`;
+  }
   transcriptionOutput.innerHTML = html || '<span class="placeholder">Listening…</span>';
   lastTranscription = sessionPhrases.filter(s => s !== '\n').join(' ');
   copyTranscription.disabled = lastTranscription.length === 0;
@@ -205,10 +212,21 @@ function escapeHtml(s) {
   return div.innerHTML;
 }
 
+listen('streaming-partial', (event) => {
+  const text = event.payload?.text;
+  if (!text) return;
+  // Only meaningful mid-recording; ignore late partials once we've stopped.
+  if (uiState !== 'recording') return;
+  interimText = text;
+  renderSessionTranscript();
+});
+
 listen('streaming-phrase', (event) => {
   const { text, processing_time_ms } = event.payload;
   if (!text) return;
 
+  // The confirmed phrase supersedes whatever interim text was showing.
+  interimText = '';
   sessionPhrases.push(text);
   renderSessionTranscript();
 
@@ -244,6 +262,7 @@ listen('voice-command', (event) => {
 listen('streaming-done', () => {
   stopDurationTimer();
   stopVisualization();
+  interimText = '';
 
   const finalText = lastTranscription.trim();
   if (finalText) {

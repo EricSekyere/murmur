@@ -46,6 +46,7 @@ pub(crate) fn get_status(state: State<'_, AppState>) -> serde_json::Value {
         "custom_vocabulary": settings.custom_vocabulary,
         "sound_feedback": settings.sound_feedback,
         "vad_threshold": settings.vad_threshold,
+        "live_preview": settings.live_preview,
     })
 }
 
@@ -201,6 +202,7 @@ pub(crate) fn update_settings(
     custom_vocabulary: Option<Vec<String>>,
     sound_feedback: Option<bool>,
     vad_threshold: Option<f32>,
+    live_preview: Option<bool>,
 ) -> Result<(), String> {
     let mut settings = state.settings.lock().unwrap_or_else(|e| e.into_inner());
 
@@ -265,6 +267,9 @@ pub(crate) fn update_settings(
             return Err(format!("vad_threshold must be 0.05-0.95, got {}", vt));
         }
         settings.vad_threshold = vt;
+    }
+    if let Some(lp) = live_preview {
+        settings.live_preview = lp;
     }
 
     if let Ok(path) = Settings::default_path() {

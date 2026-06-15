@@ -54,6 +54,9 @@ settingsToggle.addEventListener('click', async () => {
     if (status.sound_feedback != null) {
       soundFeedbackToggle.checked = status.sound_feedback;
     }
+    if (status.live_preview != null) {
+      livePreviewToggle.checked = status.live_preview;
+    }
     developerModeToggle.checked = !!status.developer_mode;
     devModeBadge.hidden = !status.developer_mode;
   } catch (err) {
@@ -261,6 +264,16 @@ soundFeedbackToggle.addEventListener('change', async () => {
     await invoke('update_settings', { sound_feedback: enabled });
   } catch (err) {
     soundFeedbackToggle.checked = !enabled;
+    showToast(`Failed: ${err}`, 'error');
+  }
+});
+
+livePreviewToggle.addEventListener('change', async () => {
+  const enabled = livePreviewToggle.checked;
+  try {
+    await invoke('update_settings', { live_preview: enabled });
+  } catch (err) {
+    livePreviewToggle.checked = !enabled;
     showToast(`Failed: ${err}`, 'error');
   }
 });

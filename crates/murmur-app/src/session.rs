@@ -104,6 +104,7 @@ fn start_session(app: &tauri::AppHandle, state: &AppState) {
             vad_threshold: settings.vad_threshold,
             phrase_pause: Duration::from_secs_f32(settings.phrase_pause_secs),
             session_timeout: Duration::from_secs_f32(settings.session_timeout_secs),
+            live_preview: settings.live_preview,
         }
     };
     let send_result = match state.audio.get() {
@@ -152,9 +153,13 @@ struct SessionStats {
 /// each, and deliver the text to the focused application.
 fn streaming_worker(app: &tauri::AppHandle) {
     let state = app.state::<AppState>();
-    let (output_mode, sound_feedback) = {
+    let (output_mode, sound_feedback, live_preview) = {
         let settings = state.settings.lock().unwrap_or_else(|e| e.into_inner());
-        (settings.output_mode, settings.sound_feedback)
+        (
+            settings.output_mode,
+            settings.sound_feedback,
+            settings.live_preview,
+        )
     };
 
     #[cfg(windows)]
@@ -194,6 +199,10 @@ fn streaming_worker(app: &tauri::AppHandle) {
         crate::sound::play_start();
     }
 
+    // Live preview runs on its own thread so interim decodes never stall the
+    // delivery of finished phrases. `None` when the feature is off.
+    let mut preview = live_preview.then(|| crate::preview::spawn(app.clone()));
+
     let mut stats = SessionStats::default();
     loop {
         match audio.recv_result() {
@@ -208,6 +217,11 @@ fn streaming_worker(app: &tauri::AppHandle) {
                     previous_hwnd,
                     &mut stats,
                 );
+            }
+            Ok(AudioResult::PartialPhrase(buffer)) => {
+                if let Some((tx, _)) = &preview {
+                    let _ = tx.send(buffer);
+                }
             }
             Ok(AudioResult::StreamingDone) => {
                 tracing::info!("Streaming session ended");
@@ -236,6 +250,13 @@ fn streaming_worker(app: &tauri::AppHandle) {
                 break;
             }
         }
+    }
+
+    // Stop the preview worker and wait for any in-flight decode to finish, so
+    // a late partial can't overwrite the final text on screen.
+    if let Some((tx, handle)) = preview.take() {
+        drop(tx);
+        let _ = handle.join();
     }
 
     finish_streaming(app, &state, &stats, sound_feedback);
