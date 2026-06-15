@@ -448,6 +448,18 @@
                 </div>
               </div>
 
+              <!-- Text Snippets -->
+              <div class="settings-group">
+                <div class="settings-row__text">
+                  <label class="settings-label" for="snippets-input">Text Snippets</label>
+                  <span class="settings-hint">Say the trigger, type the expansion. One per line as <code>trigger = expansion</code>. Triggers fire only as a whole phrase.</span>
+                </div>
+                <textarea id="snippets-input" class="settings-textarea" rows="4" placeholder="my email = you@example.com&#10;sign off = Best regards,&#10;ship it = LGTM, merging now."></textarea>
+                <div class="settings-actions">
+                  <button id="snippets-save" class="btn-small" disabled>Save Snippets</button>
+                </div>
+              </div>
+
               <!-- STT Model -->
               <div class="settings-group">
                 <label class="settings-label">STT Model</label>

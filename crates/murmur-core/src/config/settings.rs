@@ -1,5 +1,6 @@
 use crate::output::OutputMode;
 use crate::stt::models::SttModel;
+use crate::voice_commands::Snippet;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -105,6 +106,11 @@ pub struct Settings {
     /// Adds a little GPU/CPU work per session; disable for the lowest latency.
     #[serde(default = "default_true")]
     pub live_preview: bool,
+
+    /// User-defined text snippets: say the trigger phrase, get the expansion
+    /// typed. Matched only when the trigger is the entire phrase.
+    #[serde(default)]
+    pub snippets: Vec<Snippet>,
 }
 
 fn default_hotkey() -> String {
@@ -191,6 +197,7 @@ impl Default for Settings {
             custom_vocabulary: Vec::new(),
             sound_feedback: true,
             live_preview: true,
+            snippets: Vec::new(),
         }
     }
 }

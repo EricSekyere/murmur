@@ -58,5 +58,7 @@ const activationModeSelect = document.getElementById('activation-mode-select');
 const doubleTapKeySelect = document.getElementById('double-tap-key-select');
 const vocabularyInput    = document.getElementById('vocabulary-input');
 const vocabularySave     = document.getElementById('vocabulary-save');
+const snippetsInput      = document.getElementById('snippets-input');
+const snippetsSave       = document.getElementById('snippets-save');
 const soundFeedbackToggle = document.getElementById('sound-feedback-toggle');
 const livePreviewToggle   = document.getElementById('live-preview-toggle');

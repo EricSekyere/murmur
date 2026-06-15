@@ -284,15 +284,24 @@ fn handle_phrase(
     if let Some((text, processing_time_ms)) = transcribe_chunk(app, buffer) {
         stats.had_transcription = true;
         match voice_commands::parse(&text) {
-            VoiceCommand::Text => deliver_text(
-                app,
-                state,
-                &text,
-                output_mode,
-                processing_time_ms,
-                #[cfg(windows)]
-                previous_hwnd,
-            ),
+            VoiceCommand::Text => {
+                // A user snippet expands to its replacement text; otherwise
+                // the spoken phrase is delivered verbatim.
+                let expansion = {
+                    let settings = state.settings.lock().unwrap_or_else(|e| e.into_inner());
+                    voice_commands::match_snippet(&text, &settings.snippets).map(str::to_string)
+                };
+                let delivered = expansion.as_deref().unwrap_or(text.as_str());
+                deliver_text(
+                    app,
+                    state,
+                    delivered,
+                    output_mode,
+                    processing_time_ms,
+                    #[cfg(windows)]
+                    previous_hwnd,
+                );
+            }
             command => execute_command(app, state, command),
         }
     }
@@ -361,6 +370,14 @@ fn execute_command(app: &tauri::AppHandle, state: &AppState, command: VoiceComma
                 .clear();
             keyboard::press_backspace(count)
         }
+        VoiceCommand::SelectAll => keyboard::select_all(),
+        VoiceCommand::Copy => keyboard::copy(),
+        VoiceCommand::Cut => keyboard::cut(),
+        VoiceCommand::Paste => keyboard::paste(),
+        VoiceCommand::Undo => keyboard::undo(),
+        VoiceCommand::Redo => keyboard::redo(),
+        VoiceCommand::Tab => keyboard::press_tab(),
+        VoiceCommand::Escape => keyboard::press_escape(),
         VoiceCommand::Text => return,
     };
     if let Err(e) = result {
@@ -379,6 +396,14 @@ fn execute_command(app: &tauri::AppHandle, state: &AppState, command: VoiceComma
         VoiceCommand::NewLine => "new line",
         VoiceCommand::NewParagraph => "new paragraph",
         VoiceCommand::ScratchThat => "scratch that",
+        VoiceCommand::SelectAll => "select all",
+        VoiceCommand::Copy => "copy",
+        VoiceCommand::Cut => "cut",
+        VoiceCommand::Paste => "paste",
+        VoiceCommand::Undo => "undo",
+        VoiceCommand::Redo => "redo",
+        VoiceCommand::Tab => "tab",
+        VoiceCommand::Escape => "escape",
         VoiceCommand::Text => "",
     };
     tracing::info!("Executed voice command: {}", label);

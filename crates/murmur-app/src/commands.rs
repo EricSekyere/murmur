@@ -5,6 +5,7 @@ use std::sync::Arc;
 use murmur_core::config::{Settings, TranscriptionProfile};
 use murmur_core::output::OutputMode;
 use murmur_core::stt::models::{ModelManager, SttModel};
+use murmur_core::voice_commands::Snippet;
 use tauri::{Emitter, Manager, State};
 use tauri_plugin_global_shortcut::GlobalShortcutExt;
 
@@ -47,6 +48,7 @@ pub(crate) fn get_status(state: State<'_, AppState>) -> serde_json::Value {
         "sound_feedback": settings.sound_feedback,
         "vad_threshold": settings.vad_threshold,
         "live_preview": settings.live_preview,
+        "snippets": settings.snippets,
     })
 }
 
@@ -203,6 +205,7 @@ pub(crate) fn update_settings(
     sound_feedback: Option<bool>,
     vad_threshold: Option<f32>,
     live_preview: Option<bool>,
+    snippets: Option<Vec<Snippet>>,
 ) -> Result<(), String> {
     let mut settings = state.settings.lock().unwrap_or_else(|e| e.into_inner());
 
@@ -270,6 +273,18 @@ pub(crate) fn update_settings(
     }
     if let Some(lp) = live_preview {
         settings.live_preview = lp;
+    }
+    if let Some(snips) = snippets {
+        // Trim, drop entries missing a trigger or expansion, cap at 100.
+        settings.snippets = snips
+            .into_iter()
+            .map(|s| Snippet {
+                trigger: s.trigger.trim().to_string(),
+                expansion: s.expansion,
+            })
+            .filter(|s| !s.trigger.is_empty() && !s.expansion.is_empty())
+            .take(100)
+            .collect();
     }
 
     if let Ok(path) = Settings::default_path() {

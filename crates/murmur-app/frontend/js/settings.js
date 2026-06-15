@@ -51,6 +51,12 @@ settingsToggle.addEventListener('click', async () => {
       vocabularyInput.value = status.custom_vocabulary.join('\n');
       vocabularySave.disabled = true;
     }
+    if (Array.isArray(status.snippets)) {
+      snippetsInput.value = status.snippets
+        .map(s => `${s.trigger} = ${s.expansion}`)
+        .join('\n');
+      snippetsSave.disabled = true;
+    }
     if (status.sound_feedback != null) {
       soundFeedbackToggle.checked = status.sound_feedback;
     }
@@ -293,6 +299,37 @@ vocabularySave.addEventListener('click', async () => {
     showToast(`Dictionary saved (${words.length} ${words.length === 1 ? 'term' : 'terms'})`, 'success');
   } catch (err) {
     vocabularySave.disabled = false;
+    showToast(`Failed: ${err}`, 'error');
+  }
+});
+
+// Parse "trigger = expansion" lines into snippet objects. Only the first '='
+// splits, so an expansion can itself contain '='.
+function parseSnippets(text) {
+  return text
+    .split('\n')
+    .map(line => {
+      const eq = line.indexOf('=');
+      if (eq === -1) return null;
+      const trigger = line.slice(0, eq).trim();
+      const expansion = line.slice(eq + 1).trim();
+      return trigger && expansion ? { trigger, expansion } : null;
+    })
+    .filter(Boolean);
+}
+
+snippetsInput.addEventListener('input', () => {
+  snippetsSave.disabled = false;
+});
+
+snippetsSave.addEventListener('click', async () => {
+  const snippets = parseSnippets(snippetsInput.value);
+  snippetsSave.disabled = true;
+  try {
+    await invoke('update_settings', { snippets });
+    showToast(`Snippets saved (${snippets.length} ${snippets.length === 1 ? 'snippet' : 'snippets'})`, 'success');
+  } catch (err) {
+    snippetsSave.disabled = false;
     showToast(`Failed: ${err}`, 'error');
   }
 });
