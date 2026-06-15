@@ -115,9 +115,11 @@ fn default_model() -> SttModel {
 }
 
 fn default_vad_threshold() -> f32 {
-    // 0.5 (Silero's own default). 0.3 catches quieter speech but lets
-    // sighs/breaths through, which whisper then hallucinates words for.
-    0.5
+    // Sensitive enough to catch normal speech without the user raising their
+    // voice. Higher values (0.5+) reject quieter speech and force the user to
+    // speak unnaturally loudly. Hallucinations on breaths/noise are handled
+    // after transcription by the confidence and repeated-phrase filters.
+    0.3
 }
 
 fn default_silence_rms_threshold() -> f32 {

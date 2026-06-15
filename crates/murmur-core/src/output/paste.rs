@@ -79,8 +79,13 @@ impl ClipboardPasteOutput {
 
         let paste_result = simulate_paste();
 
-        // Wait for the paste to be processed by the target application.
-        std::thread::sleep(std::time::Duration::from_millis(100));
+        // Give the target app time to actually read the clipboard before we
+        // restore it. If we restore too soon, a slow app (e.g. an Electron
+        // terminal) reads the clipboard after the restore and pastes the
+        // user's previous content instead of our text. 250ms covers all but
+        // pathologically slow apps; this path is only reached for genuine
+        // terminals now, so the longer wait is not on the common path.
+        std::thread::sleep(std::time::Duration::from_millis(250));
 
         // Restore the original clipboard content. If there was nothing
         // restorable (the clipboard was empty or held non-text content like

@@ -282,17 +282,17 @@ impl DictationSession {
     }
 
     /// How many consecutive speech-positive chunks are needed to open a
-    /// phrase. With Silero VAD attached, require 3 (~150ms at the worker's
-    /// 50ms tick) of sustained speech so transient noises (keyboard clicks,
-    /// a door, a distant sound) and breaths don't start a phrase that whisper
-    /// then hallucinates words for. The preroll still captures the real
-    /// utterance start, so a slightly later onset loses no speech. The RMS
-    /// fallback keeps single-chunk behaviour: its calibrated threshold is
-    /// already the noise gate.
+    /// phrase. With Silero VAD attached, require 2 (~100ms at the worker's
+    /// 50ms tick) so an isolated breath/click frame doesn't start a phrase,
+    /// while keeping detection responsive to normal speech. Hallucinations on
+    /// noise are caught after transcription by the confidence and
+    /// repeated-phrase filters, not by making the input gate strict (which
+    /// would force the user to speak unnaturally loudly). The RMS fallback
+    /// keeps single-chunk behaviour: its calibrated threshold is the gate.
     fn onset_chunks_required(&self) -> u32 {
         #[cfg(feature = "vad")]
         if self.vad.is_some() {
-            return 3;
+            return 2;
         }
         1
     }
