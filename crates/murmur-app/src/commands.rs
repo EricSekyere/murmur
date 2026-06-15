@@ -45,6 +45,7 @@ pub(crate) fn get_status(state: State<'_, AppState>) -> serde_json::Value {
         "double_tap_key": settings.double_tap_key,
         "custom_vocabulary": settings.custom_vocabulary,
         "sound_feedback": settings.sound_feedback,
+        "vad_threshold": settings.vad_threshold,
     })
 }
 
@@ -199,6 +200,7 @@ pub(crate) fn update_settings(
     double_tap_key: Option<String>,
     custom_vocabulary: Option<Vec<String>>,
     sound_feedback: Option<bool>,
+    vad_threshold: Option<f32>,
 ) -> Result<(), String> {
     let mut settings = state.settings.lock().unwrap_or_else(|e| e.into_inner());
 
@@ -257,6 +259,12 @@ pub(crate) fn update_settings(
     }
     if let Some(sf) = sound_feedback {
         settings.sound_feedback = sf;
+    }
+    if let Some(vt) = vad_threshold {
+        if !(0.05..=0.95).contains(&vt) {
+            return Err(format!("vad_threshold must be 0.05-0.95, got {}", vt));
+        }
+        settings.vad_threshold = vt;
     }
 
     if let Ok(path) = Settings::default_path() {

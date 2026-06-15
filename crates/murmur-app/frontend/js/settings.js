@@ -24,6 +24,11 @@ settingsToggle.addEventListener('click', async () => {
       phrasePauseRange.value = status.phrase_pause_secs;
       phrasePauseValue.textContent = `${parseFloat(status.phrase_pause_secs).toFixed(1)}s`;
     }
+    if (status.vad_threshold != null) {
+      const pct = thresholdToSensitivity(status.vad_threshold);
+      micSensitivityRange.value = pct;
+      micSensitivityValue.textContent = `${pct}%`;
+    }
     if (status.session_timeout_secs != null) {
       sessionTimeoutRange.value = status.session_timeout_secs;
       sessionTimeoutValue.textContent = `${status.session_timeout_secs}s`;
@@ -161,6 +166,37 @@ phrasePauseRange.addEventListener('input', () => {
 phrasePauseRange.addEventListener('change', async () => {
   try {
     await invoke('update_settings', { phrase_pause_secs: parseFloat(phrasePauseRange.value) });
+  } catch (err) {
+    showToast(`Failed: ${err}`, 'error');
+  }
+});
+
+// Mic Sensitivity. The slider is a 0-100 "sensitivity" percent; higher
+// sensitivity maps to a lower VAD threshold (picks up quieter speech).
+// 0% -> 0.60 (strict), 100% -> 0.10 (very sensitive).
+const SENS_MIN_THRESHOLD = 0.10;
+const SENS_MAX_THRESHOLD = 0.60;
+
+function sensitivityToThreshold(pct) {
+  const t = SENS_MAX_THRESHOLD - (pct / 100) * (SENS_MAX_THRESHOLD - SENS_MIN_THRESHOLD);
+  return Math.round(t * 100) / 100;
+}
+
+function thresholdToSensitivity(threshold) {
+  const clamped = Math.min(SENS_MAX_THRESHOLD, Math.max(SENS_MIN_THRESHOLD, threshold));
+  const pct = (SENS_MAX_THRESHOLD - clamped) / (SENS_MAX_THRESHOLD - SENS_MIN_THRESHOLD) * 100;
+  return Math.round(pct / 5) * 5; // snap to the slider's step
+}
+
+micSensitivityRange.addEventListener('input', () => {
+  micSensitivityValue.textContent = `${micSensitivityRange.value}%`;
+});
+
+micSensitivityRange.addEventListener('change', async () => {
+  const threshold = sensitivityToThreshold(parseInt(micSensitivityRange.value, 10));
+  try {
+    await invoke('update_settings', { vad_threshold: threshold });
+    showToast('Mic sensitivity updated', 'success');
   } catch (err) {
     showToast(`Failed: ${err}`, 'error');
   }
