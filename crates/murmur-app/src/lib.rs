@@ -69,6 +69,7 @@ pub fn run() -> anyhow::Result<()> {
             last_delivered_len: Mutex::new(0),
             history: Mutex::new(history),
             history_path,
+            session_dev_mode: Mutex::new(None),
             #[cfg(windows)]
             previous_foreground: Mutex::new(0),
             #[cfg(windows)]

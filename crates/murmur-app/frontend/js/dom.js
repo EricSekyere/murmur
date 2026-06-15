@@ -66,5 +66,7 @@ const vocabularyInput    = document.getElementById('vocabulary-input');
 const vocabularySave     = document.getElementById('vocabulary-save');
 const snippetsInput      = document.getElementById('snippets-input');
 const snippetsSave       = document.getElementById('snippets-save');
+const appProfilesInput   = document.getElementById('app-profiles-input');
+const appProfilesSave    = document.getElementById('app-profiles-save');
 const soundFeedbackToggle = document.getElementById('sound-feedback-toggle');
 const livePreviewToggle   = document.getElementById('live-preview-toggle');

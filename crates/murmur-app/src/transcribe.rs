@@ -93,10 +93,15 @@ pub(crate) fn transcribe_chunk(
     audio: &murmur_core::audio::AudioBuffer,
 ) -> Option<(String, u64)> {
     let state = app.state::<AppState>();
+    // A matched app profile can override developer mode for this session.
+    let dev_override = *state
+        .session_dev_mode
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     let (developer_mode, profile, vocabulary, language, translate) = {
         let settings = state.settings.lock().unwrap_or_else(|e| e.into_inner());
         (
-            settings.developer_mode,
+            dev_override.unwrap_or(settings.developer_mode),
             settings.transcription_profile,
             settings.custom_vocabulary.clone(),
             settings.language.clone(),

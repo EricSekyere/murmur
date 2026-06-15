@@ -153,10 +153,30 @@ struct SessionStats {
 /// each, and deliver the text to the focused application.
 fn streaming_worker(app: &tauri::AppHandle) {
     let state = app.state::<AppState>();
+    // Resolve any per-app profile for the foreground app up front, so its
+    // overrides apply for the whole session.
+    let target_app = current_app_name();
     let (output_mode, sound_feedback, live_preview) = {
         let settings = state.settings.lock().unwrap_or_else(|e| e.into_inner());
+        let profile = target_app
+            .as_deref()
+            .and_then(|app| settings.app_profiles.iter().find(|p| p.matches(app)));
+        let dev_override = profile.and_then(|p| p.developer_mode);
+        *state
+            .session_dev_mode
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = dev_override;
+        if let Some(p) = profile {
+            tracing::info!(
+                "Applied app profile '{}' for {:?}",
+                p.app,
+                target_app.as_deref().unwrap_or("?")
+            );
+        }
         (
-            settings.output_mode,
+            profile
+                .and_then(|p| p.output_mode)
+                .unwrap_or(settings.output_mode),
             settings.sound_feedback,
             settings.live_preview,
         )
@@ -494,6 +514,11 @@ fn finish_streaming(
     }
 
     *state.recording.lock().unwrap_or_else(|e| e.into_inner()) = false;
+    // Drop any per-app override so the next session starts from the globals.
+    *state
+        .session_dev_mode
+        .lock()
+        .unwrap_or_else(|e| e.into_inner()) = None;
     emit_recording_state(app, false, false);
     let _ = app.emit("streaming-done", serde_json::json!({}));
 }

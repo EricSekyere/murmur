@@ -62,6 +62,12 @@ settingsToggle.addEventListener('click', async () => {
         .join('\n');
       snippetsSave.disabled = true;
     }
+    if (Array.isArray(status.app_profiles)) {
+      appProfilesInput.value = status.app_profiles
+        .map(formatAppProfile)
+        .join('\n');
+      appProfilesSave.disabled = true;
+    }
     if (status.sound_feedback != null) {
       soundFeedbackToggle.checked = status.sound_feedback;
     }
@@ -368,6 +374,57 @@ snippetsSave.addEventListener('click', async () => {
     showToast(`Snippets saved (${snippets.length} ${snippets.length === 1 ? 'snippet' : 'snippets'})`, 'success');
   } catch (err) {
     snippetsSave.disabled = false;
+    showToast(`Failed: ${err}`, 'error');
+  }
+});
+
+const OUTPUT_MODES = ['auto', 'keyboard', 'clipboard_paste', 'clipboard'];
+
+// Render a profile object back to its "app = options" line.
+function formatAppProfile(p) {
+  const opts = [];
+  if (p.developer_mode === true) opts.push('dev');
+  else if (p.developer_mode === false) opts.push('plain');
+  if (p.output_mode) opts.push(p.output_mode);
+  return opts.length ? `${p.app} = ${opts.join(', ')}` : p.app;
+}
+
+// Parse "app = dev, clipboard_paste" lines into profile objects. Unknown
+// tokens are ignored; a line needs an app and at least one valid override.
+function parseAppProfiles(text) {
+  return text
+    .split('\n')
+    .map(line => {
+      const eq = line.indexOf('=');
+      if (eq === -1) return null;
+      const app = line.slice(0, eq).trim();
+      if (!app) return null;
+      const tokens = line.slice(eq + 1).split(',').map(t => t.trim().toLowerCase()).filter(Boolean);
+      let output_mode = null;
+      let developer_mode = null;
+      for (const t of tokens) {
+        if (t === 'dev' || t === 'developer') developer_mode = true;
+        else if (t === 'plain' || t === 'nodev') developer_mode = false;
+        else if (OUTPUT_MODES.includes(t)) output_mode = t;
+      }
+      if (output_mode === null && developer_mode === null) return null;
+      return { app, output_mode, developer_mode };
+    })
+    .filter(Boolean);
+}
+
+appProfilesInput.addEventListener('input', () => {
+  appProfilesSave.disabled = false;
+});
+
+appProfilesSave.addEventListener('click', async () => {
+  const appProfiles = parseAppProfiles(appProfilesInput.value);
+  appProfilesSave.disabled = true;
+  try {
+    await invoke('update_settings', { app_profiles: appProfiles });
+    showToast(`Profiles saved (${appProfiles.length} ${appProfiles.length === 1 ? 'profile' : 'profiles'})`, 'success');
+  } catch (err) {
+    appProfilesSave.disabled = false;
     showToast(`Failed: ${err}`, 'error');
   }
 });

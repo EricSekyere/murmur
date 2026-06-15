@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use murmur_core::config::{Settings, TranscriptionProfile};
+use murmur_core::config::{AppProfile, Settings, TranscriptionProfile};
 use murmur_core::output::OutputMode;
 use murmur_core::stt::models::{ModelManager, SttModel};
 use murmur_core::voice_commands::Snippet;
@@ -52,6 +52,7 @@ pub(crate) fn get_status(state: State<'_, AppState>) -> serde_json::Value {
         "language": settings.language,
         "translate_to_english": settings.translate_to_english,
         "model_multilingual": settings.model.is_multilingual(),
+        "app_profiles": settings.app_profiles,
     })
 }
 
@@ -232,6 +233,7 @@ pub(crate) fn update_settings(
     snippets: Option<Vec<Snippet>>,
     language: Option<String>,
     translate_to_english: Option<bool>,
+    app_profiles: Option<Vec<AppProfile>>,
 ) -> Result<(), String> {
     let mut settings = state.settings.lock().unwrap_or_else(|e| e.into_inner());
 
@@ -320,6 +322,22 @@ pub(crate) fn update_settings(
     }
     if let Some(tr) = translate_to_english {
         settings.translate_to_english = tr;
+    }
+    if let Some(profiles) = app_profiles {
+        // Trim the app pattern, drop entries with no pattern or no override,
+        // cap at 50 to keep session-start matching cheap.
+        settings.app_profiles = profiles
+            .into_iter()
+            .map(|p| AppProfile {
+                app: p.app.trim().to_lowercase(),
+                output_mode: p.output_mode,
+                developer_mode: p.developer_mode,
+            })
+            .filter(|p| {
+                !p.app.is_empty() && (p.output_mode.is_some() || p.developer_mode.is_some())
+            })
+            .take(50)
+            .collect();
     }
 
     if let Ok(path) = Settings::default_path() {
