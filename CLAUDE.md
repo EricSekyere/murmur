@@ -1,6 +1,6 @@
 # Murmur
 
-Voice-to-text desktop tool for developers. See `prd.md` for full requirements, `CHECKPOINT.md` for current progress.
+Voice-to-text desktop tool for developers. See `prd.md` for full requirements and current implementation status.
 
 ## Project Structure
 
