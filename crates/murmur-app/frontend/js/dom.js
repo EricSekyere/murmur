@@ -13,6 +13,7 @@ const dismissError       = document.getElementById('dismiss-error');
 const statusBadge        = document.getElementById('status-badge');
 const micWrapper         = document.getElementById('mic-wrapper');
 const micBtn             = document.getElementById('mic-btn');
+const findPillBtn        = document.getElementById('find-pill-btn');
 const visualization      = document.getElementById('visualization');
 const voiceBarsContainer = document.getElementById('voice-bars');
 const levelFill          = document.getElementById('level-fill');

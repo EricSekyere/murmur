@@ -34,6 +34,7 @@ Requires Windows 10/11 x64 with an AVX2-capable CPU (any Intel/AMD CPU from ~201
 | Language / translate | Settings → Speech Language and Translate to English (needs the multilingual model) |
 | Text snippets | Settings → Text Snippets (`trigger = expansion`, one per line) |
 | App profiles | Settings → App Profiles (`app = options`, e.g. `code = dev`) |
+| Find the pill | Home view → Find pill (flashes the widget and pulls it back on-screen) |
 | Phrase splitting | Settings → Phrase Pause (silence duration that ends a phrase) |
 | Filtering | Settings → Transcription Profile (Relaxed / Strict) |
 

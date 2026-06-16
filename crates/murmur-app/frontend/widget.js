@@ -75,8 +75,11 @@ function setLabel(text) {
 function applyState(name, text) {
   stateToken += 1;
   if (name !== currentState) {
+    // Swap only the state class so transient classes (e.g. the locate flash)
+    // survive a state change mid-animation.
+    widget.classList.remove(`pill--${currentState}`);
+    widget.classList.add(`pill--${name}`);
     currentState = name;
-    widget.className = `pill pill--${name}`;
   }
   if (text !== undefined) setLabel(text);
 
@@ -266,6 +269,14 @@ listen('hotkey-error', (event) => {
 
 listen('streaming-done', () => {
   applyState('idle', 'murmur');
+});
+
+// "Find pill" from the dashboard — flash so the user can spot the widget.
+listen('locate-pill', () => {
+  widget.classList.remove('locating');
+  void widget.offsetWidth; // reflow so re-adding restarts the animation
+  widget.classList.add('locating');
+  setTimeout(() => widget.classList.remove('locating'), 2600);
 });
 
 listen('transcription-error', (event) => {

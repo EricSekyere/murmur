@@ -73,11 +73,15 @@ jobs:
           releaseBody: |
             Fast, private, on-device dictation for Windows.
 
-            ## What's new in 0.3.0
+            ## What's new in 0.3.1
 
-            - **Live preview.** Your words now appear as you speak, both in the dashboard and as a caption under the floating pill, before each phrase is final. Toggle it in Settings.
-            - **Voice editing commands.** Say "select all", "copy that", "cut", "paste", "undo", "redo", "press tab", or "press escape" as a whole phrase, alongside the existing "new line", "new paragraph", and "scratch that".
-            - **Text snippets.** Define "trigger = expansion" pairs in Settings and say the trigger to type the expansion.
+            - **Find pill.** A new button in the dashboard flashes the floating pill so you can spot it, and pulls it back on-screen if it has been dragged off a monitor.
+
+            ## Also in 0.3.x
+
+            - **Live preview.** Your words appear as you speak, in the dashboard and as a caption under the floating pill, before each phrase is final.
+            - **Voice editing commands.** "select all", "copy that", "cut", "paste", "undo", "redo", "press tab", and "press escape", alongside "new line", "new paragraph", and "scratch that".
+            - **Text snippets.** Define "trigger = expansion" pairs and say the trigger to type the expansion.
             - **Multilingual and translate.** Transcribe many languages, or translate your speech straight to English, using the multilingual model (Large v3 Turbo).
             - **Searchable history.** Every delivered phrase is saved locally, tagged with the app it landed in, and filterable from the dashboard.
             - **Per-app profiles.** Automatically switch output mode and developer mode based on the focused application.

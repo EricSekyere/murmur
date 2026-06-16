@@ -98,6 +98,7 @@ pub fn run() -> anyhow::Result<()> {
             commands::update_settings,
             commands::list_audio_devices,
             commands::set_widget_visible,
+            commands::locate_widget,
             updater::install_update,
         ])
         .setup(move |app| setup_app(app, engine_for_setup, model, &hotkey, show_widget_on_start))
