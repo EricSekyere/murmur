@@ -22,14 +22,8 @@ pub enum VoiceCommand {
     NewParagraph,
     /// Delete the previously delivered phrase.
     ScratchThat,
-    /// Select all (Ctrl/Cmd+A).
-    SelectAll,
     /// Copy the selection (Ctrl/Cmd+C).
     Copy,
-    /// Cut the selection (Ctrl/Cmd+X).
-    Cut,
-    /// Paste (Ctrl/Cmd+V).
-    Paste,
     /// Undo (Ctrl/Cmd+Z).
     Undo,
     /// Redo (Ctrl+Y / Cmd+Shift+Z).
@@ -58,10 +52,7 @@ pub fn parse(phrase: &str) -> VoiceCommand {
         "new line" | "newline" => VoiceCommand::NewLine,
         "new paragraph" => VoiceCommand::NewParagraph,
         "scratch that" | "delete that" => VoiceCommand::ScratchThat,
-        "select all" | "select everything" => VoiceCommand::SelectAll,
         "copy that" | "copy selection" => VoiceCommand::Copy,
-        "cut that" | "cut selection" => VoiceCommand::Cut,
-        "paste" | "paste that" => VoiceCommand::Paste,
         "undo" | "undo that" => VoiceCommand::Undo,
         "redo" | "redo that" => VoiceCommand::Redo,
         "press tab" | "tab key" => VoiceCommand::Tab,
@@ -95,14 +86,21 @@ mod tests {
 
     #[test]
     fn recognizes_editing_commands() {
-        assert_eq!(parse("select all"), VoiceCommand::SelectAll);
         assert_eq!(parse("Copy that."), VoiceCommand::Copy);
-        assert_eq!(parse("cut selection"), VoiceCommand::Cut);
-        assert_eq!(parse("paste"), VoiceCommand::Paste);
         assert_eq!(parse("undo"), VoiceCommand::Undo);
         assert_eq!(parse("redo that"), VoiceCommand::Redo);
         assert_eq!(parse("press tab"), VoiceCommand::Tab);
         assert_eq!(parse("press escape"), VoiceCommand::Escape);
+    }
+
+    #[test]
+    fn destructive_commands_are_not_voice_triggered() {
+        // Paste/cut/select-all can inject the clipboard or destroy a document
+        // from a single misrecognition, so they are deliberately plain text.
+        assert_eq!(parse("paste"), VoiceCommand::Text);
+        assert_eq!(parse("paste that"), VoiceCommand::Text);
+        assert_eq!(parse("cut that"), VoiceCommand::Text);
+        assert_eq!(parse("select all"), VoiceCommand::Text);
     }
 
     #[test]

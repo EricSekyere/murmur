@@ -8,7 +8,7 @@ Fast, private, on-device dictation for Windows. Press a hotkey, speak, and your 
 - **Fast** — Whisper (CUDA-accelerated on NVIDIA GPUs) or Parakeet (DirectML) transcribe each phrase in well under a second.
 - **Live preview** — watch your words appear as you speak, both in the dashboard and as a caption under the floating pill, before each phrase is final.
 - **Types anywhere** — text is delivered to the focused window via paste or keystroke simulation, with fallbacks for terminals and elevated windows.
-- **Voice editing commands** — say "new line", "new paragraph", "scratch that", "select all", "copy that", "cut", "paste", "undo", "redo", "press tab", or "press escape" as a whole phrase.
+- **Voice editing commands** — say "new line", "new paragraph", "scratch that", "copy that", "undo", "redo", "press tab", or "press escape" as a whole phrase.
 - **Text snippets** — define `trigger = expansion` pairs; say the trigger to type the expansion (emails, sign-offs, boilerplate).
 - **Multilingual and translate** — transcribe dozens of languages, or translate your speech straight to English, with the multilingual model.
 - **Noise-robust** — Silero VAD plus decoder-confidence gating keep sighs, breaths, and background noise from becoming phantom words.

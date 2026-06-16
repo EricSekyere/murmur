@@ -49,6 +49,17 @@ pub fn run() -> anyhow::Result<()> {
     let engine_for_setup = Arc::clone(&engine);
 
     tauri::Builder::default()
+        // Must be the first plugin: a second launch hands off to the running
+        // instance and exits, so two copies can never run at once. Multiple
+        // instances would double-capture audio and race on the clipboard
+        // during clipboard+paste output (corrupting what gets pasted).
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.show();
+                let _ = window.unminimize();
+                let _ = window.set_focus();
+            }
+        }))
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .plugin(

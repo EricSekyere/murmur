@@ -91,20 +91,12 @@ pub fn press_backspace(count: usize) -> Result<()> {
 
 /// Editing chords for spoken commands. The primary modifier is Ctrl on
 /// Windows/Linux and Cmd on macOS, matching each platform's conventions.
-pub fn select_all() -> Result<()> {
-    primary_chord(b'A')
-}
-
+///
+/// Note: paste/cut/select-all are intentionally absent. Triggering them by
+/// voice risks injecting the clipboard or destroying a document on a single
+/// misrecognition, so they are not exposed as commands.
 pub fn copy() -> Result<()> {
     primary_chord(b'C')
-}
-
-pub fn cut() -> Result<()> {
-    primary_chord(b'X')
-}
-
-pub fn paste() -> Result<()> {
-    primary_chord(b'V')
 }
 
 pub fn undo() -> Result<()> {
