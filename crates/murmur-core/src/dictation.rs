@@ -540,6 +540,33 @@ mod tests {
     }
 
     #[test]
+    fn split_preserves_all_audio() {
+        let rate = 16_000;
+        let mut session = DictationSession::new(
+            DictationConfig {
+                max_phrase: Duration::from_millis(100),
+                split_search: Duration::from_millis(50),
+                min_phrase: Duration::from_millis(20),
+                ..DictationConfig::default()
+            },
+            rate,
+        );
+
+        // Stage an over-length phrase directly and force a split. At 16kHz the
+        // flushed head isn't resampled, so head + carried-forward tail must add
+        // back up to the original: the split never drops audio.
+        let total = 4000;
+        session.phrase_samples = vec![0.05_f32; total];
+        session.in_speech = true;
+
+        let head = session
+            .flush_phrase_at_split()
+            .expect("an over-length phrase must yield a head");
+        assert!(head.samples.len() >= session.min_phrase_samples);
+        assert_eq!(head.samples.len() + session.phrase_samples.len(), total);
+    }
+
+    #[test]
     fn split_picks_lowest_energy_frame() {
         // Build a buffer where samples[2400..2880] is silence (480 samples =
         // one frame at 16kHz/30ms) and the rest is loud. The split should
