@@ -284,23 +284,49 @@ impl Settings {
     }
 
     /// Load settings from a TOML file, falling back to defaults.
-    /// On first run (no config file), creates the file with defaults.
+    ///
+    /// On first run (no config file), creates the file with defaults. If the
+    /// file exists but is unreadable or invalid, it is backed up and defaults
+    /// are used so a corrupt config never blocks startup.
     pub fn load(path: &PathBuf) -> Result<Self> {
-        if path.exists() {
-            let content = std::fs::read_to_string(path)?;
-            let settings: Settings = toml::from_str(&content)?;
-            settings.validate()?;
-            tracing::info!("Loaded config from {}", path.display());
-            Ok(settings)
-        } else {
+        if !path.exists() {
             tracing::info!(
                 "No config file found, creating defaults at {}",
                 path.display()
             );
             let settings = Self::default();
             settings.save(path)?;
-            Ok(settings)
+            return Ok(settings);
         }
+
+        match Self::read_and_validate(path) {
+            Ok(settings) => {
+                tracing::info!("Loaded config from {}", path.display());
+                Ok(settings)
+            }
+            Err(e) => {
+                let backup = path.with_extension("toml.bak");
+                tracing::warn!(
+                    "Config at {} is unreadable or invalid ({}); backing it up to {} and using defaults",
+                    path.display(),
+                    e,
+                    backup.display()
+                );
+                let _ = std::fs::rename(path, &backup);
+                let settings = Self::default();
+                if let Err(save_err) = settings.save(path) {
+                    tracing::warn!("Failed to write fresh defaults: {}", save_err);
+                }
+                Ok(settings)
+            }
+        }
+    }
+
+    fn read_and_validate(path: &PathBuf) -> Result<Self> {
+        let content = std::fs::read_to_string(path)?;
+        let settings: Settings = toml::from_str(&content)?;
+        settings.validate()?;
+        Ok(settings)
     }
 
     /// Save settings to a TOML file (atomic: write to tempfile, then rename).
@@ -367,6 +393,27 @@ impl Settings {
                     anyhow::bail!("hotkey has empty part in '{}'", hotkey);
                 }
             }
+        }
+
+        if self.activation_mode != "toggle" && self.activation_mode != "hold" {
+            anyhow::bail!(
+                "activation_mode must be 'toggle' or 'hold', got '{}'",
+                self.activation_mode
+            );
+        }
+
+        if self.language.trim().is_empty() {
+            anyhow::bail!("language cannot be empty (use 'auto' or a code like 'en')");
+        }
+
+        if self.snippets.len() > 100 {
+            anyhow::bail!("too many snippets ({}, max 100)", self.snippets.len());
+        }
+        if self.app_profiles.len() > 50 {
+            anyhow::bail!(
+                "too many app profiles ({}, max 50)",
+                self.app_profiles.len()
+            );
         }
 
         Ok(())

@@ -249,9 +249,6 @@ listen('recording-state', (event) => {
   }
 });
 
-listen('hotkey-transcribed', () => {
-  applyState('idle', 'murmur');
-});
 
 listen('hotkey-error', (event) => {
   const msg = event.payload?.error || '';

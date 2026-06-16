@@ -33,6 +33,10 @@ use state::AppState;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() -> anyhow::Result<()> {
+    // Migrate the legacy config directory before logging runs: init_logging
+    // creates the new murmur directory, and the migration only fires when that
+    // directory does not yet exist.
+    Settings::migrate_from_voitex();
     let _log_guard = init_logging();
     let settings = load_settings()?;
     let model = settings.model;
@@ -148,7 +152,6 @@ fn init_logging() -> tracing_appender::non_blocking::WorkerGuard {
 }
 
 fn load_settings() -> anyhow::Result<Settings> {
-    Settings::migrate_from_voitex();
     let config_path = Settings::default_path().context("Failed to determine config path")?;
     let mut settings = Settings::load(&config_path).context("Failed to load settings")?;
 

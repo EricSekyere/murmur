@@ -8,7 +8,6 @@ let durationTimerHandle = null;
 let lastTranscription = '';
 let history = [];                  // backend-backed entries, newest first
 let historyQuery = '';             // active history search filter
-let transcriptionHandled = false;  // guard: prevent double-display from invoke + event
 let currentSession = null;
 let sessionPhrases = [];           // delivered segments this session; '\n' marks line breaks
 let interimText = '';              // live partial for the phrase currently being spoken

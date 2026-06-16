@@ -46,6 +46,9 @@ impl Default for DictationConfig {
 /// 30ms @ 16 kHz; matches transcribe-rs's `frame_size = 480`.
 const SPLIT_FRAME_MS: u64 = 30;
 
+/// Trailing window of an in-progress phrase used for live preview snapshots.
+const PREVIEW_WINDOW_SECS: u64 = 12;
+
 #[derive(Debug, Clone)]
 pub enum DictationEvent {
     Level(f32),
@@ -305,12 +308,18 @@ impl DictationSession {
     /// partial transcription. Returns `None` while idle or before the phrase
     /// has enough audio to be worth transcribing. Does not mutate state, so it
     /// is safe to call repeatedly while a phrase is still being spoken.
+    ///
+    /// Only the recent tail is returned. A preview just needs the latest words,
+    /// and bounding it keeps the resample and the preview decode cheap on long
+    /// phrases so they cannot starve the realtime tick or delay the final.
     pub fn current_phrase(&self) -> Option<AudioBuffer> {
         if !self.in_speech || self.phrase_samples.len() < self.min_phrase_samples {
             return None;
         }
+        let window = (PREVIEW_WINDOW_SECS * self.native_rate as u64) as usize;
+        let start = self.phrase_samples.len().saturating_sub(window);
         Some(AudioBuffer::from_raw(
-            &self.phrase_samples,
+            &self.phrase_samples[start..],
             self.native_rate,
             1,
         ))
@@ -537,6 +546,33 @@ mod tests {
                 .iter()
                 .any(|event| matches!(event, DictationEvent::PhraseReady(_)))
         );
+    }
+
+    #[test]
+    fn split_preserves_all_audio() {
+        let rate = 16_000;
+        let mut session = DictationSession::new(
+            DictationConfig {
+                max_phrase: Duration::from_millis(100),
+                split_search: Duration::from_millis(50),
+                min_phrase: Duration::from_millis(20),
+                ..DictationConfig::default()
+            },
+            rate,
+        );
+
+        // Stage an over-length phrase directly and force a split. At 16kHz the
+        // flushed head isn't resampled, so head + carried-forward tail must add
+        // back up to the original: the split never drops audio.
+        let total = 4000;
+        session.phrase_samples = vec![0.05_f32; total];
+        session.in_speech = true;
+
+        let head = session
+            .flush_phrase_at_split()
+            .expect("an over-length phrase must yield a head");
+        assert!(head.samples.len() >= session.min_phrase_samples);
+        assert_eq!(head.samples.len() + session.phrase_samples.len(), total);
     }
 
     #[test]

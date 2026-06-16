@@ -65,6 +65,20 @@ fn remove_fillers(text: &str) -> String {
     result
 }
 
+/// Push the UTF-8 character starting at byte `i` (a char boundary) onto
+/// `result` and return the index just past it. Avoids `bytes[i] as char`,
+/// which corrupts multibyte characters by treating a continuation byte as a
+/// Latin-1 char.
+fn push_char_at(result: &mut String, text: &str, i: usize) -> usize {
+    match text[i..].chars().next() {
+        Some(ch) => {
+            result.push(ch);
+            i + ch.len_utf8()
+        }
+        None => i + 1,
+    }
+}
+
 /// Remove a phrase (case-insensitive, whole-word boundaries) from text.
 fn remove_phrase_ci(text: &str, phrase: &str) -> String {
     let lower = text.to_lowercase();
@@ -75,8 +89,7 @@ fn remove_phrase_ci(text: &str, phrase: &str) -> String {
     let plen = phrase_lower.len();
 
     while i < text.len() {
-        if i + plen <= text.len()
-            && lower[i..i + plen] == phrase_lower
+        if lower.get(i..i + plen).is_some_and(|s| s == phrase_lower)
             && is_word_boundary(bytes, i)
             && is_word_boundary_end(bytes, i + plen)
         {
@@ -90,8 +103,7 @@ fn remove_phrase_ci(text: &str, phrase: &str) -> String {
                 i = after;
             }
         } else {
-            result.push(bytes[i] as char);
-            i += 1;
+            i = push_char_at(&mut result, text, i);
         }
     }
 
@@ -111,8 +123,7 @@ fn remove_like_filler(text: &str) -> String {
     let mut i = 0;
 
     while i < text.len() {
-        if i + 4 <= text.len()
-            && &lower[i..i + 4] == "like"
+        if lower.get(i..i + 4) == Some("like")
             && is_word_boundary(bytes, i)
             && is_word_boundary_end(bytes, i + 4)
         {
@@ -143,8 +154,7 @@ fn remove_like_filler(text: &str) -> String {
                 continue;
             }
         }
-        result.push(bytes[i] as char);
-        i += 1;
+        i = push_char_at(&mut result, text, i);
     }
 
     result
@@ -259,8 +269,7 @@ fn expand_symbols(text: &str) -> String {
 
         for &(spoken, symbol) in SYMBOL_MAP.iter() {
             let slen = spoken.len();
-            if i + slen <= text.len()
-                && lower[i..i + slen] == *spoken
+            if lower.get(i..i + slen) == Some(spoken)
                 && is_word_boundary(bytes, i)
                 && is_word_boundary_end(bytes, i + slen)
             {
@@ -433,7 +442,6 @@ static TECH_TERMS: LazyLock<HashMap<String, &str>> = LazyLock::new(|| {
         ("deno", "Deno"),
         ("cargo", "Cargo"),
         ("pip", "pip"),
-        ("homebrew", "Homebrew"),
         ("homebrew", "Homebrew"),
         ("git", "Git"),
         ("jira", "Jira"),
@@ -749,6 +757,18 @@ mod tests {
     #[test]
     fn filler_removes_so_at_start() {
         assert_eq!(remove_fillers("so I want to code"), "I want to code");
+    }
+
+    #[test]
+    fn filler_removal_preserves_non_ascii() {
+        // Byte-as-char rewriting used to corrupt accents/non-Latin text.
+        // Without a filler the text must pass through byte-for-byte.
+        assert_eq!(
+            remove_fillers("café déjà vu Iñtërnatização"),
+            "café déjà vu Iñtërnatização"
+        );
+        // A filler is still removed and the surrounding accents survive.
+        assert_eq!(remove_fillers("um café déjà vu"), "café déjà vu");
     }
 
     #[test]

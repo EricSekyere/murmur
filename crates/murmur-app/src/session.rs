@@ -6,6 +6,7 @@ use std::time::{Duration, Instant};
 use murmur_core::output::OutputMode;
 use murmur_core::voice_commands::{self, VoiceCommand};
 use tauri::{Emitter, Manager};
+use unicode_segmentation::UnicodeSegmentation;
 
 use crate::audio_worker::{AudioResult, StartParams, panic_message};
 use crate::state::{
@@ -33,6 +34,8 @@ pub(crate) fn handle_toggle(app: &tauri::AppHandle) {
         drop(recording);
         stop_session(app, &state);
     } else {
+        // Claim the start under the lock so two sources can never both start.
+        *recording = true;
         drop(recording);
         start_session(app, &state);
     }
@@ -42,9 +45,13 @@ pub(crate) fn handle_toggle(app: &tauri::AppHandle) {
 /// auto-repeats won't restart an active session.
 pub(crate) fn begin_recording(app: &tauri::AppHandle) {
     let state = app.state::<AppState>();
-    let already = *state.recording.lock().unwrap_or_else(|e| e.into_inner());
-    if already {
-        return;
+    {
+        let mut recording = state.recording.lock().unwrap_or_else(|e| e.into_inner());
+        if *recording {
+            return;
+        }
+        // Claim the start atomically so a concurrent toggle cannot also start.
+        *recording = true;
     }
     start_session(app, &state);
 }
@@ -78,15 +85,16 @@ fn stop_session(app: &tauri::AppHandle, state: &AppState) {
 }
 
 fn start_session(app: &tauri::AppHandle, state: &AppState) {
+    // The caller has already claimed the recording flag; release it on any
+    // path that does not actually start a session.
     if !state
         .engine_loaded
         .load(std::sync::atomic::Ordering::Acquire)
     {
-        emit_hotkey_error(app, "Model still loading — please wait");
+        *state.recording.lock().unwrap_or_else(|e| e.into_inner()) = false;
+        emit_hotkey_error(app, "Model still loading, please wait");
         return;
     }
-
-    *state.recording.lock().unwrap_or_else(|e| e.into_inner()) = true;
 
     #[cfg(windows)]
     crate::focus::save_output_target_window(state);
@@ -352,11 +360,13 @@ fn deliver_text(
     );
 
     // Focused modes append a trailing space (dispatch_output); clipboard-only
-    // doesn't type, so there is nothing to scratch.
+    // doesn't type, so there is nothing to scratch. Count grapheme clusters,
+    // not scalar values, so one backspace per visible character: emoji,
+    // combining marks, and newlines in a snippet expansion each erase as one.
     let delivered = if matches!(output_mode, OutputMode::Clipboard | OutputMode::Stdout) {
         0
     } else {
-        text.trim().chars().count() + 1
+        text.trim().graphemes(true).count() + 1
     };
     *state
         .last_delivered_len

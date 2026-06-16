@@ -65,7 +65,19 @@ impl AudioCapture {
 
         let config = supported.config();
 
-        let stream = build_input_stream_for_format(&device, &config, sample_format, &self.buffer)?;
+        // Hard cap on the live buffer so a stalled consumer can never grow it
+        // without bound and reallocate (or OOM) on the realtime thread. Well
+        // above the 30s reserve, so normal operation never reaches it.
+        const MAX_BUFFER_SECS: usize = 60;
+        let max_samples = MAX_BUFFER_SECS * native_rate as usize * native_channels.max(1) as usize;
+
+        let stream = build_input_stream_for_format(
+            &device,
+            &config,
+            sample_format,
+            &self.buffer,
+            max_samples,
+        )?;
 
         stream.play()?;
         self.stream = Some(stream);
@@ -191,109 +203,78 @@ fn build_input_stream_for_format(
     config: &cpal::StreamConfig,
     sample_format: SampleFormat,
     buffer: &Arc<Mutex<Vec<f32>>>,
+    max_samples: usize,
 ) -> Result<cpal::Stream> {
-    let err_fn = |err| tracing::error!("Audio stream error: {}", err);
-
-    let stream = match sample_format {
+    // Zero-center for unsigned formats: silence sits at the midpoint, not 0.
+    match sample_format {
         SampleFormat::F32 => {
-            let buffer = Arc::clone(buffer);
-            device.build_input_stream(
-                config,
-                move |data: &[f32], _: &cpal::InputCallbackInfo| {
-                    if let Ok(mut buf) = buffer.lock() {
-                        buf.extend_from_slice(data);
-                    }
-                },
-                err_fn,
-                None,
-            )?
+            build_typed_stream::<f32, _>(device, config, buffer, max_samples, |s| s)
         }
         SampleFormat::I16 => {
-            let buffer = Arc::clone(buffer);
-            device.build_input_stream(
-                config,
-                move |data: &[i16], _: &cpal::InputCallbackInfo| {
-                    if let Ok(mut buf) = buffer.lock() {
-                        buf.extend(data.iter().map(|&s| s as f32 / 32768.0));
-                    }
-                },
-                err_fn,
-                None,
-            )?
+            build_typed_stream::<i16, _>(device, config, buffer, max_samples, |s| {
+                s as f32 / 32768.0
+            })
         }
         SampleFormat::U16 => {
-            let buffer = Arc::clone(buffer);
-            device.build_input_stream(
-                config,
-                move |data: &[u16], _: &cpal::InputCallbackInfo| {
-                    if let Ok(mut buf) = buffer.lock() {
-                        // Zero-centered: silence in unsigned formats sits at
-                        // the midpoint (32768), not at 0.
-                        buf.extend(data.iter().map(|&s| (s as f32 - 32768.0) / 32768.0));
-                    }
-                },
-                err_fn,
-                None,
-            )?
+            build_typed_stream::<u16, _>(device, config, buffer, max_samples, |s| {
+                (s as f32 - 32768.0) / 32768.0
+            })
         }
         SampleFormat::I32 => {
-            let buffer = Arc::clone(buffer);
-            device.build_input_stream(
-                config,
-                move |data: &[i32], _: &cpal::InputCallbackInfo| {
-                    if let Ok(mut buf) = buffer.lock() {
-                        buf.extend(data.iter().map(|&s| s as f32 / i32::MAX as f32));
-                    }
-                },
-                err_fn,
-                None,
-            )?
+            build_typed_stream::<i32, _>(device, config, buffer, max_samples, |s| {
+                // Convert through f64: an i32 has more precision than f32's
+                // mantissa, so dividing in f32 would lose low bits.
+                (s as f64 / i32::MAX as f64) as f32
+            })
         }
         SampleFormat::U32 => {
-            let buffer = Arc::clone(buffer);
-            device.build_input_stream(
-                config,
-                move |data: &[u32], _: &cpal::InputCallbackInfo| {
-                    if let Ok(mut buf) = buffer.lock() {
-                        buf.extend(
-                            data.iter()
-                                .map(|&s| ((s as f64 - 2_147_483_648.0) / 2_147_483_648.0) as f32),
-                        );
-                    }
-                },
-                err_fn,
-                None,
-            )?
+            build_typed_stream::<u32, _>(device, config, buffer, max_samples, |s| {
+                ((s as f64 - 2_147_483_648.0) / 2_147_483_648.0) as f32
+            })
         }
-        SampleFormat::I8 => {
-            let buffer = Arc::clone(buffer);
-            device.build_input_stream(
-                config,
-                move |data: &[i8], _: &cpal::InputCallbackInfo| {
-                    if let Ok(mut buf) = buffer.lock() {
-                        buf.extend(data.iter().map(|&s| s as f32 / i8::MAX as f32));
-                    }
-                },
-                err_fn,
-                None,
-            )?
-        }
-        SampleFormat::U8 => {
-            let buffer = Arc::clone(buffer);
-            device.build_input_stream(
-                config,
-                move |data: &[u8], _: &cpal::InputCallbackInfo| {
-                    if let Ok(mut buf) = buffer.lock() {
-                        buf.extend(data.iter().map(|&s| (s as f32 - 128.0) / 128.0));
-                    }
-                },
-                err_fn,
-                None,
-            )?
-        }
+        SampleFormat::I8 => build_typed_stream::<i8, _>(device, config, buffer, max_samples, |s| {
+            s as f32 / i8::MAX as f32
+        }),
+        SampleFormat::U8 => build_typed_stream::<u8, _>(device, config, buffer, max_samples, |s| {
+            (s as f32 - 128.0) / 128.0
+        }),
         format => anyhow::bail!("Unsupported sample format: {:?}", format),
-    };
+    }
+}
 
+/// Build an input stream that converts each sample to f32 and appends it to
+/// the live buffer, dropping new audio once the buffer hits `max_samples` so a
+/// stalled consumer cannot grow it without bound on the realtime thread.
+fn build_typed_stream<T, F>(
+    device: &cpal::Device,
+    config: &cpal::StreamConfig,
+    buffer: &Arc<Mutex<Vec<f32>>>,
+    max_samples: usize,
+    convert: F,
+) -> Result<cpal::Stream>
+where
+    T: cpal::SizedSample + Send + 'static,
+    F: Fn(T) -> f32 + Send + 'static,
+{
+    let buffer = Arc::clone(buffer);
+    let err_fn = |err| tracing::error!("Audio stream error: {}", err);
+    let stream = device.build_input_stream(
+        config,
+        move |data: &[T], _: &cpal::InputCallbackInfo| {
+            if let Ok(mut buf) = buffer.lock()
+                && buf.len() < max_samples
+            {
+                // Sanitize at the boundary: a NaN/inf from a misbehaving driver
+                // would otherwise poison RMS scoring and the resampler.
+                buf.extend(data.iter().map(|&s| {
+                    let v = convert(s);
+                    if v.is_finite() { v } else { 0.0 }
+                }));
+            }
+        },
+        err_fn,
+        None,
+    )?;
     Ok(stream)
 }
 

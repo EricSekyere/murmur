@@ -268,13 +268,17 @@ impl ModelManager {
         }
     }
 
-    /// Check if all required files for a model are downloaded.
+    /// Check if all required files for a model are present and non-empty.
+    /// Empty or missing files (e.g. an interrupted download that left a stub)
+    /// are treated as not downloaded so the file is fetched again.
     pub fn is_downloaded(&self, model: SttModel) -> bool {
         let dir = self.model_dir(model);
-        model
-            .model_files()
-            .iter()
-            .all(|f| dir.join(f.local_name).exists())
+        model.model_files().iter().all(|f| {
+            dir.join(f.local_name)
+                .metadata()
+                .map(|m| m.len() > 0)
+                .unwrap_or(false)
+        })
     }
 
     /// List all downloaded models.
@@ -344,27 +348,8 @@ impl ModelManager {
 
             pb.finish_with_message(format!("{} downloaded", file.local_name));
 
-            // Verify SHA256 (skip if checksum not specified)
             let hash = format!("{:x}", hasher.finalize());
-            if !file.sha256.is_empty() && hash != file.sha256 {
-                let _ = tokio::fs::remove_file(&temp_path).await;
-                anyhow::bail!(
-                    "SHA256 mismatch for {}: expected {}, got {}",
-                    file.local_name,
-                    file.sha256,
-                    hash
-                );
-            }
-
-            if file.sha256.is_empty() {
-                tracing::debug!(
-                    "SHA256 checksum not specified for {}, skipping verification (hash={})",
-                    file.local_name,
-                    hash
-                );
-            } else {
-                tracing::info!("Checksum verified for {}", file.local_name);
-            }
+            verify_download(&temp_path, file, &hash).await?;
 
             tokio::fs::rename(&temp_path, &dest)
                 .await
@@ -431,27 +416,8 @@ impl ModelManager {
                 on_progress(cumulative_downloaded, Some(estimated_total));
             }
 
-            // Verify SHA256 (skip if checksum not specified)
             let hash = format!("{:x}", hasher.finalize());
-            if !file.sha256.is_empty() && hash != file.sha256 {
-                let _ = tokio::fs::remove_file(&temp_path).await;
-                anyhow::bail!(
-                    "SHA256 mismatch for {}: expected {}, got {}",
-                    file.local_name,
-                    file.sha256,
-                    hash
-                );
-            }
-
-            if file.sha256.is_empty() {
-                tracing::debug!(
-                    "SHA256 checksum not specified for {}, skipping verification (hash={})",
-                    file.local_name,
-                    hash
-                );
-            } else {
-                tracing::info!("Checksum verified for {}", file.local_name);
-            }
+            verify_download(&temp_path, file, &hash).await?;
 
             tokio::fs::rename(&temp_path, &dest)
                 .await
@@ -462,4 +428,39 @@ impl ModelManager {
         tracing::info!("Model {} ready at {}", model.name(), path.display());
         Ok(path)
     }
+}
+
+/// Reject an empty download and verify its SHA256 when one is pinned. A model
+/// file without a pinned checksum cannot be verified, so warn loudly rather
+/// than accepting it silently.
+async fn verify_download(temp_path: &std::path::Path, file: &ModelFile, hash: &str) -> Result<()> {
+    let len = tokio::fs::metadata(temp_path)
+        .await
+        .map(|m| m.len())
+        .unwrap_or(0);
+    if len == 0 {
+        let _ = tokio::fs::remove_file(temp_path).await;
+        anyhow::bail!("Downloaded file {} is empty", file.local_name);
+    }
+
+    if file.sha256.is_empty() {
+        tracing::warn!(
+            "No pinned checksum for {}; integrity cannot be verified (sha256={})",
+            file.local_name,
+            hash
+        );
+        return Ok(());
+    }
+
+    if hash != file.sha256 {
+        let _ = tokio::fs::remove_file(temp_path).await;
+        anyhow::bail!(
+            "SHA256 mismatch for {}: expected {}, got {}",
+            file.local_name,
+            file.sha256,
+            hash
+        );
+    }
+    tracing::info!("Checksum verified for {}", file.local_name);
+    Ok(())
 }

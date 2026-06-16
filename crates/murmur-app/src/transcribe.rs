@@ -126,7 +126,8 @@ pub(crate) fn transcribe_chunk(
         return reject(app, &state, reason, &prepared, Some(&text));
     }
 
-    tracing::info!("Transcription accepted: '{}' ({} chars)", text, text.len());
+    tracing::info!("Transcription accepted ({} chars)", text.chars().count());
+    tracing::debug!("Accepted text: '{}'", text);
     emit_diag(app, "accepted", "accepted", &prepared);
     update_session_context(&state, &text);
     Some((text, result.processing_time_ms))
@@ -258,11 +259,12 @@ fn run_engine(
         }
         Ok(result) => {
             tracing::info!(
-                "Engine returned: {:?} ({}ms, {} segments)",
-                result.text,
+                "Engine returned {} chars ({}ms, {} segments)",
+                result.text.chars().count(),
                 result.processing_time_ms,
                 result.segments.len()
             );
+            tracing::debug!("Engine text: {:?}", result.text);
             Some(result)
         }
         Err(e) => {
@@ -278,20 +280,24 @@ fn run_engine(
 /// Duration-weighted mean of a per-segment metric, ignoring segments that
 /// don't report it (counting them would silently dilute the average).
 fn weighted_metric(segments: &[Segment], metric: impl Fn(&Segment) -> Option<f32>) -> Option<f32> {
-    let total: f32 = segments
+    let values: Vec<(f32, f32)> = segments
         .iter()
-        .filter(|s| metric(s).is_some())
-        .map(|s| (s.end_cs - s.start_cs).max(0) as f32)
-        .sum();
-    if total <= 0.0 {
+        .filter_map(|s| metric(s).map(|m| (m, (s.end_cs - s.start_cs).max(0) as f32)))
+        .collect();
+    if values.is_empty() {
         return None;
     }
-    Some(
-        segments
-            .iter()
-            .filter_map(|s| metric(s).map(|m| m * ((s.end_cs - s.start_cs).max(0) as f32 / total)))
-            .sum(),
-    )
+
+    let total: f32 = values.iter().map(|(_, w)| *w).sum();
+    if total <= 0.0 {
+        // Segments collapsed to zero duration (short clips near t=0). Fall
+        // back to an unweighted mean so the confidence/no-speech gate is still
+        // evaluated rather than silently skipped on the clips most prone to
+        // hallucination.
+        let mean = values.iter().map(|(m, _)| *m).sum::<f32>() / values.len() as f32;
+        return Some(mean);
+    }
+    Some(values.iter().map(|(m, w)| m * (w / total)).sum())
 }
 
 /// Reject output the model itself isn't confident in. Sighs/breaths make
@@ -309,7 +315,7 @@ fn quality_reject_reason(
     if let Some(p) = no_speech
         && p > limits.no_speech_max
     {
-        tracing::warn!("Rejected: no_speech_prob {:.2} ({:?})", p, result.text);
+        tracing::warn!("Rejected: no_speech_prob {:.2}", p);
         return Some("no_speech_prob_high");
     }
 
@@ -321,12 +327,7 @@ fn quality_reject_reason(
     if let Some(c) = confidence
         && c < conf_limit
     {
-        tracing::warn!(
-            "Rejected: decoder confidence {:.2} < {:.2} ({:?})",
-            c,
-            conf_limit,
-            result.text
-        );
+        tracing::warn!("Rejected: decoder confidence {:.2} < {:.2}", c, conf_limit);
         return Some("low_confidence");
     }
 
@@ -334,11 +335,7 @@ fn quality_reject_reason(
         && let Some(p) = no_speech
         && p > limits.short_max_no_speech
     {
-        tracing::warn!(
-            "Rejected: short clip no_speech_prob {:.2} ({:?})",
-            p,
-            result.text
-        );
+        tracing::warn!("Rejected: short clip no_speech_prob {:.2}", p);
         return Some("no_speech_short");
     }
     None
@@ -424,12 +421,18 @@ fn is_repetitive(words: &[&str]) -> bool {
         return false;
     }
 
-    // Exact short-phrase repetition.
+    // Leading short-phrase repetition. A real hallucination is rarely a
+    // perfect multiple ("yeah yeah yeah yeah no"), so allow a short trailing
+    // remainder, but require an extra repeat in that case so genuine emphasis
+    // ("very very very good") isn't rejected.
     for plen in 1..=(n / 2).min(4) {
-        if !n.is_multiple_of(plen) || n / plen < 3 {
+        if n / plen < 3 {
             continue;
         }
-        if clean.chunks(plen).all(|chunk| chunk == &clean[..plen]) {
+        let head = &clean[..plen];
+        let repeats = clean.chunks_exact(plen).take_while(|c| *c == head).count();
+        let tail = n - repeats * plen;
+        if repeats >= 3 && tail <= plen && (tail == 0 || repeats >= 4) {
             return true;
         }
     }
@@ -455,7 +458,8 @@ fn reject(
     prepared: &PreparedAudio,
     text: Option<&str>,
 ) -> Option<(String, u64)> {
-    tracing::warn!("Rejected phrase ({}): {:?}", reason, text.unwrap_or(""));
+    tracing::warn!("Rejected phrase ({})", reason);
+    tracing::debug!("Rejected text ({}): {:?}", reason, text.unwrap_or(""));
     state
         .session_prev_text
         .lock()
@@ -487,7 +491,9 @@ fn update_session_context(state: &AppState, text: &str) {
         prev.push(' ');
     }
     prev.push_str(text);
-    if prev.len() > 200 {
+    // Cap by character count, not bytes, so multibyte languages get the same
+    // ~200-character budget rather than being trimmed early.
+    if prev.chars().count() > 200 {
         let start_byte = prev
             .char_indices()
             .rev()
@@ -580,6 +586,8 @@ mod tests {
             "All right. All right. All right.",
             "you know, you know, you know",
             "I think I think I think",
+            // Repetition with a non-matching trailing word.
+            "yeah yeah yeah yeah no",
         ] {
             assert!(
                 hallucination_reason(text, TranscriptionProfile::Relaxed).is_some(),

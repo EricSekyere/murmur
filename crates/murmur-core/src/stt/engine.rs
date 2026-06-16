@@ -1,4 +1,4 @@
-﻿#[cfg(any(feature = "stt", feature = "parakeet"))]
+#[cfg(any(feature = "stt", feature = "parakeet"))]
 use anyhow::Context;
 use anyhow::Result;
 #[cfg(any(feature = "stt", feature = "parakeet"))]
@@ -429,7 +429,10 @@ impl SttEngine {
             prompt.push_str(glossary.trim());
             prompt.push('.');
         }
-        if let Some(prev) = initial_prompt.filter(|s| !s.trim().is_empty()) {
+        // The rolling session context is the prior English transcript, so only
+        // feed it back when the output is English. On a non-English decode it
+        // would push whisper to code-switch into English.
+        if output_is_english && let Some(prev) = initial_prompt.filter(|s| !s.trim().is_empty()) {
             // Cap at ~200 chars to keep the prompt token budget bounded.
             let trimmed = prev.trim();
             let start_byte = trimmed
@@ -528,16 +531,13 @@ impl SttEngine {
 
         let elapsed = start.elapsed();
         tracing::info!(
-            "Whisper transcribed {} samples in {}ms -> {} segment(s), text={:?}",
+            "Whisper transcribed {} samples in {}ms -> {} segment(s), {} chars",
             samples.len(),
             elapsed.as_millis(),
             segments.len(),
-            if full_text.trim().is_empty() {
-                "<empty>"
-            } else {
-                full_text.trim()
-            }
+            full_text.trim().chars().count()
         );
+        tracing::debug!("Whisper text: {:?}", full_text.trim());
 
         Ok(TranscriptionResult {
             text: full_text.trim().to_string(),
@@ -598,15 +598,12 @@ impl SttEngine {
 
         let elapsed = start.elapsed();
         tracing::info!(
-            "Parakeet transcribed {} samples in {}ms -> {:?}",
+            "Parakeet transcribed {} samples in {}ms -> {} chars",
             samples.len(),
             elapsed.as_millis(),
-            if result.text.is_empty() {
-                "<empty>"
-            } else {
-                &result.text
-            }
+            result.text.trim().chars().count()
         );
+        tracing::debug!("Parakeet text: {:?}", result.text.trim());
 
         Ok(TranscriptionResult {
             text: result.text.trim().to_string(),

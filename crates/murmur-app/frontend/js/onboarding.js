@@ -33,18 +33,24 @@
   document.getElementById('onboarding-skip').addEventListener('click', finish);
   document.getElementById('onboarding-done').addEventListener('click', finish);
 
-  // Mic test reuses the real dictation pipeline.
+  // Mic test reuses the real dictation pipeline. The button state is driven
+  // by the recording-state event below, not toggled locally, so it stays in
+  // sync if the session auto-stops on silence.
   micBtn.addEventListener('click', async () => {
     try {
       await invoke('toggle_recording');
-      micActive = !micActive;
-      micBtn.className = micActive
-        ? 'mic-btn mic-btn--recording onboarding__mic'
-        : 'mic-btn mic-btn--idle onboarding__mic';
-      if (micActive) result.textContent = 'Listening… say something, then pause.';
     } catch (err) {
       result.textContent = `Could not start: ${err}`;
     }
+  });
+
+  listen('recording-state', (event) => {
+    if (overlay.hidden) return;
+    micActive = !!event.payload.recording;
+    micBtn.className = micActive
+      ? 'mic-btn mic-btn--recording onboarding__mic'
+      : 'mic-btn mic-btn--idle onboarding__mic';
+    if (micActive) result.textContent = 'Listening, say something then pause.';
   });
 
   // Show transcribed text in the test box while onboarding is open.
@@ -60,12 +66,12 @@
   // Reflect model readiness on the mic-test step.
   invoke('get_status').then(status => {
     if (status.hotkey) hotkeyEl.textContent = status.hotkey;
-    if (status.model_ready) result.textContent = 'Ready — click the mic and speak.';
+    if (status.model_ready) result.textContent = 'Ready. Click the mic and speak.';
   }).catch(() => {});
 
   listen('model-download-progress', (event) => {
     if (overlay.hidden) return;
-    if (event.payload?.done) result.textContent = 'Ready — click the mic and speak.';
+    if (event.payload?.done) result.textContent = 'Ready. Click the mic and speak.';
   });
 
   overlay.hidden = false;

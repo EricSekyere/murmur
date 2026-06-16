@@ -53,8 +53,10 @@ pub fn parse(phrase: &str) -> VoiceCommand {
         "new paragraph" => VoiceCommand::NewParagraph,
         "scratch that" | "delete that" => VoiceCommand::ScratchThat,
         "copy that" | "copy selection" => VoiceCommand::Copy,
-        "undo" | "undo that" => VoiceCommand::Undo,
-        "redo" | "redo that" => VoiceCommand::Redo,
+        // Require the two-word form: a bare "undo"/"redo" is an easy
+        // misrecognition that would destroy real edits via Ctrl+Z / Ctrl+Y.
+        "undo that" => VoiceCommand::Undo,
+        "redo that" => VoiceCommand::Redo,
         "press tab" | "tab key" => VoiceCommand::Tab,
         "press escape" | "escape key" => VoiceCommand::Escape,
         _ => VoiceCommand::Text,
@@ -87,8 +89,11 @@ mod tests {
     #[test]
     fn recognizes_editing_commands() {
         assert_eq!(parse("Copy that."), VoiceCommand::Copy);
-        assert_eq!(parse("undo"), VoiceCommand::Undo);
+        assert_eq!(parse("undo that"), VoiceCommand::Undo);
         assert_eq!(parse("redo that"), VoiceCommand::Redo);
+        // Bare single words are too easy to misrecognize into a command.
+        assert_eq!(parse("undo"), VoiceCommand::Text);
+        assert_eq!(parse("redo"), VoiceCommand::Text);
         assert_eq!(parse("press tab"), VoiceCommand::Tab);
         assert_eq!(parse("press escape"), VoiceCommand::Escape);
     }

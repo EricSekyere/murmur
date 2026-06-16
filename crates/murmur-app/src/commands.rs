@@ -10,7 +10,7 @@ use tauri::{Emitter, Manager, State};
 use tauri_plugin_global_shortcut::GlobalShortcutExt;
 
 use crate::model_setup::spawn_download_and_init;
-use crate::session::handle_toggle;
+use crate::session::{end_recording, handle_toggle};
 use crate::state::{AppState, ModelChangedEvent, ModelInfo};
 
 #[tauri::command]
@@ -154,11 +154,10 @@ pub(crate) async fn change_model(
     }
 
     // Changing models while recording would silently drop all phrases once
-    // the engine becomes None — stop the session first.
-    if *state.recording.lock().unwrap_or_else(|e| e.into_inner()) {
-        tracing::info!("Stopping recording before model change");
-        handle_toggle(&app);
-    }
+    // the engine becomes None, so stop first. Use the un-debounced stop:
+    // handle_toggle can swallow this stop if the user just toggled, leaving
+    // the mic running against a None engine.
+    end_recording(&app);
 
     {
         let mut guard = state.engine.lock().unwrap_or_else(|e| e.into_inner());

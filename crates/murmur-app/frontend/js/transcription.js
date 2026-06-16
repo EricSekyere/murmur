@@ -1,36 +1,5 @@
 // Transcription display, history, and recording/streaming event handling.
 
-function displayTranscription(text, processingTimeMs) {
-  lastTranscription = text || '';
-
-  transcriptionOutput.innerHTML = '';
-  if (lastTranscription) {
-    transcriptionOutput.textContent = lastTranscription;
-    copyTranscription.disabled = false;
-  } else {
-    const ph = document.createElement('span');
-    ph.className = 'placeholder';
-    ph.textContent = 'No speech detected.';
-    transcriptionOutput.appendChild(ph);
-    copyTranscription.disabled = true;
-  }
-
-  const words = lastTranscription.trim()
-    ? lastTranscription.trim().split(/\s+/).length
-    : 0;
-  wordCount.textContent = `${words} word${words !== 1 ? 's' : ''}`;
-  procTime.textContent = processingTimeMs != null
-    ? `${(processingTimeMs / 1000).toFixed(1)}s`
-    : '';
-
-  loadHistory();
-  applyState('done');
-
-  setTimeout(() => {
-    if (uiState === 'done') applyState('idle');
-  }, 2000);
-}
-
 // Load (optionally filtered) history from the persistent backend store.
 async function loadHistory() {
   try {
@@ -155,7 +124,6 @@ listen('recording-state', (event) => {
     // Reset the UI only on a fresh start — processing updates during
     // streaming must not clear accumulated transcription text.
     if (uiState !== 'recording' && uiState !== 'processing') {
-      transcriptionHandled = false;
       transcriptionOutput.innerHTML = '';
       lastTranscription = '';
       sessionPhrases = [];
@@ -182,21 +150,6 @@ listen('recording-state', (event) => {
   } else if (uiState === 'processing' || uiState === 'recording') {
     stopDurationTimer();
     stopVisualization();
-    applyState('idle');
-  }
-});
-
-listen('hotkey-transcribed', (event) => {
-  const data = event.payload;
-  stopDurationTimer();
-  stopVisualization();
-
-  if (data.text) {
-    transcriptionHandled = true;
-    displayTranscription(data.text, data.processing_time_ms);
-    const preview = data.text.length > 40 ? data.text.slice(0, 40) + '…' : data.text;
-    showToast(`Typed: ${preview}`, 'success');
-  } else {
     applyState('idle');
   }
 });
@@ -331,9 +284,3 @@ listen('streaming-done', () => {
   }
 });
 
-listen('transcription', (event) => {
-  if (transcriptionHandled) return;
-  transcriptionHandled = true;
-  const data = event.payload;
-  displayTranscription(data.text, data.processing_time_ms);
-});

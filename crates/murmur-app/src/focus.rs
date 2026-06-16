@@ -32,23 +32,33 @@ pub(crate) fn output_text(
     murmur_core::output::dispatch_output(text, mode)
 }
 
-/// Make sure an external (non-Murmur) window has focus, preferring the
-/// live-tracked last-external window over the recording-start snapshot.
+/// Make sure the window the user started dictating into receives the text.
+///
+/// Delivering to whatever happens to be focused at the end of a phrase is a
+/// hazard: if focus drifted to another window mid-recording (a notification,
+/// a clicked field, a password box) the text would land there. So prefer the
+/// recording-start target, only falling back to the live-tracked window or the
+/// current foreground when that target is gone.
 #[cfg(windows)]
 fn ensure_external_target(previous_hwnd: usize, last_external_hwnd: usize) -> bool {
     let current_fg = foreground_window();
-    if current_fg != 0 && !is_own_window(current_fg) {
+    let current_is_external = current_fg != 0 && !is_own_window(current_fg);
+
+    // Already focused on the exact window dictation started in: deliver there
+    // without disturbing focus (the common single-window case).
+    if current_is_external && current_fg == previous_hwnd {
         return true;
     }
 
-    tracing::info!(
-        "Murmur holds focus; restoring target (previous=0x{:x}, last_external=0x{:x})",
-        previous_hwnd,
-        last_external_hwnd
-    );
-    [last_external_hwnd, previous_hwnd]
+    // Focus drifted or Murmur is in front. Restore the start target first, then
+    // the last external window, before accepting the current foreground.
+    if [previous_hwnd, last_external_hwnd]
         .iter()
         .any(|&h| h != 0 && !is_own_window(h) && restore_foreground_window(h))
+    {
+        return true;
+    }
+    current_is_external
 }
 
 /// Restore focus to the window the user was working in before recording.
