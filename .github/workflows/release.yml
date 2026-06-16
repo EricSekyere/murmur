@@ -73,6 +73,10 @@ jobs:
           releaseBody: |
             Fast, private, on-device dictation for Windows.
 
+            ## New in 0.3.6
+
+            - **Live caption can follow your active window.** The live preview can now appear right next to the window you are typing into, the way macOS dictation does, instead of only under the floating pill. Pick where it shows in Settings, under Live caption position. Each caption clears the moment its text lands in the field.
+
             ## Fixes in 0.3.5
 
             - **The clipboard can no longer leak.** Murmur now types directly into every app, including terminals and chat apps like Warp. It no longer routes any output through the clipboard, so your previous clipboard contents can never be pasted into the focused window. If a specific app needs paste, choose the Clipboard + Paste output mode for it.
