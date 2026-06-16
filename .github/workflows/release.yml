@@ -73,6 +73,10 @@ jobs:
           releaseBody: |
             Fast, private, on-device dictation for Windows.
 
+            ## Fixes in 0.3.7
+
+            - **Live caption sits correctly on scaled displays.** When the caption follows your active window, it now centers properly beneath it on high-DPI screens (125%, 150%, and up) instead of drifting off-center, and it no longer appears in a screen corner when there is no active window to anchor to.
+
             ## New in 0.3.6
 
             - **Live caption can follow your active window.** The live preview can now appear right next to the window you are typing into, the way macOS dictation does, instead of only under the floating pill. Pick where it shows in Settings, under Live caption position. Each caption clears the moment its text lands in the field.
