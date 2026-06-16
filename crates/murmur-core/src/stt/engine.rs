@@ -1,4 +1,4 @@
-﻿#[cfg(any(feature = "stt", feature = "parakeet"))]
+#[cfg(any(feature = "stt", feature = "parakeet"))]
 use anyhow::Context;
 use anyhow::Result;
 #[cfg(any(feature = "stt", feature = "parakeet"))]
@@ -429,7 +429,10 @@ impl SttEngine {
             prompt.push_str(glossary.trim());
             prompt.push('.');
         }
-        if let Some(prev) = initial_prompt.filter(|s| !s.trim().is_empty()) {
+        // The rolling session context is the prior English transcript, so only
+        // feed it back when the output is English. On a non-English decode it
+        // would push whisper to code-switch into English.
+        if output_is_english && let Some(prev) = initial_prompt.filter(|s| !s.trim().is_empty()) {
             // Cap at ~200 chars to keep the prompt token budget bounded.
             let trimmed = prev.trim();
             let start_byte = trimmed
