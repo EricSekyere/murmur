@@ -234,7 +234,6 @@ fn streaming_worker(app: &tauri::AppHandle) {
         return;
     }
 
-    // Recording is live — play the start cue if enabled.
     if sound_feedback {
         crate::sound::play_start();
     }

@@ -2,9 +2,9 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
-    // Install a global panic hook BEFORE anything else.
-    // This catches panics on ANY thread (audio worker, streaming, rdev, etc.)
-    // and writes them to crash.log + shows a dialog in release mode.
+    // Install a global panic hook BEFORE anything else: this catches panics on
+    // ANY thread (audio worker, streaming, rdev, etc.) and writes them to
+    // crash.log + shows a dialog in release mode.
     #[cfg(debug_assertions)]
     let default_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
@@ -29,7 +29,6 @@ fn main() {
             thread_name, location, payload
         );
 
-        // Always write to crash log
         write_crash_log(&msg);
 
         // Show error dialog in release mode so the user knows why it crashed.
@@ -39,7 +38,6 @@ fn main() {
             show_error_dialog(&msg);
         }
 
-        // Only call the default hook in debug builds.
         // In Windows release GUI mode, stderr may be closed and default_hook can panic
         // with "failed printing to stderr".
         #[cfg(debug_assertions)]
@@ -59,7 +57,6 @@ fn main() {
 
 /// Write crash details to a log file so users can report bugs.
 fn write_crash_log(msg: &str) {
-    // Use APPDATA on Windows, HOME/.local/share on Unix
     let base = std::env::var("APPDATA")
         .or_else(|_| std::env::var("XDG_DATA_HOME"))
         .or_else(|_| std::env::var("HOME").map(|h| format!("{}/.local/share", h)));

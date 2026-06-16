@@ -12,7 +12,6 @@ const CAPTION_WIDTH: i32 = 380;
 #[cfg(windows)]
 const CAPTION_HEIGHT: i32 = 64;
 
-/// Show the caption near `target_hwnd` with the given interim text.
 pub(crate) fn show(app: &tauri::AppHandle, target_hwnd: usize, text: &str) {
     let Some(win) = app.get_webview_window("caption") else {
         return;
@@ -33,7 +32,6 @@ pub(crate) fn show(app: &tauri::AppHandle, target_hwnd: usize, text: &str) {
     let _ = win.show();
 }
 
-/// Hide the caption and clear its text.
 pub(crate) fn hide(app: &tauri::AppHandle) {
     if let Some(win) = app.get_webview_window("caption") {
         let _ = win.emit("caption-text", "");

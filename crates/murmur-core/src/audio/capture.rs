@@ -98,7 +98,6 @@ impl AudioCapture {
             self.native_channels
         );
 
-        // Downmix to mono
         let mono = if self.native_channels > 1 {
             let ch = self.native_channels as usize;
             raw.chunks_exact(ch)
@@ -108,7 +107,6 @@ impl AudioCapture {
             raw
         };
 
-        // Resample to 16 kHz
         let target_rate = AudioBuffer::SAMPLE_RATE;
         let resampled = if self.native_rate != target_rate {
             resample(&mono, self.native_rate, target_rate)
@@ -341,7 +339,6 @@ fn pick_best_config(device: &cpal::Device) -> Result<SupportedStreamConfig> {
         let fmt = range.sample_format();
         let ch = range.channels();
 
-        // Pick the best sample rate this range supports
         let preferred_rates = [16000u32, 48000, 44100];
         let rate = preferred_rates
             .iter()

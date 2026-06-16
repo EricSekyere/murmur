@@ -258,7 +258,6 @@ async fn cmd_listen(stdout: bool, clipboard: bool, model_name: Option<String>) -
     let config_path = Settings::default_path()?;
     let settings = Settings::load(&config_path)?;
 
-    // Determine output mode
     let output_mode = if stdout {
         OutputMode::Stdout
     } else if clipboard {
@@ -267,7 +266,6 @@ async fn cmd_listen(stdout: bool, clipboard: bool, model_name: Option<String>) -
         settings.output_mode
     };
 
-    // Determine which model to use
     let model = match model_name {
         Some(name) => SttModel::from_name(&name).ok_or_else(|| {
             let available: Vec<&str> = SttModel::all().iter().map(|m| m.id()).collect();
@@ -280,7 +278,6 @@ async fn cmd_listen(stdout: bool, clipboard: bool, model_name: Option<String>) -
         None => settings.model,
     };
 
-    // Ensure model is downloaded
     let model_mgr = ModelManager::new(ModelManager::default_dir()?);
     if !model_mgr.is_downloaded(model) {
         tracing::info!("Model {} not found, downloading...", model.name());
@@ -289,7 +286,6 @@ async fn cmd_listen(stdout: bool, clipboard: bool, model_name: Option<String>) -
 
     let model_path = model_mgr.model_path(model);
 
-    // Initialize STT engine based on backend
     let mut stt_engine = match model.backend() {
         Backend::Whisper => murmur_core::stt::engine::SttEngine::new_whisper(
             model_path.to_str().context("Invalid model path")?,
@@ -300,10 +296,8 @@ async fn cmd_listen(stdout: bool, clipboard: bool, model_name: Option<String>) -
         )?,
     };
 
-    // Initialize audio capture
     let mut capture = murmur_core::audio::capture::AudioCapture::new()?;
 
-    // Register global hotkey
     let hotkey_mgr = murmur_core::hotkey::HotkeyManager::new(&settings.hotkey)?;
     let hotkey_rx = hotkey_mgr.events();
 
@@ -318,7 +312,6 @@ async fn cmd_listen(stdout: bool, clipboard: bool, model_name: Option<String>) -
         settings.hotkey
     );
 
-    // Main event loop
     loop {
         match hotkey_rx.recv() {
             Ok(murmur_core::hotkey::HotkeyEvent::Pressed) => {

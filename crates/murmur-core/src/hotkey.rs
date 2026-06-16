@@ -62,7 +62,6 @@ impl HotkeyManager {
         rx
     }
 
-    /// Get the registered hotkey ID.
     pub fn hotkey_id(&self) -> u32 {
         self.hotkey.id()
     }

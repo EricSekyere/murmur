@@ -406,11 +406,6 @@ impl SttEngine {
         params.set_no_timestamps(false);
         params.set_suppress_blank(true);
         params.set_suppress_nst(true);
-        // Encourage proper punctuation and capitalization via initial prompt.
-        // Whisper uses this as a style hint for the decoder. When the caller
-        // has provided session context (the trailing portion of the prior
-        // transcript), append it so cross-phrase punctuation/capitalization
-        // stays consistent — this is whisper.cpp's intended streaming pattern.
         // Base style hint, optionally extended with a user glossary so names
         // and jargon spell correctly. Both are prepended to the rolling
         // session context (whisper.cpp's streaming pattern).
