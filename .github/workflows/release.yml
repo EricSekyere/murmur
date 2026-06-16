@@ -73,11 +73,14 @@ jobs:
           releaseBody: |
             Fast, private, on-device dictation for Windows.
 
-            ## What's new in 0.3.1
+            ## Fixes in 0.3.2
 
-            - **Find pill.** A new button in the dashboard flashes the floating pill so you can spot it, and pulls it back on-screen if it has been dragged off a monitor.
+            - **Single instance.** Murmur now refuses to run a second copy of itself; a second launch focuses the existing window. Two instances could double-capture audio and race the clipboard during paste, which could dump old clipboard contents into the focused app.
+            - **Safer voice commands.** Removed the spoken "paste", "cut", and "select all" commands. A misrecognition could inject the clipboard or destroy a document, so these are now plain dictated text again.
 
             ## Also in 0.3.x
+
+            - **Find pill.** A button in the dashboard flashes the floating pill so you can spot it, and pulls it back on-screen if it has been dragged off a monitor.
 
             - **Live preview.** Your words appear as you speak, in the dashboard and as a caption under the floating pill, before each phrase is final.
             - **Voice editing commands.** "select all", "copy that", "cut", "paste", "undo", "redo", "press tab", and "press escape", alongside "new line", "new paragraph", and "scratch that".
