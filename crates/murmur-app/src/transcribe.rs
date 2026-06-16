@@ -126,7 +126,8 @@ pub(crate) fn transcribe_chunk(
         return reject(app, &state, reason, &prepared, Some(&text));
     }
 
-    tracing::info!("Transcription accepted: '{}' ({} chars)", text, text.len());
+    tracing::info!("Transcription accepted ({} chars)", text.chars().count());
+    tracing::debug!("Accepted text: '{}'", text);
     emit_diag(app, "accepted", "accepted", &prepared);
     update_session_context(&state, &text);
     Some((text, result.processing_time_ms))
@@ -258,11 +259,12 @@ fn run_engine(
         }
         Ok(result) => {
             tracing::info!(
-                "Engine returned: {:?} ({}ms, {} segments)",
-                result.text,
+                "Engine returned {} chars ({}ms, {} segments)",
+                result.text.chars().count(),
                 result.processing_time_ms,
                 result.segments.len()
             );
+            tracing::debug!("Engine text: {:?}", result.text);
             Some(result)
         }
         Err(e) => {
@@ -309,7 +311,7 @@ fn quality_reject_reason(
     if let Some(p) = no_speech
         && p > limits.no_speech_max
     {
-        tracing::warn!("Rejected: no_speech_prob {:.2} ({:?})", p, result.text);
+        tracing::warn!("Rejected: no_speech_prob {:.2}", p);
         return Some("no_speech_prob_high");
     }
 
@@ -321,12 +323,7 @@ fn quality_reject_reason(
     if let Some(c) = confidence
         && c < conf_limit
     {
-        tracing::warn!(
-            "Rejected: decoder confidence {:.2} < {:.2} ({:?})",
-            c,
-            conf_limit,
-            result.text
-        );
+        tracing::warn!("Rejected: decoder confidence {:.2} < {:.2}", c, conf_limit);
         return Some("low_confidence");
     }
 
@@ -334,11 +331,7 @@ fn quality_reject_reason(
         && let Some(p) = no_speech
         && p > limits.short_max_no_speech
     {
-        tracing::warn!(
-            "Rejected: short clip no_speech_prob {:.2} ({:?})",
-            p,
-            result.text
-        );
+        tracing::warn!("Rejected: short clip no_speech_prob {:.2}", p);
         return Some("no_speech_short");
     }
     None
@@ -455,7 +448,8 @@ fn reject(
     prepared: &PreparedAudio,
     text: Option<&str>,
 ) -> Option<(String, u64)> {
-    tracing::warn!("Rejected phrase ({}): {:?}", reason, text.unwrap_or(""));
+    tracing::warn!("Rejected phrase ({})", reason);
+    tracing::debug!("Rejected text ({}): {:?}", reason, text.unwrap_or(""));
     state
         .session_prev_text
         .lock()

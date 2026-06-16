@@ -528,16 +528,13 @@ impl SttEngine {
 
         let elapsed = start.elapsed();
         tracing::info!(
-            "Whisper transcribed {} samples in {}ms -> {} segment(s), text={:?}",
+            "Whisper transcribed {} samples in {}ms -> {} segment(s), {} chars",
             samples.len(),
             elapsed.as_millis(),
             segments.len(),
-            if full_text.trim().is_empty() {
-                "<empty>"
-            } else {
-                full_text.trim()
-            }
+            full_text.trim().chars().count()
         );
+        tracing::debug!("Whisper text: {:?}", full_text.trim());
 
         Ok(TranscriptionResult {
             text: full_text.trim().to_string(),
@@ -598,15 +595,12 @@ impl SttEngine {
 
         let elapsed = start.elapsed();
         tracing::info!(
-            "Parakeet transcribed {} samples in {}ms -> {:?}",
+            "Parakeet transcribed {} samples in {}ms -> {} chars",
             samples.len(),
             elapsed.as_millis(),
-            if result.text.is_empty() {
-                "<empty>"
-            } else {
-                &result.text
-            }
+            result.text.trim().chars().count()
         );
+        tracing::debug!("Parakeet text: {:?}", result.text.trim());
 
         Ok(TranscriptionResult {
             text: result.text.trim().to_string(),
