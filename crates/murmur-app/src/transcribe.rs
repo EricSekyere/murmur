@@ -280,20 +280,24 @@ fn run_engine(
 /// Duration-weighted mean of a per-segment metric, ignoring segments that
 /// don't report it (counting them would silently dilute the average).
 fn weighted_metric(segments: &[Segment], metric: impl Fn(&Segment) -> Option<f32>) -> Option<f32> {
-    let total: f32 = segments
+    let values: Vec<(f32, f32)> = segments
         .iter()
-        .filter(|s| metric(s).is_some())
-        .map(|s| (s.end_cs - s.start_cs).max(0) as f32)
-        .sum();
-    if total <= 0.0 {
+        .filter_map(|s| metric(s).map(|m| (m, (s.end_cs - s.start_cs).max(0) as f32)))
+        .collect();
+    if values.is_empty() {
         return None;
     }
-    Some(
-        segments
-            .iter()
-            .filter_map(|s| metric(s).map(|m| m * ((s.end_cs - s.start_cs).max(0) as f32 / total)))
-            .sum(),
-    )
+
+    let total: f32 = values.iter().map(|(_, w)| *w).sum();
+    if total <= 0.0 {
+        // Segments collapsed to zero duration (short clips near t=0). Fall
+        // back to an unweighted mean so the confidence/no-speech gate is still
+        // evaluated rather than silently skipped on the clips most prone to
+        // hallucination.
+        let mean = values.iter().map(|(m, _)| *m).sum::<f32>() / values.len() as f32;
+        return Some(mean);
+    }
+    Some(values.iter().map(|(m, w)| m * (w / total)).sum())
 }
 
 /// Reject output the model itself isn't confident in. Sighs/breaths make
