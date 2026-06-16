@@ -140,6 +140,11 @@ pub struct Settings {
     /// start. The first matching profile wins.
     #[serde(default)]
     pub app_profiles: Vec<AppProfile>,
+
+    /// Where the live preview caption appears: "pill" (under the floating
+    /// pill) or "window" (near the bottom of the active window).
+    #[serde(default = "default_caption_position")]
+    pub caption_position: String,
 }
 
 impl AppProfile {
@@ -202,6 +207,10 @@ fn default_language() -> String {
     "en".to_string()
 }
 
+fn default_caption_position() -> String {
+    "pill".to_string()
+}
+
 fn default_pre_output_delay_ms() -> u64 {
     80
 }
@@ -243,6 +252,7 @@ impl Default for Settings {
             language: default_language(),
             translate_to_english: false,
             app_profiles: Vec::new(),
+            caption_position: default_caption_position(),
         }
     }
 }
@@ -413,6 +423,13 @@ impl Settings {
             anyhow::bail!(
                 "too many app profiles ({}, max 50)",
                 self.app_profiles.len()
+            );
+        }
+
+        if self.caption_position != "pill" && self.caption_position != "window" {
+            anyhow::bail!(
+                "caption_position must be 'pill' or 'window', got '{}'",
+                self.caption_position
             );
         }
 

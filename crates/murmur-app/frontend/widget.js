@@ -223,15 +223,22 @@ listen('audio-signal-detected', () => {
   heardSpeech = true;
 });
 
+// When the caption roams to the active window, the pill must not grow its own.
+let captionAtWindow = false;
+listen('caption-mode', (event) => {
+  captionAtWindow = !!event.payload?.at_window;
+  if (captionAtWindow) hideCaption();
+});
+
 listen('streaming-partial', (event) => {
   const text = event.payload?.text;
-  if (!text || currentState !== 'recording') return;
+  if (!text || currentState !== 'recording' || captionAtWindow) return;
   showCaption(text);
 });
 
 listen('streaming-phrase', (event) => {
   const text = event.payload?.text;
-  if (!text || currentState !== 'recording') return;
+  if (!text || currentState !== 'recording' || captionAtWindow) return;
   // Keep the confirmed phrase on screen until the next interim replaces it.
   showCaption(text);
 });
@@ -293,6 +300,7 @@ listen('transcription-error', (event) => {
 (async () => {
   try {
     const status = await invoke('get_status');
+    captionAtWindow = status?.caption_position === 'window';
     if (status && status.recording) {
       applyState('recording');
     }

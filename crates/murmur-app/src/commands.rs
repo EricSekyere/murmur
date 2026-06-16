@@ -53,6 +53,7 @@ pub(crate) fn get_status(state: State<'_, AppState>) -> serde_json::Value {
         "translate_to_english": settings.translate_to_english,
         "model_multilingual": settings.model.is_multilingual(),
         "app_profiles": settings.app_profiles,
+        "caption_position": settings.caption_position,
     })
 }
 
@@ -233,6 +234,7 @@ pub(crate) fn update_settings(
     language: Option<String>,
     translate_to_english: Option<bool>,
     app_profiles: Option<Vec<AppProfile>>,
+    caption_position: Option<String>,
 ) -> Result<(), String> {
     let mut settings = state.settings.lock().unwrap_or_else(|e| e.into_inner());
 
@@ -337,6 +339,17 @@ pub(crate) fn update_settings(
             })
             .take(50)
             .collect();
+    }
+    if let Some(pos) = caption_position {
+        if pos != "pill" && pos != "window" {
+            return Err(format!("Unknown caption position: {}", pos));
+        }
+        tracing::info!("Caption position set to: {}", pos);
+        settings.caption_position = pos.clone();
+        let _ = app.emit(
+            "caption-mode",
+            serde_json::json!({ "at_window": pos == "window" }),
+        );
     }
 
     if let Ok(path) = Settings::default_path() {
