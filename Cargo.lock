@@ -2950,7 +2950,7 @@ dependencies = [
 
 [[package]]
 name = "murmur-app"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "anyhow",
  "cpal",
@@ -2972,7 +2972,7 @@ dependencies = [
 
 [[package]]
 name = "murmur-cli"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "anyhow",
  "clap",
@@ -2986,7 +2986,7 @@ dependencies = [
 
 [[package]]
 name = "murmur-core"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "anyhow",
  "arboard",
