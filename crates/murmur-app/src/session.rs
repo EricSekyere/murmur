@@ -6,6 +6,7 @@ use std::time::{Duration, Instant};
 use murmur_core::output::OutputMode;
 use murmur_core::voice_commands::{self, VoiceCommand};
 use tauri::{Emitter, Manager};
+use unicode_segmentation::UnicodeSegmentation;
 
 use crate::audio_worker::{AudioResult, StartParams, panic_message};
 use crate::state::{
@@ -352,11 +353,13 @@ fn deliver_text(
     );
 
     // Focused modes append a trailing space (dispatch_output); clipboard-only
-    // doesn't type, so there is nothing to scratch.
+    // doesn't type, so there is nothing to scratch. Count grapheme clusters,
+    // not scalar values, so one backspace per visible character: emoji,
+    // combining marks, and newlines in a snippet expansion each erase as one.
     let delivered = if matches!(output_mode, OutputMode::Clipboard | OutputMode::Stdout) {
         0
     } else {
-        text.trim().chars().count() + 1
+        text.trim().graphemes(true).count() + 1
     };
     *state
         .last_delivered_len
