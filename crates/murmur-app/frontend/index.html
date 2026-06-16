@@ -163,7 +163,11 @@
             <div class="section-header section-header--panel">
               <h2>History</h2>
             </div>
-            <ul id="history-list" class="history-list" hidden></ul>
+            <div class="history-controls">
+              <input id="history-search" class="history-search" type="search" placeholder="Search history…" aria-label="Search history" autocomplete="off">
+              <button id="history-clear" class="btn-small" aria-label="Clear all history">Clear</button>
+            </div>
+            <ul id="history-list" class="history-list"></ul>
           </section>
         </div>
 
@@ -325,6 +329,42 @@
                 </div>
               </div>
 
+              <!-- Speech Language -->
+              <div class="settings-group">
+                <div class="settings-row">
+                  <div class="settings-row__text">
+                    <label class="settings-label" for="language-select">Speech Language</label>
+                    <span class="settings-hint" id="language-hint">Needs the multilingual model (Large v3 Turbo). The English models only do English.</span>
+                  </div>
+                  <select id="language-select" class="settings-select">
+                    <option value="auto">Auto-detect</option>
+                    <option value="en">English</option>
+                    <option value="es">Spanish</option>
+                    <option value="fr">French</option>
+                    <option value="de">German</option>
+                    <option value="it">Italian</option>
+                    <option value="pt">Portuguese</option>
+                    <option value="nl">Dutch</option>
+                    <option value="ru">Russian</option>
+                    <option value="zh">Chinese</option>
+                    <option value="ja">Japanese</option>
+                    <option value="ko">Korean</option>
+                    <option value="ar">Arabic</option>
+                    <option value="hi">Hindi</option>
+                  </select>
+                </div>
+                <div class="settings-row">
+                  <div class="settings-row__text">
+                    <label class="settings-label" for="translate-toggle">Translate to English</label>
+                    <span class="settings-hint">Speak any language, type English. Multilingual model only.</span>
+                  </div>
+                  <label class="toggle-switch">
+                    <input type="checkbox" id="translate-toggle">
+                    <span class="toggle-switch__slider"></span>
+                  </label>
+                </div>
+              </div>
+
               <!-- Audio Device -->
               <div class="settings-group">
                 <div class="settings-row">
@@ -422,6 +462,20 @@
                 </div>
               </div>
 
+              <!-- Live Preview -->
+              <div class="settings-group">
+                <div class="settings-row">
+                  <div class="settings-row__text">
+                    <label class="settings-label" for="live-preview-toggle">Live Preview</label>
+                    <span class="settings-hint">Show words on screen as you speak, before the phrase is final. Turn off for the lowest latency.</span>
+                  </div>
+                  <label class="toggle-switch">
+                    <input type="checkbox" id="live-preview-toggle" checked>
+                    <span class="toggle-switch__slider"></span>
+                  </label>
+                </div>
+              </div>
+
               <!-- Personal Dictionary -->
               <div class="settings-group">
                 <div class="settings-row__text">
@@ -431,6 +485,30 @@
                 <textarea id="vocabulary-input" class="settings-textarea" rows="4" placeholder="GitHub&#10;Kubernetes&#10;Eric Sekyere"></textarea>
                 <div class="settings-actions">
                   <button id="vocabulary-save" class="btn-small" disabled>Save Dictionary</button>
+                </div>
+              </div>
+
+              <!-- Text Snippets -->
+              <div class="settings-group">
+                <div class="settings-row__text">
+                  <label class="settings-label" for="snippets-input">Text Snippets</label>
+                  <span class="settings-hint">Say the trigger, type the expansion. One per line as <code>trigger = expansion</code>. Triggers fire only as a whole phrase.</span>
+                </div>
+                <textarea id="snippets-input" class="settings-textarea" rows="4" placeholder="my email = you@example.com&#10;sign off = Best regards,&#10;ship it = LGTM, merging now."></textarea>
+                <div class="settings-actions">
+                  <button id="snippets-save" class="btn-small" disabled>Save Snippets</button>
+                </div>
+              </div>
+
+              <!-- App Profiles -->
+              <div class="settings-group">
+                <div class="settings-row__text">
+                  <label class="settings-label" for="app-profiles-input">App Profiles</label>
+                  <span class="settings-hint">Override settings per app. One per line as <code>app = options</code>. Options: <code>dev</code> / <code>plain</code> for developer mode, and <code>auto</code> / <code>keyboard</code> / <code>clipboard_paste</code> / <code>clipboard</code> for output. The app is matched against the focused window's process name.</span>
+                </div>
+                <textarea id="app-profiles-input" class="settings-textarea" rows="4" placeholder="code = dev&#10;windowsterminal = dev, clipboard&#10;slack = plain"></textarea>
+                <div class="settings-actions">
+                  <button id="app-profiles-save" class="btn-small" disabled>Save Profiles</button>
                 </div>
               </div>
 

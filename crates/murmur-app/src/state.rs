@@ -25,6 +25,14 @@ pub(crate) struct AppState {
     /// window, so "scratch that" can backspace exactly that many characters.
     /// Reset to 0 by commands and at session start.
     pub last_delivered_len: Mutex<usize>,
+    /// Persistent, searchable transcription history.
+    pub history: Mutex<murmur_core::history::History>,
+    /// Where `history` is saved on disk.
+    pub history_path: std::path::PathBuf,
+    /// Developer-mode override for the active session from a matched app
+    /// profile. `None` means "use the global setting". Set at session start,
+    /// cleared at session end.
+    pub session_dev_mode: Mutex<Option<bool>>,
     /// Foreground window at recording start; output falls back to it when
     /// Murmur itself holds focus at delivery time.
     #[cfg(windows)]

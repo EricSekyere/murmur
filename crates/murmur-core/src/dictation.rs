@@ -301,6 +301,21 @@ impl DictationSession {
         self.flush_phrase(false)
     }
 
+    /// Snapshot of the in-progress phrase, resampled to 16 kHz mono, for live
+    /// partial transcription. Returns `None` while idle or before the phrase
+    /// has enough audio to be worth transcribing. Does not mutate state, so it
+    /// is safe to call repeatedly while a phrase is still being spoken.
+    pub fn current_phrase(&self) -> Option<AudioBuffer> {
+        if !self.in_speech || self.phrase_samples.len() < self.min_phrase_samples {
+            return None;
+        }
+        Some(AudioBuffer::from_raw(
+            &self.phrase_samples,
+            self.native_rate,
+            1,
+        ))
+    }
+
     fn flush_phrase(&mut self, trim_trailing_silence: bool) -> Option<AudioBuffer> {
         let mut samples = std::mem::take(&mut self.phrase_samples);
         let trailing = if trim_trailing_silence {
@@ -466,6 +481,36 @@ mod tests {
                 .iter()
                 .any(|event| matches!(event, DictationEvent::PhraseReady(_)))
         );
+    }
+
+    #[test]
+    fn current_phrase_snapshots_only_while_speaking() {
+        let rate = 16_000;
+        let mut session = DictationSession::new(
+            DictationConfig {
+                speech_threshold: 0.01,
+                silence_hold: Duration::from_millis(100),
+                min_phrase: Duration::from_millis(50),
+                max_phrase: Duration::from_secs(5),
+                split_search: Duration::from_millis(500),
+                preroll: Duration::from_millis(50),
+                session_timeout: Duration::from_secs(5),
+            },
+            rate,
+        );
+
+        // Idle: nothing in progress to preview.
+        assert!(session.current_phrase().is_none());
+
+        // Mid-phrase: a 16 kHz snapshot of the spoken audio so far.
+        let _ = session.ingest(&speech(1600));
+        let snapshot = session.current_phrase().expect("phrase in progress");
+        assert_eq!(snapshot.sample_rate, 16_000);
+        assert!(!snapshot.samples.is_empty());
+
+        // Once the phrase flushes on silence, there's nothing in progress again.
+        let _ = session.ingest(&silence(2000));
+        assert!(session.current_phrase().is_none());
     }
 
     #[test]

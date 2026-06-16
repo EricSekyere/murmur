@@ -97,6 +97,13 @@ impl SttModel {
         }
     }
 
+    /// Whether the model can transcribe languages other than English and
+    /// translate to English. Only the multilingual Whisper checkpoints can;
+    /// the `.en` models and Parakeet are English-only.
+    pub fn is_multilingual(&self) -> bool {
+        matches!(self, Self::WhisperLargeV3Turbo)
+    }
+
     /// Approximate total download size in MB.
     pub fn size_mb(&self) -> u32 {
         match self {

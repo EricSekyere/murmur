@@ -22,6 +22,9 @@ use crate::state::emit_hotkey_error;
 /// Rolling window for the in-session noise-floor estimate: ~5s of 50ms ticks.
 const FLOOR_WINDOW_TICKS: usize = 100;
 const MONITOR_TICK: Duration = Duration::from_millis(50);
+/// Emit a live-preview partial every this many ticks (~700ms). Spaced out so
+/// interim transcriptions stay cheap and never starve the final-phrase path.
+const PARTIAL_TICKS: u32 = 14;
 
 #[derive(Clone)]
 pub(crate) struct StartParams {
@@ -30,6 +33,8 @@ pub(crate) struct StartParams {
     pub vad_threshold: f32,
     pub phrase_pause: Duration,
     pub session_timeout: Duration,
+    /// Emit periodic `PartialPhrase` snapshots for live preview.
+    pub live_preview: bool,
 }
 
 enum Cmd {
@@ -41,6 +46,10 @@ pub(crate) enum AudioResult {
     Started,
     StartFailed(String),
     PhraseReady(AudioBuffer),
+    /// Snapshot of the in-progress phrase for live preview, sent every
+    /// ~700ms while speech continues. Transcribed for display only, never
+    /// delivered to the target app.
+    PartialPhrase(AudioBuffer),
     /// Periodic RMS level update, sent every ~100ms.
     AudioLevel(f32),
     SignalDetected,
@@ -217,6 +226,7 @@ fn run_session(
         consecutive_no_sample_ticks: 0,
         startup_deadline: Instant::now() + Duration::from_millis(1200),
         silence_deadline: Instant::now() + Duration::from_secs(3),
+        live_preview: params.live_preview,
     }
     .run();
 }
@@ -278,6 +288,7 @@ struct Monitor<'a> {
     consecutive_no_sample_ticks: u32,
     startup_deadline: Instant,
     silence_deadline: Instant,
+    live_preview: bool,
 }
 
 enum Flow {
@@ -308,6 +319,14 @@ impl Monitor<'_> {
                 let _ = self.result_tx.send(AudioResult::AudioLevel(chunk_rms));
             }
             self.adapt_threshold(chunk.is_some(), chunk_rms);
+
+            if self.live_preview
+                && self.level_tick.is_multiple_of(PARTIAL_TICKS)
+                && let Some(partial) = self.session.current_phrase()
+                && !partial.samples.is_empty()
+            {
+                let _ = self.result_tx.send(AudioResult::PartialPhrase(partial));
+            }
 
             if let Flow::EndSession = self.dispatch_events(events) {
                 return;

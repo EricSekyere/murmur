@@ -6,10 +6,12 @@ let modelName = 'small.en';
 let recordingStartTime = null;
 let durationTimerHandle = null;
 let lastTranscription = '';
-let history = [];                  // max 10, newest first
+let history = [];                  // backend-backed entries, newest first
+let historyQuery = '';             // active history search filter
 let transcriptionHandled = false;  // guard: prevent double-display from invoke + event
 let currentSession = null;
 let sessionPhrases = [];           // delivered segments this session; '\n' marks line breaks
+let interimText = '';              // live partial for the phrase currently being spoken
 
 let vizActive = false;
 let animationFrameHandle = null;

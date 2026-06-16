@@ -104,6 +104,7 @@ fn start_session(app: &tauri::AppHandle, state: &AppState) {
             vad_threshold: settings.vad_threshold,
             phrase_pause: Duration::from_secs_f32(settings.phrase_pause_secs),
             session_timeout: Duration::from_secs_f32(settings.session_timeout_secs),
+            live_preview: settings.live_preview,
         }
     };
     let send_result = match state.audio.get() {
@@ -152,9 +153,33 @@ struct SessionStats {
 /// each, and deliver the text to the focused application.
 fn streaming_worker(app: &tauri::AppHandle) {
     let state = app.state::<AppState>();
-    let (output_mode, sound_feedback) = {
+    // Resolve any per-app profile for the foreground app up front, so its
+    // overrides apply for the whole session.
+    let target_app = current_app_name();
+    let (output_mode, sound_feedback, live_preview) = {
         let settings = state.settings.lock().unwrap_or_else(|e| e.into_inner());
-        (settings.output_mode, settings.sound_feedback)
+        let profile = target_app
+            .as_deref()
+            .and_then(|app| settings.app_profiles.iter().find(|p| p.matches(app)));
+        let dev_override = profile.and_then(|p| p.developer_mode);
+        *state
+            .session_dev_mode
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = dev_override;
+        if let Some(p) = profile {
+            tracing::info!(
+                "Applied app profile '{}' for {:?}",
+                p.app,
+                target_app.as_deref().unwrap_or("?")
+            );
+        }
+        (
+            profile
+                .and_then(|p| p.output_mode)
+                .unwrap_or(settings.output_mode),
+            settings.sound_feedback,
+            settings.live_preview,
+        )
     };
 
     #[cfg(windows)]
@@ -194,6 +219,10 @@ fn streaming_worker(app: &tauri::AppHandle) {
         crate::sound::play_start();
     }
 
+    // Live preview runs on its own thread so interim decodes never stall the
+    // delivery of finished phrases. `None` when the feature is off.
+    let mut preview = live_preview.then(|| crate::preview::spawn(app.clone()));
+
     let mut stats = SessionStats::default();
     loop {
         match audio.recv_result() {
@@ -208,6 +237,11 @@ fn streaming_worker(app: &tauri::AppHandle) {
                     previous_hwnd,
                     &mut stats,
                 );
+            }
+            Ok(AudioResult::PartialPhrase(buffer)) => {
+                if let Some((tx, _)) = &preview {
+                    let _ = tx.send(buffer);
+                }
             }
             Ok(AudioResult::StreamingDone) => {
                 tracing::info!("Streaming session ended");
@@ -238,6 +272,13 @@ fn streaming_worker(app: &tauri::AppHandle) {
         }
     }
 
+    // Stop the preview worker and wait for any in-flight decode to finish, so
+    // a late partial can't overwrite the final text on screen.
+    if let Some((tx, handle)) = preview.take() {
+        drop(tx);
+        let _ = handle.join();
+    }
+
     finish_streaming(app, &state, &stats, sound_feedback);
 }
 
@@ -263,15 +304,24 @@ fn handle_phrase(
     if let Some((text, processing_time_ms)) = transcribe_chunk(app, buffer) {
         stats.had_transcription = true;
         match voice_commands::parse(&text) {
-            VoiceCommand::Text => deliver_text(
-                app,
-                state,
-                &text,
-                output_mode,
-                processing_time_ms,
-                #[cfg(windows)]
-                previous_hwnd,
-            ),
+            VoiceCommand::Text => {
+                // A user snippet expands to its replacement text; otherwise
+                // the spoken phrase is delivered verbatim.
+                let expansion = {
+                    let settings = state.settings.lock().unwrap_or_else(|e| e.into_inner());
+                    voice_commands::match_snippet(&text, &settings.snippets).map(str::to_string)
+                };
+                let delivered = expansion.as_deref().unwrap_or(text.as_str());
+                deliver_text(
+                    app,
+                    state,
+                    delivered,
+                    output_mode,
+                    processing_time_ms,
+                    #[cfg(windows)]
+                    previous_hwnd,
+                );
+            }
             command => execute_command(app, state, command),
         }
     }
@@ -313,10 +363,35 @@ fn deliver_text(
         .lock()
         .unwrap_or_else(|e| e.into_inner()) = delivered;
 
+    record_history(state, text);
+
     let _ = app.emit(
         "streaming-phrase",
         serde_json::json!({ "text": text, "processing_time_ms": processing_time_ms }),
     );
+}
+
+/// Append a delivered phrase to the persistent history and save it. Best
+/// effort: a failed write is logged, never surfaced to the user.
+fn record_history(state: &AppState, text: &str) {
+    let app_name = current_app_name();
+    let mut history = state.history.lock().unwrap_or_else(|e| e.into_inner());
+    history.add(text, app_name);
+    if let Err(e) = history.save(&state.history_path) {
+        tracing::warn!("Failed to save history: {}", e);
+    }
+}
+
+/// Name of the foreground application receiving the text, when available.
+#[cfg(windows)]
+fn current_app_name() -> Option<String> {
+    murmur_core::output::keyboard::foreground_window_info_public()
+        .and_then(|info| info.process_name)
+}
+
+#[cfg(not(windows))]
+fn current_app_name() -> Option<String> {
+    None
 }
 
 /// Run a spoken editing command (new line, new paragraph, scratch that).
@@ -340,6 +415,14 @@ fn execute_command(app: &tauri::AppHandle, state: &AppState, command: VoiceComma
                 .clear();
             keyboard::press_backspace(count)
         }
+        VoiceCommand::SelectAll => keyboard::select_all(),
+        VoiceCommand::Copy => keyboard::copy(),
+        VoiceCommand::Cut => keyboard::cut(),
+        VoiceCommand::Paste => keyboard::paste(),
+        VoiceCommand::Undo => keyboard::undo(),
+        VoiceCommand::Redo => keyboard::redo(),
+        VoiceCommand::Tab => keyboard::press_tab(),
+        VoiceCommand::Escape => keyboard::press_escape(),
         VoiceCommand::Text => return,
     };
     if let Err(e) = result {
@@ -358,6 +441,14 @@ fn execute_command(app: &tauri::AppHandle, state: &AppState, command: VoiceComma
         VoiceCommand::NewLine => "new line",
         VoiceCommand::NewParagraph => "new paragraph",
         VoiceCommand::ScratchThat => "scratch that",
+        VoiceCommand::SelectAll => "select all",
+        VoiceCommand::Copy => "copy",
+        VoiceCommand::Cut => "cut",
+        VoiceCommand::Paste => "paste",
+        VoiceCommand::Undo => "undo",
+        VoiceCommand::Redo => "redo",
+        VoiceCommand::Tab => "tab",
+        VoiceCommand::Escape => "escape",
         VoiceCommand::Text => "",
     };
     tracing::info!("Executed voice command: {}", label);
@@ -423,6 +514,11 @@ fn finish_streaming(
     }
 
     *state.recording.lock().unwrap_or_else(|e| e.into_inner()) = false;
+    // Drop any per-app override so the next session starts from the globals.
+    *state
+        .session_dev_mode
+        .lock()
+        .unwrap_or_else(|e| e.into_inner()) = None;
     emit_recording_state(app, false, false);
     let _ = app.emit("streaming-done", serde_json::json!({}));
 }

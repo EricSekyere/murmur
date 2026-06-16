@@ -20,6 +20,11 @@ settingsToggle.addEventListener('click', async () => {
     if (status.transcription_profile) {
       transcriptionProfileSelect.value = status.transcription_profile;
     }
+    if (status.language) {
+      languageSelect.value = status.language;
+    }
+    translateToggle.checked = !!status.translate_to_english;
+    applyMultilingualState(!!status.model_multilingual);
     if (status.phrase_pause_secs != null) {
       phrasePauseRange.value = status.phrase_pause_secs;
       phrasePauseValue.textContent = `${parseFloat(status.phrase_pause_secs).toFixed(1)}s`;
@@ -51,8 +56,23 @@ settingsToggle.addEventListener('click', async () => {
       vocabularyInput.value = status.custom_vocabulary.join('\n');
       vocabularySave.disabled = true;
     }
+    if (Array.isArray(status.snippets)) {
+      snippetsInput.value = status.snippets
+        .map(s => `${s.trigger} = ${s.expansion}`)
+        .join('\n');
+      snippetsSave.disabled = true;
+    }
+    if (Array.isArray(status.app_profiles)) {
+      appProfilesInput.value = status.app_profiles
+        .map(formatAppProfile)
+        .join('\n');
+      appProfilesSave.disabled = true;
+    }
     if (status.sound_feedback != null) {
       soundFeedbackToggle.checked = status.sound_feedback;
+    }
+    if (status.live_preview != null) {
+      livePreviewToggle.checked = status.live_preview;
     }
     developerModeToggle.checked = !!status.developer_mode;
     devModeBadge.hidden = !status.developer_mode;
@@ -120,6 +140,39 @@ transcriptionProfileSelect.addEventListener('change', async () => {
     await invoke('update_settings', { transcription_profile: profile });
     showToast(`Profile: ${profile}`, 'success');
   } catch (err) {
+    showToast(`Failed: ${err}`, 'error');
+  }
+});
+
+// Language and translation only work with a multilingual model; reflect that
+// by dimming the controls and noting it in the hint when an English-only
+// model is active.
+function applyMultilingualState(multilingual) {
+  languageSelect.disabled = !multilingual;
+  translateToggle.disabled = !multilingual;
+  if (languageHint) {
+    languageHint.textContent = multilingual
+      ? 'Auto-detect, or pick a language. Powered by the multilingual model.'
+      : 'Needs the multilingual model (Large v3 Turbo). The English models only do English.';
+  }
+}
+
+languageSelect.addEventListener('change', async () => {
+  const language = languageSelect.value;
+  try {
+    await invoke('update_settings', { language });
+    showToast(`Language: ${languageSelect.options[languageSelect.selectedIndex].text}`, 'success');
+  } catch (err) {
+    showToast(`Failed: ${err}`, 'error');
+  }
+});
+
+translateToggle.addEventListener('change', async () => {
+  const enabled = translateToggle.checked;
+  try {
+    await invoke('update_settings', { translate_to_english: enabled });
+  } catch (err) {
+    translateToggle.checked = !enabled;
     showToast(`Failed: ${err}`, 'error');
   }
 });
@@ -265,6 +318,16 @@ soundFeedbackToggle.addEventListener('change', async () => {
   }
 });
 
+livePreviewToggle.addEventListener('change', async () => {
+  const enabled = livePreviewToggle.checked;
+  try {
+    await invoke('update_settings', { live_preview: enabled });
+  } catch (err) {
+    livePreviewToggle.checked = !enabled;
+    showToast(`Failed: ${err}`, 'error');
+  }
+});
+
 vocabularyInput.addEventListener('input', () => {
   vocabularySave.disabled = false;
 });
@@ -280,6 +343,88 @@ vocabularySave.addEventListener('click', async () => {
     showToast(`Dictionary saved (${words.length} ${words.length === 1 ? 'term' : 'terms'})`, 'success');
   } catch (err) {
     vocabularySave.disabled = false;
+    showToast(`Failed: ${err}`, 'error');
+  }
+});
+
+// Parse "trigger = expansion" lines into snippet objects. Only the first '='
+// splits, so an expansion can itself contain '='.
+function parseSnippets(text) {
+  return text
+    .split('\n')
+    .map(line => {
+      const eq = line.indexOf('=');
+      if (eq === -1) return null;
+      const trigger = line.slice(0, eq).trim();
+      const expansion = line.slice(eq + 1).trim();
+      return trigger && expansion ? { trigger, expansion } : null;
+    })
+    .filter(Boolean);
+}
+
+snippetsInput.addEventListener('input', () => {
+  snippetsSave.disabled = false;
+});
+
+snippetsSave.addEventListener('click', async () => {
+  const snippets = parseSnippets(snippetsInput.value);
+  snippetsSave.disabled = true;
+  try {
+    await invoke('update_settings', { snippets });
+    showToast(`Snippets saved (${snippets.length} ${snippets.length === 1 ? 'snippet' : 'snippets'})`, 'success');
+  } catch (err) {
+    snippetsSave.disabled = false;
+    showToast(`Failed: ${err}`, 'error');
+  }
+});
+
+const OUTPUT_MODES = ['auto', 'keyboard', 'clipboard_paste', 'clipboard'];
+
+// Render a profile object back to its "app = options" line.
+function formatAppProfile(p) {
+  const opts = [];
+  if (p.developer_mode === true) opts.push('dev');
+  else if (p.developer_mode === false) opts.push('plain');
+  if (p.output_mode) opts.push(p.output_mode);
+  return opts.length ? `${p.app} = ${opts.join(', ')}` : p.app;
+}
+
+// Parse "app = dev, clipboard_paste" lines into profile objects. Unknown
+// tokens are ignored; a line needs an app and at least one valid override.
+function parseAppProfiles(text) {
+  return text
+    .split('\n')
+    .map(line => {
+      const eq = line.indexOf('=');
+      if (eq === -1) return null;
+      const app = line.slice(0, eq).trim();
+      if (!app) return null;
+      const tokens = line.slice(eq + 1).split(',').map(t => t.trim().toLowerCase()).filter(Boolean);
+      let output_mode = null;
+      let developer_mode = null;
+      for (const t of tokens) {
+        if (t === 'dev' || t === 'developer') developer_mode = true;
+        else if (t === 'plain' || t === 'nodev') developer_mode = false;
+        else if (OUTPUT_MODES.includes(t)) output_mode = t;
+      }
+      if (output_mode === null && developer_mode === null) return null;
+      return { app, output_mode, developer_mode };
+    })
+    .filter(Boolean);
+}
+
+appProfilesInput.addEventListener('input', () => {
+  appProfilesSave.disabled = false;
+});
+
+appProfilesSave.addEventListener('click', async () => {
+  const appProfiles = parseAppProfiles(appProfilesInput.value);
+  appProfilesSave.disabled = true;
+  try {
+    await invoke('update_settings', { app_profiles: appProfiles });
+    showToast(`Profiles saved (${appProfiles.length} ${appProfiles.length === 1 ? 'profile' : 'profiles'})`, 'success');
+  } catch (err) {
+    appProfilesSave.disabled = false;
     showToast(`Failed: ${err}`, 'error');
   }
 });
@@ -395,6 +540,10 @@ listen('model-changed', (event) => {
     micBtn.disabled = uiState === 'processing';
     showToast(`Switched to ${data.model_name}`, 'success');
     loadModelList();
+    // The new model may differ in multilingual support; refresh the controls.
+    invoke('get_status')
+      .then(s => applyMultilingualState(!!s.model_multilingual))
+      .catch(() => {});
   } else {
     modelReady = false;
     modelInfo.textContent = `Loading: ${data.model_name}...`;

@@ -89,12 +89,186 @@ pub fn press_backspace(count: usize) -> Result<()> {
     }
 }
 
+/// Editing chords for spoken commands. The primary modifier is Ctrl on
+/// Windows/Linux and Cmd on macOS, matching each platform's conventions.
+pub fn select_all() -> Result<()> {
+    primary_chord(b'A')
+}
+
+pub fn copy() -> Result<()> {
+    primary_chord(b'C')
+}
+
+pub fn cut() -> Result<()> {
+    primary_chord(b'X')
+}
+
+pub fn paste() -> Result<()> {
+    primary_chord(b'V')
+}
+
+pub fn undo() -> Result<()> {
+    primary_chord(b'Z')
+}
+
+/// Redo: Ctrl+Y on Windows, primary+Shift+Z elsewhere (the common binding on
+/// macOS and Linux apps).
+pub fn redo() -> Result<()> {
+    #[cfg(windows)]
+    {
+        const VK_Y: u16 = 0x59;
+        send_chord(&[VK_CONTROL], VK_Y)
+    }
+    #[cfg(not(windows))]
+    {
+        send_enigo_chord(
+            &[primary_modifier(), enigo::Key::Shift],
+            enigo::Key::Unicode('z'),
+        )
+    }
+}
+
+pub fn press_tab() -> Result<()> {
+    #[cfg(windows)]
+    {
+        const VK_TAB: u16 = 0x09;
+        send_vk_taps(VK_TAB, 1)
+    }
+    #[cfg(not(windows))]
+    {
+        send_enigo_key(enigo::Key::Tab, 1)
+    }
+}
+
+pub fn press_escape() -> Result<()> {
+    #[cfg(windows)]
+    {
+        const VK_ESCAPE: u16 = 0x1B;
+        send_vk_taps(VK_ESCAPE, 1)
+    }
+    #[cfg(not(windows))]
+    {
+        send_enigo_key(enigo::Key::Escape, 1)
+    }
+}
+
+/// Tap an ASCII letter while holding the platform's primary modifier.
+fn primary_chord(ascii_upper: u8) -> Result<()> {
+    #[cfg(windows)]
+    {
+        // Letter VK codes equal their uppercase ASCII value.
+        send_chord(&[VK_CONTROL], ascii_upper as u16)
+    }
+    #[cfg(not(windows))]
+    {
+        let key = enigo::Key::Unicode(ascii_upper.to_ascii_lowercase() as char);
+        send_enigo_chord(&[primary_modifier()], key)
+    }
+}
+
+#[cfg(windows)]
+const VK_CONTROL: u16 = 0x11;
+
+#[cfg(not(windows))]
+fn primary_modifier() -> enigo::Key {
+    #[cfg(target_os = "macos")]
+    {
+        enigo::Key::Meta
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        enigo::Key::Control
+    }
+}
+
 #[cfg(not(windows))]
 fn send_enigo_key(key: enigo::Key, count: usize) -> Result<()> {
     use enigo::{Enigo, Keyboard, Settings};
     let mut enigo = Enigo::new(&Settings::default())?;
     for _ in 0..count {
         enigo.key(key, enigo::Direction::Click)?;
+    }
+    Ok(())
+}
+
+/// Press modifiers, click `key`, then release modifiers in reverse order.
+#[cfg(not(windows))]
+fn send_enigo_chord(modifiers: &[enigo::Key], key: enigo::Key) -> Result<()> {
+    use enigo::{Direction, Enigo, Keyboard, Settings};
+    let mut enigo = Enigo::new(&Settings::default())?;
+    for &m in modifiers {
+        enigo.key(m, Direction::Press)?;
+    }
+    enigo.key(key, Direction::Click)?;
+    for &m in modifiers.iter().rev() {
+        enigo.key(m, Direction::Release)?;
+    }
+    Ok(())
+}
+
+/// Send a modifier chord (e.g. Ctrl+C) via SendInput: modifiers down, key
+/// down, key up, modifiers up.
+#[cfg(windows)]
+fn send_chord(modifiers: &[u16], vk: u16) -> Result<()> {
+    use std::mem;
+
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    struct KeybdInput {
+        w_vk: u16,
+        w_scan: u16,
+        dw_flags: u32,
+        time: u32,
+        dw_extra_info: usize,
+    }
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    struct Input {
+        input_type: u32,
+        _padding: u32,
+        ki: KeybdInput,
+        _extra: u32,
+    }
+
+    const INPUT_KEYBOARD: u32 = 1;
+    const KEYEVENTF_KEYUP: u32 = 0x0002;
+
+    unsafe extern "system" {
+        fn SendInput(c_inputs: u32, p_inputs: *const Input, cb_size: i32) -> u32;
+    }
+
+    let event = |vk: u16, flags: u32| Input {
+        input_type: INPUT_KEYBOARD,
+        _padding: 0,
+        ki: KeybdInput {
+            w_vk: vk,
+            w_scan: 0,
+            dw_flags: flags,
+            time: 0,
+            dw_extra_info: 0,
+        },
+        _extra: 0,
+    };
+
+    let mut inputs = Vec::with_capacity(modifiers.len() * 2 + 2);
+    for &m in modifiers {
+        inputs.push(event(m, 0));
+    }
+    inputs.push(event(vk, 0));
+    inputs.push(event(vk, KEYEVENTF_KEYUP));
+    for &m in modifiers.iter().rev() {
+        inputs.push(event(m, KEYEVENTF_KEYUP));
+    }
+
+    let sent = unsafe {
+        SendInput(
+            inputs.len() as u32,
+            inputs.as_ptr(),
+            mem::size_of::<Input>() as i32,
+        )
+    };
+    if sent == 0 {
+        anyhow::bail!("SendInput failed for chord (target may be elevated)");
     }
     Ok(())
 }

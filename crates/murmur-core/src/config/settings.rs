@@ -1,8 +1,24 @@
 use crate::output::OutputMode;
 use crate::stt::models::SttModel;
+use crate::voice_commands::Snippet;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+
+/// Per-application override applied for the duration of a session when the
+/// foreground app matches. Unset fields fall back to the global settings.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AppProfile {
+    /// Case-insensitive substring of the target app's process name, e.g.
+    /// "code", "slack", "windowsterminal".
+    pub app: String,
+    /// Output mode to use in this app (None = use the global setting).
+    #[serde(default)]
+    pub output_mode: Option<OutputMode>,
+    /// Developer-mode override for this app (None = use the global toggle).
+    #[serde(default)]
+    pub developer_mode: Option<bool>,
+}
 
 /// Transcription filtering profile.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -100,6 +116,39 @@ pub struct Settings {
     /// Play a short chime when recording starts and stops.
     #[serde(default = "default_true")]
     pub sound_feedback: bool,
+
+    /// Show interim transcription as you speak, before the phrase is final.
+    /// Adds a little GPU/CPU work per session; disable for the lowest latency.
+    #[serde(default = "default_true")]
+    pub live_preview: bool,
+
+    /// User-defined text snippets: say the trigger phrase, get the expansion
+    /// typed. Matched only when the trigger is the entire phrase.
+    #[serde(default)]
+    pub snippets: Vec<Snippet>,
+
+    /// Spoken language: "auto" to detect, or a code like "en"/"es"/"fr".
+    /// Only honored by multilingual models (the `.en` models are English-only).
+    #[serde(default = "default_language")]
+    pub language: String,
+
+    /// Translate recognized speech to English (multilingual models only).
+    #[serde(default)]
+    pub translate_to_english: bool,
+
+    /// Per-app overrides applied when the foreground app matches at session
+    /// start. The first matching profile wins.
+    #[serde(default)]
+    pub app_profiles: Vec<AppProfile>,
+}
+
+impl AppProfile {
+    /// Whether this profile's `app` substring matches the given process name
+    /// (case-insensitive). Blank patterns never match.
+    pub fn matches(&self, process_name: &str) -> bool {
+        let pat = self.app.trim().to_lowercase();
+        !pat.is_empty() && process_name.to_lowercase().contains(&pat)
+    }
 }
 
 fn default_hotkey() -> String {
@@ -149,6 +198,10 @@ fn default_activation_mode() -> String {
     "toggle".to_string()
 }
 
+fn default_language() -> String {
+    "en".to_string()
+}
+
 fn default_pre_output_delay_ms() -> u64 {
     80
 }
@@ -185,6 +238,11 @@ impl Default for Settings {
             activation_mode: default_activation_mode(),
             custom_vocabulary: Vec::new(),
             sound_feedback: true,
+            live_preview: true,
+            snippets: Vec::new(),
+            language: default_language(),
+            translate_to_english: false,
+            app_profiles: Vec::new(),
         }
     }
 }
@@ -312,5 +370,30 @@ impl Settings {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn profile(app: &str) -> AppProfile {
+        AppProfile {
+            app: app.to_string(),
+            output_mode: None,
+            developer_mode: Some(true),
+        }
+    }
+
+    #[test]
+    fn app_profile_matches_case_insensitive_substring() {
+        assert!(profile("code").matches("Code.exe"));
+        assert!(profile("Terminal").matches("WindowsTerminal.exe"));
+        assert!(!profile("slack").matches("Code.exe"));
+    }
+
+    #[test]
+    fn app_profile_blank_pattern_never_matches() {
+        assert!(!profile("  ").matches("anything.exe"));
     }
 }

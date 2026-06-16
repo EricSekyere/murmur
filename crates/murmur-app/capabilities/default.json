@@ -17,6 +17,7 @@
     "global-shortcut:allow-unregister",
     "global-shortcut:allow-unregister-all",
     "core:window:allow-start-dragging",
+    "core:window:allow-set-size",
     "app:default",
     "updater:default",
     "process:default",

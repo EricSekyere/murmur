@@ -1,8 +1,17 @@
-//! Spoken editing commands recognized in a transcribed phrase.
+//! Spoken editing commands and user text snippets recognized in a phrase.
 //!
-//! A command only fires when it is the *entire* phrase (after normalization),
-//! so dictating "press enter to continue" types text rather than executing a
-//! newline.
+//! A command or snippet only fires when it is the *entire* phrase (after
+//! normalization), so dictating "press enter to continue" types text rather
+//! than executing a newline.
+
+use serde::{Deserialize, Serialize};
+
+/// A user-defined expansion: say `trigger`, get `expansion` typed instead.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Snippet {
+    pub trigger: String,
+    pub expansion: String,
+}
 
 /// The interpretation of one transcribed phrase.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -13,24 +22,63 @@ pub enum VoiceCommand {
     NewParagraph,
     /// Delete the previously delivered phrase.
     ScratchThat,
+    /// Select all (Ctrl/Cmd+A).
+    SelectAll,
+    /// Copy the selection (Ctrl/Cmd+C).
+    Copy,
+    /// Cut the selection (Ctrl/Cmd+X).
+    Cut,
+    /// Paste (Ctrl/Cmd+V).
+    Paste,
+    /// Undo (Ctrl/Cmd+Z).
+    Undo,
+    /// Redo (Ctrl+Y / Cmd+Shift+Z).
+    Redo,
+    /// Press Tab.
+    Tab,
+    /// Press Escape.
+    Escape,
     /// Ordinary dictation — deliver the text unchanged.
     Text,
 }
 
-/// Classify a transcribed phrase. Matching is case-insensitive and ignores
-/// surrounding whitespace and trailing punctuation.
-pub fn parse(phrase: &str) -> VoiceCommand {
-    let normalized: String = phrase
+/// Lowercase, trimmed, and stripped of trailing sentence punctuation, so
+/// matching ignores case, surrounding whitespace, and a trailing "." or "?".
+fn normalize(phrase: &str) -> String {
+    phrase
         .trim()
         .trim_end_matches(['.', '!', '?', ','])
-        .to_lowercase();
+        .trim()
+        .to_lowercase()
+}
 
-    match normalized.as_str() {
+/// Classify a transcribed phrase as a built-in editing command, or `Text`.
+pub fn parse(phrase: &str) -> VoiceCommand {
+    match normalize(phrase).as_str() {
         "new line" | "newline" => VoiceCommand::NewLine,
         "new paragraph" => VoiceCommand::NewParagraph,
-        "scratch that" | "delete that" | "undo that" => VoiceCommand::ScratchThat,
+        "scratch that" | "delete that" => VoiceCommand::ScratchThat,
+        "select all" | "select everything" => VoiceCommand::SelectAll,
+        "copy that" | "copy selection" => VoiceCommand::Copy,
+        "cut that" | "cut selection" => VoiceCommand::Cut,
+        "paste" | "paste that" => VoiceCommand::Paste,
+        "undo" | "undo that" => VoiceCommand::Undo,
+        "redo" | "redo that" => VoiceCommand::Redo,
+        "press tab" | "tab key" => VoiceCommand::Tab,
+        "press escape" | "escape key" => VoiceCommand::Escape,
         _ => VoiceCommand::Text,
     }
+}
+
+/// If the phrase exactly matches a snippet trigger, return its expansion.
+/// Built-in commands take precedence, so callers should only consult this
+/// after [`parse`] returns [`VoiceCommand::Text`].
+pub fn match_snippet<'a>(phrase: &str, snippets: &'a [Snippet]) -> Option<&'a str> {
+    let normalized = normalize(phrase);
+    snippets
+        .iter()
+        .find(|s| normalize(&s.trigger) == normalized)
+        .map(|s| s.expansion.as_str())
 }
 
 #[cfg(test)]
@@ -46,9 +94,36 @@ mod tests {
     }
 
     #[test]
+    fn recognizes_editing_commands() {
+        assert_eq!(parse("select all"), VoiceCommand::SelectAll);
+        assert_eq!(parse("Copy that."), VoiceCommand::Copy);
+        assert_eq!(parse("cut selection"), VoiceCommand::Cut);
+        assert_eq!(parse("paste"), VoiceCommand::Paste);
+        assert_eq!(parse("undo"), VoiceCommand::Undo);
+        assert_eq!(parse("redo that"), VoiceCommand::Redo);
+        assert_eq!(parse("press tab"), VoiceCommand::Tab);
+        assert_eq!(parse("press escape"), VoiceCommand::Escape);
+    }
+
+    #[test]
     fn commands_inside_a_sentence_are_plain_text() {
         assert_eq!(parse("press the new line button"), VoiceCommand::Text);
         assert_eq!(parse("scratch that itch"), VoiceCommand::Text);
         assert_eq!(parse("the quick brown fox"), VoiceCommand::Text);
+        assert_eq!(parse("copy that file to the server"), VoiceCommand::Text);
+    }
+
+    #[test]
+    fn snippet_matches_whole_phrase_only() {
+        let snippets = vec![Snippet {
+            trigger: "my email".to_string(),
+            expansion: "user@example.com".to_string(),
+        }];
+        assert_eq!(
+            match_snippet("My email.", &snippets),
+            Some("user@example.com")
+        );
+        assert_eq!(match_snippet("send my email now", &snippets), None);
+        assert_eq!(match_snippet("my address", &snippets), None);
     }
 }

@@ -2,9 +2,10 @@
 
 use std::sync::Arc;
 
-use murmur_core::config::{Settings, TranscriptionProfile};
+use murmur_core::config::{AppProfile, Settings, TranscriptionProfile};
 use murmur_core::output::OutputMode;
 use murmur_core::stt::models::{ModelManager, SttModel};
+use murmur_core::voice_commands::Snippet;
 use tauri::{Emitter, Manager, State};
 use tauri_plugin_global_shortcut::GlobalShortcutExt;
 
@@ -46,6 +47,12 @@ pub(crate) fn get_status(state: State<'_, AppState>) -> serde_json::Value {
         "custom_vocabulary": settings.custom_vocabulary,
         "sound_feedback": settings.sound_feedback,
         "vad_threshold": settings.vad_threshold,
+        "live_preview": settings.live_preview,
+        "snippets": settings.snippets,
+        "language": settings.language,
+        "translate_to_english": settings.translate_to_english,
+        "model_multilingual": settings.model.is_multilingual(),
+        "app_profiles": settings.app_profiles,
     })
 }
 
@@ -53,6 +60,27 @@ pub(crate) fn get_status(state: State<'_, AppState>) -> serde_json::Value {
 pub(crate) fn toggle_recording(app: tauri::AppHandle) -> Result<(), String> {
     handle_toggle(&app);
     Ok(())
+}
+
+/// Recent history entries matching `query` (case-insensitive substring; empty
+/// or omitted matches all), newest first, capped at `limit` (default 200).
+#[tauri::command]
+pub(crate) fn get_history(
+    state: State<'_, AppState>,
+    query: Option<String>,
+    limit: Option<usize>,
+) -> serde_json::Value {
+    let history = state.history.lock().unwrap_or_else(|e| e.into_inner());
+    let entries = history.search(query.as_deref().unwrap_or(""), limit.unwrap_or(200));
+    serde_json::json!({ "entries": entries })
+}
+
+/// Clear all stored history and persist the empty log.
+#[tauri::command]
+pub(crate) fn clear_history(state: State<'_, AppState>) -> Result<(), String> {
+    let mut history = state.history.lock().unwrap_or_else(|e| e.into_inner());
+    history.clear();
+    history.save(&state.history_path).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -201,6 +229,11 @@ pub(crate) fn update_settings(
     custom_vocabulary: Option<Vec<String>>,
     sound_feedback: Option<bool>,
     vad_threshold: Option<f32>,
+    live_preview: Option<bool>,
+    snippets: Option<Vec<Snippet>>,
+    language: Option<String>,
+    translate_to_english: Option<bool>,
+    app_profiles: Option<Vec<AppProfile>>,
 ) -> Result<(), String> {
     let mut settings = state.settings.lock().unwrap_or_else(|e| e.into_inner());
 
@@ -265,6 +298,46 @@ pub(crate) fn update_settings(
             return Err(format!("vad_threshold must be 0.05-0.95, got {}", vt));
         }
         settings.vad_threshold = vt;
+    }
+    if let Some(lp) = live_preview {
+        settings.live_preview = lp;
+    }
+    if let Some(snips) = snippets {
+        // Trim, drop entries missing a trigger or expansion, cap at 100.
+        settings.snippets = snips
+            .into_iter()
+            .map(|s| Snippet {
+                trigger: s.trigger.trim().to_string(),
+                expansion: s.expansion,
+            })
+            .filter(|s| !s.trigger.is_empty() && !s.expansion.is_empty())
+            .take(100)
+            .collect();
+    }
+    if let Some(lang) = language {
+        let trimmed = lang.trim();
+        if !trimmed.is_empty() {
+            settings.language = trimmed.to_lowercase();
+        }
+    }
+    if let Some(tr) = translate_to_english {
+        settings.translate_to_english = tr;
+    }
+    if let Some(profiles) = app_profiles {
+        // Trim the app pattern, drop entries with no pattern or no override,
+        // cap at 50 to keep session-start matching cheap.
+        settings.app_profiles = profiles
+            .into_iter()
+            .map(|p| AppProfile {
+                app: p.app.trim().to_lowercase(),
+                output_mode: p.output_mode,
+                developer_mode: p.developer_mode,
+            })
+            .filter(|p| {
+                !p.app.is_empty() && (p.output_mode.is_some() || p.developer_mode.is_some())
+            })
+            .take(50)
+            .collect();
     }
 
     if let Ok(path) = Settings::default_path() {
