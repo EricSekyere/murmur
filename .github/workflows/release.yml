@@ -73,11 +73,16 @@ jobs:
           releaseBody: |
             Fast, private, on-device dictation for Windows.
 
-            ## Fixes in 0.3.3
+            A reliability and privacy hardening pass from a full code audit.
 
-            - **Single instance.** Murmur refuses to run a second copy of itself; a second launch focuses the existing window. Two instances could double-capture audio and race the clipboard during paste, which could dump old clipboard contents into the focused app.
-            - **Safer voice commands.** Removed the spoken "paste", "cut", and "select all" commands. A misrecognition could inject the clipboard or destroy a document, so these are now plain dictated text again.
-            - **Cleanup.** Replaced example values in the settings placeholders with generic ones.
+            ## Fixes in 0.3.4
+
+            - **Stays offline.** Removed a Google Fonts request that fired on every launch, and stopped writing recognized text to the on-disk log.
+            - **Recovers from a lost mic.** Unplugging the microphone mid-session now ends the session with a clear message instead of hanging.
+            - **Model switching is safe.** Changing models while recording no longer drops the rest of the session.
+            - **Clipboard and focus.** Wider window before restoring the clipboard after a terminal paste, an image clipboard is preserved, and dictation lands in the window you started in rather than one focus drifted to.
+            - **Live preview is lighter.** The preview snapshot is bounded so long phrases no longer slow the final, and the capture buffer is capped.
+            - **Many smaller fixes:** non-English context no longer leaks into non-English decodes, non-ASCII text survives developer-mode cleanup, a corrupt config recovers to defaults instead of failing to start, and a bare "undo" no longer fires Ctrl+Z.
 
             ## Also in 0.3.x
 
