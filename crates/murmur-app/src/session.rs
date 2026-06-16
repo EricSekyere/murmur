@@ -239,9 +239,10 @@ fn streaming_worker(app: &tauri::AppHandle) {
     }
 
     // When the caption should roam to the active window, pass that window so
-    // the preview worker positions the caption near it.
+    // the preview worker positions the caption near it. A zero hwnd means no
+    // external window was captured, so leave the caption under the pill.
     #[cfg(windows)]
-    let caption_target = caption_at_window.then_some(previous_hwnd);
+    let caption_target = (caption_at_window && previous_hwnd != 0).then_some(previous_hwnd);
     #[cfg(not(windows))]
     let caption_target: Option<usize> = None;
 

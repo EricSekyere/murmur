@@ -16,18 +16,24 @@ pub(crate) fn show(app: &tauri::AppHandle, target_hwnd: usize, text: &str) {
     let Some(win) = app.get_webview_window("caption") else {
         return;
     };
-    let _ = win.emit("caption-text", text);
 
     #[cfg(windows)]
-    if let Some((x, y)) = anchor_near_window(target_hwnd) {
+    {
+        let Some((x, y)) = anchor_near_window(target_hwnd) else {
+            // The target window is gone or unreportable: hide rather than leave
+            // the caption stranded at a stale or default (0,0) position.
+            let _ = win.emit("caption-text", "");
+            let _ = win.hide();
+            return;
+        };
         tracing::debug!("Caption near hwnd=0x{:x} at ({}, {})", target_hwnd, x, y);
         let _ = win.set_position(PhysicalPosition::new(x, y));
-    } else {
-        tracing::warn!("Caption could not anchor to hwnd=0x{:x}", target_hwnd);
     }
+
     #[cfg(not(windows))]
     let _ = target_hwnd;
 
+    let _ = win.emit("caption-text", text);
     let _ = win.set_always_on_top(true);
     let _ = win.show();
 }
@@ -70,6 +76,7 @@ fn anchor_near_window(hwnd: usize) -> Option<(i32, i32)> {
         fn GetWindowRect(hwnd: usize, rect: *mut Rect) -> i32;
         fn MonitorFromWindow(hwnd: usize, flags: u32) -> usize;
         fn GetMonitorInfoW(hmon: usize, info: *mut MonitorInfo) -> i32;
+        fn GetDpiForWindow(hwnd: usize) -> u32;
     }
 
     if unsafe { IsWindow(hwnd) } == 0 {
@@ -100,15 +107,27 @@ fn anchor_near_window(hwnd: usize) -> Option<(i32, i32)> {
         }
     };
 
-    let win_w = (r.right - r.left).max(0);
-    let mut x = r.left + (win_w - CAPTION_WIDTH) / 2;
-    x = x.clamp(work.left, (work.right - CAPTION_WIDTH).max(work.left));
+    // GetWindowRect and set_position are in physical pixels, but the caption
+    // window is sized in logical pixels. Scale its dimensions by the target
+    // monitor's DPI so centering and bottom-edge fitting are right on HiDPI.
+    let scale = match unsafe { GetDpiForWindow(hwnd) } {
+        0 => 1.0,
+        dpi => dpi as f32 / 96.0,
+    };
+    let caption_w = (CAPTION_WIDTH as f32 * scale).round() as i32;
+    let caption_h = (CAPTION_HEIGHT as f32 * scale).round() as i32;
+    let gap = (8.0 * scale).round() as i32;
+    let inset = (12.0 * scale).round() as i32;
 
-    let below = r.bottom + 8;
-    let y = if below + CAPTION_HEIGHT <= work.bottom {
+    let win_w = (r.right - r.left).max(0);
+    let mut x = r.left + (win_w - caption_w) / 2;
+    x = x.clamp(work.left, (work.right - caption_w).max(work.left));
+
+    let below = r.bottom + gap;
+    let y = if below + caption_h <= work.bottom {
         below
     } else {
-        (r.bottom - CAPTION_HEIGHT - 12).max(work.top)
+        (r.bottom - caption_h - inset).max(work.top)
     };
 
     Some((x, y))
