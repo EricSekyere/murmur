@@ -25,6 +25,10 @@ const MONITOR_TICK: Duration = Duration::from_millis(50);
 /// Emit a live-preview partial every this many ticks (~700ms). Spaced out so
 /// interim transcriptions stay cheap and never starve the final-phrase path.
 const PARTIAL_TICKS: u32 = 14;
+/// End the session if the stream stops delivering samples for this many ticks
+/// mid-recording (~3s). A connected mic always delivers silence samples, so a
+/// sustained gap means the device disconnected or the driver stalled.
+const MID_SESSION_STALL_TICKS: u32 = 60;
 
 #[derive(Clone)]
 pub(crate) struct StartParams {
@@ -441,6 +445,15 @@ impl Monitor<'_> {
             && self.consecutive_no_sample_ticks >= 20
         {
             return self.fail_no_signal("Microphone stream stopped delivering audio samples.");
+        }
+
+        // After we have already heard audio, a sustained gap means the device
+        // disconnected mid-session. Without this the session would hang until
+        // the inactivity timeout, silently capturing nothing.
+        if self.saw_signal && self.consecutive_no_sample_ticks >= MID_SESSION_STALL_TICKS {
+            return self.fail_no_signal(
+                "Microphone stopped delivering audio. The input device may have been disconnected or changed.",
+            );
         }
 
         if !self.saw_signal
