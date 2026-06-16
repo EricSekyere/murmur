@@ -491,7 +491,9 @@ fn update_session_context(state: &AppState, text: &str) {
         prev.push(' ');
     }
     prev.push_str(text);
-    if prev.len() > 200 {
+    // Cap by character count, not bytes, so multibyte languages get the same
+    // ~200-character budget rather than being trimmed early.
+    if prev.chars().count() > 200 {
         let start_byte = prev
             .char_indices()
             .rev()

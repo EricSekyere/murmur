@@ -443,7 +443,6 @@ static TECH_TERMS: LazyLock<HashMap<String, &str>> = LazyLock::new(|| {
         ("cargo", "Cargo"),
         ("pip", "pip"),
         ("homebrew", "Homebrew"),
-        ("homebrew", "Homebrew"),
         ("git", "Git"),
         ("jira", "Jira"),
         ("confluence", "Confluence"),
