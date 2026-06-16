@@ -21,7 +21,10 @@ pub(crate) fn show(app: &tauri::AppHandle, target_hwnd: usize, text: &str) {
 
     #[cfg(windows)]
     if let Some((x, y)) = anchor_near_window(target_hwnd) {
+        tracing::debug!("Caption near hwnd=0x{:x} at ({}, {})", target_hwnd, x, y);
         let _ = win.set_position(PhysicalPosition::new(x, y));
+    } else {
+        tracing::warn!("Caption could not anchor to hwnd=0x{:x}", target_hwnd);
     }
     #[cfg(not(windows))]
     let _ = target_hwnd;

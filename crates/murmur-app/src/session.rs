@@ -193,6 +193,10 @@ fn streaming_worker(app: &tauri::AppHandle) {
 
     // Tell the widget which caption mode is active so it only grows its own
     // caption when the preview is meant to live under the pill.
+    tracing::debug!(
+        "Live caption position: {}",
+        if caption_at_window { "window" } else { "pill" }
+    );
     let _ = app.emit(
         "caption-mode",
         serde_json::json!({ "at_window": caption_at_window }),
@@ -348,6 +352,10 @@ fn handle_phrase(
             command => execute_command(app, state, command),
         }
     }
+
+    // The phrase has landed in the target, so clear the roaming caption; the
+    // next phrase's first partial will bring it back.
+    crate::caption::hide(app);
 
     let still_recording = *state.recording.lock().unwrap_or_else(|e| e.into_inner());
     if still_recording {

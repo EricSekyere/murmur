@@ -344,6 +344,7 @@ pub(crate) fn update_settings(
         if pos != "pill" && pos != "window" {
             return Err(format!("Unknown caption position: {}", pos));
         }
+        tracing::info!("Caption position set to: {}", pos);
         settings.caption_position = pos.clone();
         let _ = app.emit(
             "caption-mode",
