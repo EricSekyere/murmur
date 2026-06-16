@@ -1,6 +1,10 @@
 use anyhow::{Context, Result};
 use arboard::Clipboard;
 
+/// How long to leave our text on the clipboard after the paste keystroke so a
+/// slow target finishes reading before we restore the previous contents.
+const CLIPBOARD_READ_GRACE_MS: u64 = 500;
+
 /// Outputs text by copying to the clipboard and simulating a paste keystroke.
 ///
 /// This is more reliable than direct keystroke simulation in many applications:
@@ -81,11 +85,12 @@ impl ClipboardPasteOutput {
 
         // Give the target app time to actually read the clipboard before we
         // restore it. If we restore too soon, a slow app (e.g. an Electron
-        // terminal) reads the clipboard after the restore and pastes the
-        // user's previous content instead of our text. 250ms covers all but
-        // pathologically slow apps; this path is only reached for genuine
-        // terminals now, so the longer wait is not on the common path.
-        std::thread::sleep(std::time::Duration::from_millis(250));
+        // terminal under load) reads the clipboard after the restore and
+        // pastes the user's previous content instead of our text. This path is
+        // only reached for genuine terminals, so the wait is off the common
+        // path; favour a wider window over a tighter one to avoid leaking the
+        // previous clipboard. This is still best-effort, not a guarantee.
+        std::thread::sleep(std::time::Duration::from_millis(CLIPBOARD_READ_GRACE_MS));
 
         // Restore the original clipboard content. If there was nothing
         // restorable (the clipboard was empty or held non-text content like
