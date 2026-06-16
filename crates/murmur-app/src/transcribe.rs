@@ -421,12 +421,18 @@ fn is_repetitive(words: &[&str]) -> bool {
         return false;
     }
 
-    // Exact short-phrase repetition.
+    // Leading short-phrase repetition. A real hallucination is rarely a
+    // perfect multiple ("yeah yeah yeah yeah no"), so allow a short trailing
+    // remainder, but require an extra repeat in that case so genuine emphasis
+    // ("very very very good") isn't rejected.
     for plen in 1..=(n / 2).min(4) {
-        if !n.is_multiple_of(plen) || n / plen < 3 {
+        if n / plen < 3 {
             continue;
         }
-        if clean.chunks(plen).all(|chunk| chunk == &clean[..plen]) {
+        let head = &clean[..plen];
+        let repeats = clean.chunks_exact(plen).take_while(|c| *c == head).count();
+        let tail = n - repeats * plen;
+        if repeats >= 3 && tail <= plen && (tail == 0 || repeats >= 4) {
             return true;
         }
     }
@@ -578,6 +584,8 @@ mod tests {
             "All right. All right. All right.",
             "you know, you know, you know",
             "I think I think I think",
+            // Repetition with a non-matching trailing word.
+            "yeah yeah yeah yeah no",
         ] {
             assert!(
                 hallucination_reason(text, TranscriptionProfile::Relaxed).is_some(),
