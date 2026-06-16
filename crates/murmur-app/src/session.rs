@@ -34,6 +34,8 @@ pub(crate) fn handle_toggle(app: &tauri::AppHandle) {
         drop(recording);
         stop_session(app, &state);
     } else {
+        // Claim the start under the lock so two sources can never both start.
+        *recording = true;
         drop(recording);
         start_session(app, &state);
     }
@@ -43,9 +45,13 @@ pub(crate) fn handle_toggle(app: &tauri::AppHandle) {
 /// auto-repeats won't restart an active session.
 pub(crate) fn begin_recording(app: &tauri::AppHandle) {
     let state = app.state::<AppState>();
-    let already = *state.recording.lock().unwrap_or_else(|e| e.into_inner());
-    if already {
-        return;
+    {
+        let mut recording = state.recording.lock().unwrap_or_else(|e| e.into_inner());
+        if *recording {
+            return;
+        }
+        // Claim the start atomically so a concurrent toggle cannot also start.
+        *recording = true;
     }
     start_session(app, &state);
 }
@@ -79,15 +85,16 @@ fn stop_session(app: &tauri::AppHandle, state: &AppState) {
 }
 
 fn start_session(app: &tauri::AppHandle, state: &AppState) {
+    // The caller has already claimed the recording flag; release it on any
+    // path that does not actually start a session.
     if !state
         .engine_loaded
         .load(std::sync::atomic::Ordering::Acquire)
     {
-        emit_hotkey_error(app, "Model still loading — please wait");
+        *state.recording.lock().unwrap_or_else(|e| e.into_inner()) = false;
+        emit_hotkey_error(app, "Model still loading, please wait");
         return;
     }
-
-    *state.recording.lock().unwrap_or_else(|e| e.into_inner()) = true;
 
     #[cfg(windows)]
     crate::focus::save_output_target_window(state);
