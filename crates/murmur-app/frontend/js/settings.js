@@ -442,8 +442,6 @@ appProfilesSave.addEventListener('click', async () => {
   }
 });
 
-// ─── Model picker ────────────────────────────────────────────────────────
-
 async function loadModelList() {
   try {
     const models = await invoke('list_models');

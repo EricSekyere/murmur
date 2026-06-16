@@ -121,8 +121,6 @@ function renderAnalytics() {
   }
 }
 
-// ─── Diagnostics ─────────────────────────────────────────────────────────
-
 function classifyDiagnosticReason(reason) {
   if (!reason) return 'other';
   if (reason.startsWith('too_short')) return 'too_short';

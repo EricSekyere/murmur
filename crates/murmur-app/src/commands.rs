@@ -438,12 +438,10 @@ pub(crate) fn locate_widget(app: tauri::AppHandle) -> Result<(), String> {
     let widget = app
         .get_webview_window("widget")
         .ok_or("Widget window not found")?;
-    // Make sure it is visible and sitting above other windows.
     let _ = widget.show();
     let _ = widget.set_always_on_top(false);
     let _ = widget.set_always_on_top(true);
     pull_widget_on_screen(&widget);
-    // The widget JS plays an attention animation on this event.
     widget.emit("locate-pill", ()).map_err(|e| e.to_string())
 }
 

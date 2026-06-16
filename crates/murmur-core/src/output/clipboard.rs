@@ -12,7 +12,6 @@ impl ClipboardOutput {
         Ok(Self { clipboard })
     }
 
-    /// Copy text to the clipboard.
     pub fn copy(&mut self, text: &str) -> Result<()> {
         tracing::debug!("Copying {} characters to clipboard", text.len());
         self.clipboard.set_text(text)?;

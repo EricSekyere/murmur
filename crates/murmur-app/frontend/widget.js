@@ -15,8 +15,6 @@ const ctx    = canvas.getContext('2d');
 const caption     = document.getElementById('caption');
 const captionText = document.getElementById('caption-text');
 
-// ─── Live caption: grow the window to show interim text, shrink when done ────
-
 const appWindow = getCurrentWindow();
 // Must match tauri.conf.json's widget window size.
 const COMPACT_SIZE = { w: 176, h: 50 };
@@ -47,8 +45,6 @@ function hideCaption() {
   captionText.textContent = '';
   resizeWidget(COMPACT_SIZE);
 }
-
-// ─── State ───────────────────────────────────────────────────────────────────
 
 const BAR_COUNT = 22;
 const PUSH_INTERVAL_MS = 70; // ~14 new bars per second scroll speed
@@ -106,8 +102,6 @@ function flashState(name, text, ms) {
   }, ms);
 }
 
-// ─── Recording UI: timer + waveform ──────────────────────────────────────────
-
 function startRecordingUi() {
   if (!animHandle) {
     sizeCanvas();
@@ -146,8 +140,6 @@ function updateTimer() {
   const ss = String(total % 60).padStart(2, '0');
   setLabel(`${mm}:${ss}`);
 }
-
-// ─── Waveform: scrolling level bars ──────────────────────────────────────────
 
 function sizeCanvas() {
   const dpr = window.devicePixelRatio || 1;
@@ -200,8 +192,6 @@ function drawWave(ts) {
   ctx.globalAlpha = 1;
 }
 
-// ─── Mic Button ──────────────────────────────────────────────────────────────
-
 micBtn.addEventListener('click', async () => {
   try {
     await invoke('toggle_recording');
@@ -210,8 +200,6 @@ micBtn.addEventListener('click', async () => {
     flashState('error', 'error', 2200);
   }
 });
-
-// ─── Backend Events ──────────────────────────────────────────────────────────
 
 listen('audio-level', (event) => {
   if (typeof event.payload === 'number' && currentState === 'recording') {
@@ -293,7 +281,6 @@ listen('transcription-error', (event) => {
   flashState('error', 'error', 2200);
 });
 
-// ─── Initial sync ────────────────────────────────────────────────────────────
 // If the widget (re)loads mid-session, reflect the real backend state
 // instead of assuming idle.
 

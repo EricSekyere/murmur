@@ -494,7 +494,6 @@ fn release_all_modifiers() {
     const INPUT_KEYBOARD: u32 = 1;
     const KEYEVENTF_KEYUP: u32 = 0x0002;
 
-    // All modifier virtual key codes
     const VK_LCONTROL: u16 = 0xA2;
     const VK_RCONTROL: u16 = 0xA3;
     const VK_LSHIFT: u16 = 0xA0;

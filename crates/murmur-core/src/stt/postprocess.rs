@@ -57,7 +57,6 @@ fn remove_fillers(text: &str) -> String {
     // "like" only when preceded by comma or at sentence start
     result = remove_like_filler(&result);
 
-    // Remove single-word fillers
     for filler in SINGLE_FILLERS {
         result = remove_word_ci(&result, filler);
     }
