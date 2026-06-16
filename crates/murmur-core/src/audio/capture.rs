@@ -222,7 +222,9 @@ fn build_input_stream_for_format(
         }
         SampleFormat::I32 => {
             build_typed_stream::<i32, _>(device, config, buffer, max_samples, |s| {
-                s as f32 / i32::MAX as f32
+                // Convert through f64: an i32 has more precision than f32's
+                // mantissa, so dividing in f32 would lose low bits.
+                (s as f64 / i32::MAX as f64) as f32
             })
         }
         SampleFormat::U32 => {
@@ -262,7 +264,12 @@ where
             if let Ok(mut buf) = buffer.lock()
                 && buf.len() < max_samples
             {
-                buf.extend(data.iter().map(|&s| convert(s)));
+                // Sanitize at the boundary: a NaN/inf from a misbehaving driver
+                // would otherwise poison RMS scoring and the resampler.
+                buf.extend(data.iter().map(|&s| {
+                    let v = convert(s);
+                    if v.is_finite() { v } else { 0.0 }
+                }));
             }
         },
         err_fn,

@@ -408,7 +408,7 @@ impl Monitor<'_> {
             let snapshot = buf[self.analyzed_up_to..].to_vec();
             self.analyzed_up_to = buf.len();
             let dropped = trim_buffer_to_preroll(&mut buf, self.native_rate, self.native_channels);
-            self.analyzed_up_to -= dropped;
+            self.analyzed_up_to = self.analyzed_up_to.saturating_sub(dropped);
             snapshot
         };
         let mono = downmix_to_mono(&raw, self.native_channels);
