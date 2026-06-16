@@ -74,6 +74,9 @@ settingsToggle.addEventListener('click', async () => {
     if (status.live_preview != null) {
       livePreviewToggle.checked = status.live_preview;
     }
+    if (status.caption_position) {
+      captionPositionSelect.value = status.caption_position;
+    }
     developerModeToggle.checked = !!status.developer_mode;
     devModeBadge.hidden = !status.developer_mode;
   } catch (err) {
@@ -324,6 +327,16 @@ livePreviewToggle.addEventListener('change', async () => {
     await invoke('update_settings', { live_preview: enabled });
   } catch (err) {
     livePreviewToggle.checked = !enabled;
+    showToast(`Failed: ${err}`, 'error');
+  }
+});
+
+captionPositionSelect.addEventListener('change', async () => {
+  const caption_position = captionPositionSelect.value;
+  try {
+    await invoke('update_settings', { caption_position });
+    showToast(`Live caption: ${captionPositionSelect.options[captionPositionSelect.selectedIndex].text}`, 'success');
+  } catch (err) {
     showToast(`Failed: ${err}`, 'error');
   }
 });

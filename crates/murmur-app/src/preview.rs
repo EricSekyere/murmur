@@ -19,13 +19,18 @@ const MIN_PREVIEW_SAMPLES: usize = 16_000 / 4;
 /// transcribes only the newest one, discarding anything that piled up while a
 /// decode was running. Drop the returned sender to stop the worker; join the
 /// handle to wait for the in-flight decode to finish.
-pub(crate) fn spawn(app: tauri::AppHandle) -> (Sender<AudioBuffer>, JoinHandle<()>) {
+/// `caption_target` carries the target window handle when the caption should
+/// roam to the active window; `None` keeps the caption under the pill.
+pub(crate) fn spawn(
+    app: tauri::AppHandle,
+    caption_target: Option<usize>,
+) -> (Sender<AudioBuffer>, JoinHandle<()>) {
     let (tx, rx) = std::sync::mpsc::channel::<AudioBuffer>();
-    let handle = std::thread::spawn(move || run(&app, rx));
+    let handle = std::thread::spawn(move || run(&app, rx, caption_target));
     (tx, handle)
 }
 
-fn run(app: &tauri::AppHandle, rx: Receiver<AudioBuffer>) {
+fn run(app: &tauri::AppHandle, rx: Receiver<AudioBuffer>, caption_target: Option<usize>) {
     let state = app.state::<AppState>();
     while let Ok(mut latest) = rx.recv() {
         // Collapse the backlog: only the most recent snapshot reflects what
@@ -35,6 +40,9 @@ fn run(app: &tauri::AppHandle, rx: Receiver<AudioBuffer>) {
         }
         if let Some(text) = transcribe_preview(&state, &latest) {
             let _ = app.emit("streaming-partial", serde_json::json!({ "text": text }));
+            if let Some(hwnd) = caption_target {
+                crate::caption::show(app, hwnd, &text);
+            }
         }
     }
 }

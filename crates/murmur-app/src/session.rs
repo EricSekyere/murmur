@@ -164,7 +164,7 @@ fn streaming_worker(app: &tauri::AppHandle) {
     // Resolve any per-app profile for the foreground app up front, so its
     // overrides apply for the whole session.
     let target_app = current_app_name();
-    let (output_mode, sound_feedback, live_preview) = {
+    let (output_mode, sound_feedback, live_preview, caption_at_window) = {
         let settings = state.settings.lock().unwrap_or_else(|e| e.into_inner());
         let profile = target_app
             .as_deref()
@@ -187,8 +187,16 @@ fn streaming_worker(app: &tauri::AppHandle) {
                 .unwrap_or(settings.output_mode),
             settings.sound_feedback,
             settings.live_preview,
+            settings.caption_position == "window",
         )
     };
+
+    // Tell the widget which caption mode is active so it only grows its own
+    // caption when the preview is meant to live under the pill.
+    let _ = app.emit(
+        "caption-mode",
+        serde_json::json!({ "at_window": caption_at_window }),
+    );
 
     #[cfg(windows)]
     let previous_hwnd = *state
@@ -227,9 +235,16 @@ fn streaming_worker(app: &tauri::AppHandle) {
         crate::sound::play_start();
     }
 
+    // When the caption should roam to the active window, pass that window so
+    // the preview worker positions the caption near it.
+    #[cfg(windows)]
+    let caption_target = caption_at_window.then_some(previous_hwnd);
+    #[cfg(not(windows))]
+    let caption_target: Option<usize> = None;
+
     // Live preview runs on its own thread so interim decodes never stall the
     // delivery of finished phrases. `None` when the feature is off.
-    let mut preview = live_preview.then(|| crate::preview::spawn(app.clone()));
+    let mut preview = live_preview.then(|| crate::preview::spawn(app.clone(), caption_target));
 
     let mut stats = SessionStats::default();
     loop {
@@ -523,6 +538,7 @@ fn finish_streaming(
         .session_dev_mode
         .lock()
         .unwrap_or_else(|e| e.into_inner()) = None;
+    crate::caption::hide(app);
     emit_recording_state(app, false, false);
     let _ = app.emit("streaming-done", serde_json::json!({}));
 }

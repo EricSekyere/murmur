@@ -35,6 +35,23 @@
         "visible": true,
         "x": 20,
         "y": 20
+      },
+      {
+        "label": "caption",
+        "title": "",
+        "url": "caption.html",
+        "width": 380,
+        "height": 64,
+        "resizable": false,
+        "decorations": false,
+        "shadow": false,
+        "transparent": true,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "focus": false,
+        "visible": false,
+        "x": 0,
+        "y": 0
       }
     ],
     "trayIcon": {

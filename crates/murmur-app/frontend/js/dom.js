@@ -71,3 +71,4 @@ const appProfilesInput   = document.getElementById('app-profiles-input');
 const appProfilesSave    = document.getElementById('app-profiles-save');
 const soundFeedbackToggle = document.getElementById('sound-feedback-toggle');
 const livePreviewToggle   = document.getElementById('live-preview-toggle');
+const captionPositionSelect = document.getElementById('caption-position-select');

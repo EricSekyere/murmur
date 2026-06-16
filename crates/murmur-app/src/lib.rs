@@ -3,6 +3,7 @@
 
 mod audio_worker;
 mod calibration;
+mod caption;
 mod commands;
 mod focus;
 mod input;
@@ -184,6 +185,12 @@ fn setup_app(
     build_tray(app)?;
     register_hotkey(app, hotkey);
     configure_widget(app, show_widget_on_start);
+
+    // The roaming caption is display-only: make it click-through so it never
+    // intercepts input meant for the window beneath it.
+    if let Some(caption) = app.get_webview_window("caption") {
+        let _ = caption.set_ignore_cursor_events(true);
+    }
 
     model_setup::spawn_download_and_init(app.handle().clone(), engine, model);
     input::spawn_global_input_listener(app.handle().clone());
