@@ -34,5 +34,6 @@ anyhow.workspace = true
 tauri-plugin-global-shortcut = "2"
 tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
+tauri-plugin-single-instance = "2"
 rdev = "0.5"
 cpal = "0.15"

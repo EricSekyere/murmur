@@ -415,10 +415,7 @@ fn execute_command(app: &tauri::AppHandle, state: &AppState, command: VoiceComma
                 .clear();
             keyboard::press_backspace(count)
         }
-        VoiceCommand::SelectAll => keyboard::select_all(),
         VoiceCommand::Copy => keyboard::copy(),
-        VoiceCommand::Cut => keyboard::cut(),
-        VoiceCommand::Paste => keyboard::paste(),
         VoiceCommand::Undo => keyboard::undo(),
         VoiceCommand::Redo => keyboard::redo(),
         VoiceCommand::Tab => keyboard::press_tab(),
@@ -441,10 +438,7 @@ fn execute_command(app: &tauri::AppHandle, state: &AppState, command: VoiceComma
         VoiceCommand::NewLine => "new line",
         VoiceCommand::NewParagraph => "new paragraph",
         VoiceCommand::ScratchThat => "scratch that",
-        VoiceCommand::SelectAll => "select all",
         VoiceCommand::Copy => "copy",
-        VoiceCommand::Cut => "cut",
-        VoiceCommand::Paste => "paste",
         VoiceCommand::Undo => "undo",
         VoiceCommand::Redo => "redo",
         VoiceCommand::Tab => "tab",
