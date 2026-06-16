@@ -46,6 +46,9 @@ impl Default for DictationConfig {
 /// 30ms @ 16 kHz; matches transcribe-rs's `frame_size = 480`.
 const SPLIT_FRAME_MS: u64 = 30;
 
+/// Trailing window of an in-progress phrase used for live preview snapshots.
+const PREVIEW_WINDOW_SECS: u64 = 12;
+
 #[derive(Debug, Clone)]
 pub enum DictationEvent {
     Level(f32),
@@ -305,12 +308,18 @@ impl DictationSession {
     /// partial transcription. Returns `None` while idle or before the phrase
     /// has enough audio to be worth transcribing. Does not mutate state, so it
     /// is safe to call repeatedly while a phrase is still being spoken.
+    ///
+    /// Only the recent tail is returned. A preview just needs the latest words,
+    /// and bounding it keeps the resample and the preview decode cheap on long
+    /// phrases so they cannot starve the realtime tick or delay the final.
     pub fn current_phrase(&self) -> Option<AudioBuffer> {
         if !self.in_speech || self.phrase_samples.len() < self.min_phrase_samples {
             return None;
         }
+        let window = (PREVIEW_WINDOW_SECS * self.native_rate as u64) as usize;
+        let start = self.phrase_samples.len().saturating_sub(window);
         Some(AudioBuffer::from_raw(
-            &self.phrase_samples,
+            &self.phrase_samples[start..],
             self.native_rate,
             1,
         ))
