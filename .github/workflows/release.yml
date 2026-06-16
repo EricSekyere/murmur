@@ -73,9 +73,11 @@ jobs:
           releaseBody: |
             Fast, private, on-device dictation for Windows.
 
-            A reliability and privacy hardening pass from a full code audit.
+            ## Fixes in 0.3.5
 
-            ## Fixes in 0.3.4
+            - **The clipboard can no longer leak.** Murmur now types directly into every app, including terminals and chat apps like Warp. It no longer routes any output through the clipboard, so your previous clipboard contents can never be pasted into the focused window. If a specific app needs paste, choose the Clipboard + Paste output mode for it.
+
+            ## Earlier in 0.3.4
 
             - **Stays offline.** Removed a Google Fonts request that fired on every launch, and stopped writing recognized text to the on-disk log.
             - **Recovers from a lost mic.** Unplugging the microphone mid-session now ends the session with a clear message instead of hanging.
