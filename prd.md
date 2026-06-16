@@ -3,8 +3,8 @@
 ## 1.0 Executive Summary
 
 **Product Name:** Murmur
-**Version:** 1.0 PRD
-**Date:** February 18, 2026
+**Status:** Shipping on Windows (v0.3.6). See Section 1.5 for what is built versus still planned.
+**Date:** Originally drafted February 18, 2026; last reviewed June 2026.
 
 **Objective:** Build an open-source, privacy-first, cross-platform voice-to-text desktop tool designed for developers and general users. Murmur will accurately transcribe technical jargon, integrate natively with AI coding agents (Cursor, Claude Code, Gemini, etc.), map spoken directory references to real file paths, and work equally well for non-coding tasks like documentation, email, and chat.
 
@@ -20,6 +20,40 @@ No open-source tool today offers:
 
 **Value Proposition:**
 Murmur will enable developers to compose prompts for AI agents, write documentation, and communicate 3-4x faster than typing (150+ WPM speech vs 40 WPM average typing). It eliminates the context-switch tax of stopping to type, reduces RSI risk, and keeps proprietary code entirely on-device.
+
+---
+
+## 1.5 Current Implementation Status (v0.3.6)
+
+This PRD was written as a forward-looking plan. The product has since shipped on Windows, but it took a different path than the original phases: dictation quality and live-preview UX were prioritized, while the heavier "code intelligence" and per-agent integration epics have not been built. This section is the source of truth for what exists today; the phase plans further down are kept for historical context and remaining direction.
+
+### Shipped (Windows, v0.3.6)
+- **Dictation.** Global-hotkey activation with toggle, push-to-talk, and double-tap modes. CPAL audio capture with Silero VAD (via ONNX Runtime).
+- **STT.** whisper-rs (whisper.cpp) with base.en, small.en, medium.en, and large-v3-turbo, plus NVIDIA Parakeet TDT 0.6B v2 (ONNX). Default is small.en. GPU acceleration via CUDA on Windows; model switching in settings.
+- **Output.** Direct Unicode typing into the focused application (Windows SendInput), with clipboard-and-paste available as an explicit output mode. The default path never routes through the clipboard, so prior clipboard contents cannot leak.
+- **Live preview.** Interim text appears as you speak, shown in the dashboard and as a caption that sits either under the floating pill or near the active window (configurable). Each caption clears once its phrase is delivered.
+- **Voice editing commands.** "select all", "copy/cut/paste that", "undo that", "redo that", "new line", "new paragraph", "scratch that", "press tab", "press escape".
+- **Text snippets and custom vocabulary.** User-defined "trigger = expansion" snippets and a manual custom-vocabulary list that biases the decoder.
+- **Multilingual and translate.** Non-English transcription and translate-to-English using the multilingual model.
+- **Searchable history and per-app profiles.** Every delivered phrase is stored locally and tagged with the app it landed in; output mode and developer mode can switch automatically based on the focused application.
+- **Find pill.** A control that flashes the floating widget and pulls it back on-screen if it drifted off a monitor.
+- **App shell.** Tauri v2 system tray, dashboard, and first-run onboarding; sound feedback; TOML config with atomic writes, validation, corrupt-config recovery, and migration from the former "Voitex" name.
+- **Distribution.** Signed auto-update (tauri-plugin-updater, minisign) and a GitHub release pipeline (tauri-action) producing the Windows build.
+
+### Not yet built (still aspirational in this document)
+- **Directory and path mapping** from spoken references (Section 5.5).
+- **Codebase-derived vocabulary** via tree-sitter (Section 5.6); vocabulary today is a manual list, not auto-extracted.
+- **Per-agent integrations:** VS Code / Cursor extension, Claude Code MCP server, and the local WebSocket API (Section 5.4, Epics 3.2 / 3.3 / 3.5). Integration today is the universal OS-level typing path plus CLI stdout piping.
+- **Distinct coding / prose / command modes** (F6, Epic 2.4). A transcription profile setting exists, but not the full mode system.
+- **Continuous always-listening mode and wake word** (Epic 4.2).
+
+### Platform status
+- **Windows (x64)** is the released, signed, auto-updating platform.
+- **macOS** has platform-conditional code and a build target in the tree but is not yet signed or notarized, so it is not shipped (blocked on an Apple Developer account).
+- **Linux** remains a stretch goal.
+
+### CLI surface
+`murmur listen`, `murmur config`, and `murmur models` (with stdout and clipboard output). The agent-oriented CLI surface from the plan (mcp-server, websocket) is not implemented.
 
 ---
 
@@ -166,7 +200,7 @@ The previous PRD stated "Python is the unequivocal choice." **This is wrong for 
 | **whisper.cpp medium.en** | ~7% | Near real-time with GPU | 1.5GB | High-accuracy mode |
 | **whisper.cpp large-v3-turbo** | ~7.75% | Requires GPU for real-time | 1.6GB | Maximum accuracy mode |
 | **Distil-Whisper** | ~8% | 6x faster than large-v3 | 756MB | Future: best edge performance |
-| **NVIDIA Parakeet TDT 0.6B** | ~6% | RTFx >2000 | ~1.2GB | Future: best accuracy/speed ratio |
+| **NVIDIA Parakeet TDT 0.6B v2** | ~6% | RTFx >2000 | ~660MB | Shipped: native punctuation and capitalization, English-only (ONNX) |
 
 **Primary recommendation:** Start with **whisper.cpp small.en** via `whisper-rs`. It delivers <8% WER with real-time CPU performance and fits in <500MB RAM. Users can switch models in settings.
 
@@ -391,12 +425,12 @@ All dependencies must be compatible with **MIT or Apache 2.0**. No GPL dependenc
 - Transcription history (last 20 entries)
 - **Deliverable:** Polished tray app users can interact with
 
-**Phase 2 Exit Criteria:**
-- [x] Voice commands work reliably (>95% command recognition)
-- [x] Custom vocabulary reduces tech jargon errors by >50%
-- [x] Project file index built and kept up to date
-- [x] Mode switching works
-- [x] System tray UI functional on both platforms
+**Phase 2 Exit Criteria:** (status as of v0.3.6)
+- [x] Voice commands work reliably
+- [~] Custom vocabulary supported as a manual user list; codebase auto-extraction (tree-sitter) not built
+- [ ] Project file index built and kept up to date (not built)
+- [~] Transcription profile switching exists; full coding/prose/command modes not built
+- [x] System tray UI functional on Windows (macOS not yet shipped)
 
 ---
 
@@ -439,12 +473,12 @@ All dependencies must be compatible with **MIT or Apache 2.0**. No GPL dependenc
 - Enable integration with Gemini, GLM, or any tool that can open a WebSocket
 - **Deliverable:** Universal integration point for any AI agent
 
-**Phase 3 Exit Criteria:**
-- [x] "Navigate to source components header" resolves correctly
-- [x] VS Code/Cursor extension installed and working
-- [x] Claude Code MCP server functional
-- [x] WebSocket API documented and tested
-- [x] Case conversion commands work
+**Phase 3 Exit Criteria:** (not started; deprioritized in favor of the dictation-quality and live-preview work that shipped instead)
+- [ ] "Navigate to source components header" resolves correctly (directory mapping not built)
+- [ ] VS Code/Cursor extension installed and working (not built)
+- [ ] Claude Code MCP server functional (not built)
+- [ ] WebSocket API documented and tested (not built)
+- [ ] Case conversion commands work (not built)
 
 ---
 
@@ -486,17 +520,19 @@ All dependencies must be compatible with **MIT or Apache 2.0**. No GPL dependenc
 - GitHub repository setup with CI/CD (cross-platform builds)
 - **Deliverable:** Ready for open-source launch
 
-**Phase 4 Exit Criteria:**
-- [x] Latency <200ms on Apple Silicon
-- [x] Installers for macOS and Windows
-- [x] Documentation complete
-- [x] GitHub repo public with CI/CD
+**Phase 4 Exit Criteria:** (status as of v0.3.6)
+- [~] Streaming transcription and GPU acceleration shipped (CUDA on Windows); Apple Silicon latency not yet measured or shipped
+- [~] Installer and auto-update shipped for Windows; macOS installer pending signing/notarization
+- [~] Documentation in progress (README and release notes; full user/developer docs partial)
+- [x] GitHub repo public with release CI/CD (Windows)
 
 ---
 
 ## 8.0 Open-Source Libraries Summary
 
 ### Core Dependencies (All Permissively Licensed)
+
+> **Status note (v0.3.6):** The table below is the originally planned dependency set. Not yet integrated, because the features they support have not been built: `tree-sitter` and its grammars, `notify` (file watching), `strsim` (fuzzy matching), and `tungstenite` (WebSocket API). Now in use but absent from the original list: `tauri-plugin-updater` (signed auto-update) and `unicode-segmentation` (grapheme-correct editing commands). Speech-to-text also includes NVIDIA Parakeet (ONNX) alongside whisper-rs.
 
 | Library | Version | License | Purpose |
 |---------|---------|---------|---------|
@@ -523,9 +559,10 @@ All dependencies must be compatible with **MIT or Apache 2.0**. No GPL dependenc
 | Model | Size | License | Source |
 |-------|------|---------|--------|
 | whisper base.en | 142MB | MIT | OpenAI / ggml |
-| whisper small.en | 466MB | MIT | OpenAI / ggml |
+| whisper small.en (default) | 466MB | MIT | OpenAI / ggml |
 | whisper medium.en | 1.5GB | MIT | OpenAI / ggml |
-| whisper large-v3-turbo | 1.6GB | MIT | OpenAI / ggml |
+| whisper large-v3-turbo (multilingual + translate) | 1.6GB | MIT | OpenAI / ggml |
+| Parakeet TDT 0.6B v2 (ONNX) | ~660MB | CC-BY-4.0 model weights | NVIDIA / istupakov ONNX export |
 
 ---
 
