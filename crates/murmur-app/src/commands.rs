@@ -419,6 +419,49 @@ fn set_widget_window_visible(app: &tauri::AppHandle, visible: bool) {
     }
 }
 
+/// Flash the floating pill so the user can spot it, pulling it back on-screen
+/// first if it has been dragged off every monitor.
+#[tauri::command]
+pub(crate) fn locate_widget(app: tauri::AppHandle) -> Result<(), String> {
+    let widget = app
+        .get_webview_window("widget")
+        .ok_or("Widget window not found")?;
+    // Make sure it is visible and sitting above other windows.
+    let _ = widget.show();
+    let _ = widget.set_always_on_top(false);
+    let _ = widget.set_always_on_top(true);
+    pull_widget_on_screen(&widget);
+    // The widget JS plays an attention animation on this event.
+    widget.emit("locate-pill", ()).map_err(|e| e.to_string())
+}
+
+/// If the widget sits entirely outside every monitor, move it back to the
+/// primary monitor's top-left so the flash is actually visible.
+fn pull_widget_on_screen(widget: &tauri::WebviewWindow) {
+    let (Ok(pos), Ok(size)) = (widget.outer_position(), widget.outer_size()) else {
+        return;
+    };
+    let monitors = widget.available_monitors().unwrap_or_default();
+    if monitors.is_empty() {
+        return;
+    }
+    let intersects = |m: &tauri::Monitor| {
+        let mp = m.position();
+        let ms = m.size();
+        pos.x < mp.x + ms.width as i32
+            && pos.x + size.width as i32 > mp.x
+            && pos.y < mp.y + ms.height as i32
+            && pos.y + size.height as i32 > mp.y
+    };
+    if monitors.iter().any(intersects) {
+        return;
+    }
+    if let Ok(Some(primary)) = widget.primary_monitor() {
+        let p = primary.position();
+        let _ = widget.set_position(tauri::PhysicalPosition::new(p.x + 60, p.y + 60));
+    }
+}
+
 #[tauri::command]
 pub(crate) fn list_audio_devices() -> Result<Vec<String>, String> {
     use cpal::traits::{DeviceTrait, HostTrait};

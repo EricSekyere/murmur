@@ -310,6 +310,42 @@ html, body {
 
 .pill--error .pill__label { color: var(--record); }
 
+/* ═══════════════════════════════════════════════════════════════════════════
+   LOCATE ("Find pill")
+   ═══════════════════════════════════════════════════════════════════════════ */
+/* A few bold accent flashes so a pill dragged into a corner or hidden behind a
+   window is easy to spot. The window hugs the pill, so the effect stays within
+   bounds (a small scale + a glow that fills the margins) rather than a wide
+   halo that would clip at the window edge. */
+.pill.locating {
+  animation: locate-flash 0.55s ease-in-out 4;
+}
+
+@keyframes locate-flash {
+  0%, 100% {
+    transform: scale(1);
+    border-color: var(--border);
+  }
+  50% {
+    transform: scale(1.07);
+    border-color: var(--accent);
+    box-shadow: inset 0 0 0 1.5px var(--accent),
+                inset 0 0 16px rgba(167, 139, 250, 0.55),
+                0 0 12px rgba(167, 139, 250, 0.85);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  /* Keep the color beacon but drop the scale/motion. */
+  @keyframes locate-flash {
+    0%, 100% { border-color: var(--border); }
+    50% {
+      border-color: var(--accent);
+      box-shadow: inset 0 0 0 1.5px var(--accent), 0 0 12px rgba(167, 139, 250, 0.85);
+    }
+  }
+}
+
 /* ─── Animations ────────────────────────────────────────────────────────── */
 @keyframes orb-breathe {
   0%, 100% { box-shadow: 0 0 0 0 rgba(139, 92, 246, 0); }
