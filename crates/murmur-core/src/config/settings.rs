@@ -369,6 +369,27 @@ impl Settings {
             }
         }
 
+        if self.activation_mode != "toggle" && self.activation_mode != "hold" {
+            anyhow::bail!(
+                "activation_mode must be 'toggle' or 'hold', got '{}'",
+                self.activation_mode
+            );
+        }
+
+        if self.language.trim().is_empty() {
+            anyhow::bail!("language cannot be empty (use 'auto' or a code like 'en')");
+        }
+
+        if self.snippets.len() > 100 {
+            anyhow::bail!("too many snippets ({}, max 100)", self.snippets.len());
+        }
+        if self.app_profiles.len() > 50 {
+            anyhow::bail!(
+                "too many app profiles ({}, max 50)",
+                self.app_profiles.len()
+            );
+        }
+
         Ok(())
     }
 }
