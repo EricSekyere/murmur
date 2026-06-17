@@ -32,29 +32,28 @@ pub(crate) fn output_text(
     murmur_core::output::dispatch_output(text, mode)
 }
 
-/// Make sure the window the user started dictating into receives the text.
-///
-/// Delivering to whatever happens to be focused at the end of a phrase is a
-/// hazard: if focus drifted to another window mid-recording (a notification,
-/// a clicked field, a password box) the text would land there. So prefer the
-/// recording-start target, only falling back to the live-tracked window or the
-/// current foreground when that target is gone.
+/// Make sure the window dictation started in receives the text. With a real
+/// start window, deliver only to it (focused or restorable); if it's gone,
+/// return false so the caller diverts to the clipboard instead of typing into
+/// whatever window is now live. The live-tracked fallback applies only when no
+/// start window was captured (dictation triggered from Murmur's own UI).
 #[cfg(windows)]
 fn ensure_external_target(previous_hwnd: usize, last_external_hwnd: usize) -> bool {
     let current_fg = foreground_window();
     let current_is_external = current_fg != 0 && !is_own_window(current_fg);
 
-    // Already focused on the exact window dictation started in: deliver there
-    // without disturbing focus (the common single-window case).
-    if current_is_external && current_fg == previous_hwnd {
-        return true;
+    // The window dictation started in is the authoritative target.
+    let start_target =
+        (previous_hwnd != 0 && !is_own_window(previous_hwnd)).then_some(previous_hwnd);
+    if let Some(target) = start_target {
+        // Deliver only to that window; if it's gone, refuse (caller -> clipboard).
+        return current_fg == target || restore_foreground_window(target);
     }
 
-    // Focus drifted or Murmur is in front. Restore the start target first, then
-    // the last external window, before accepting the current foreground.
-    if [previous_hwnd, last_external_hwnd]
-        .iter()
-        .any(|&h| h != 0 && !is_own_window(h) && restore_foreground_window(h))
+    // No start window captured: fall back to the last external window.
+    if last_external_hwnd != 0
+        && !is_own_window(last_external_hwnd)
+        && restore_foreground_window(last_external_hwnd)
     {
         return true;
     }
