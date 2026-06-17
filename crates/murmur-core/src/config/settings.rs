@@ -145,22 +145,108 @@ pub struct Settings {
     /// pill) or "window" (near the bottom of the active window).
     #[serde(default = "default_caption_position")]
     pub caption_position: String,
+
+    /// Persist delivered phrases to the searchable history log (off = store nothing).
+    #[serde(default = "default_true")]
+    pub save_history: bool,
 }
 
 impl AppProfile {
-    /// Whether this profile's `app` substring matches the given process name
-    /// (case-insensitive). Blank patterns never match.
+    /// Whether this profile matches the process name (case-insensitive). Matches
+    /// the executable stem as a whole word (split on separators and camelCase),
+    /// so "code" matches `Code.exe`/`code-insiders.exe` but not `unicode.exe`.
+    /// A multi-token pattern falls back to substring. Blank never matches.
     pub fn matches(&self, process_name: &str) -> bool {
         let pat = self.app.trim().to_lowercase();
-        !pat.is_empty() && process_name.to_lowercase().contains(&pat)
+        if pat.is_empty() {
+            return false;
+        }
+        let stem = process_stem(process_name);
+        let stem_lower = stem.to_lowercase();
+        if stem_lower == pat {
+            return true;
+        }
+        // Explicit multi-token patterns (e.g. "visual studio") keep substring
+        // behaviour; single tokens must match a whole word.
+        if pat.contains(|c: char| !c.is_alphanumeric()) {
+            return stem_lower.contains(&pat);
+        }
+        split_words(stem).iter().any(|w| w == &pat)
+    }
+}
+
+/// The executable stem: the file name with any directory path and a trailing
+/// `.exe`/`.app` extension removed. Case is preserved for camelCase splitting.
+fn process_stem(process_name: &str) -> &str {
+    let file = process_name
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or(process_name);
+    let lower = file.to_ascii_lowercase();
+    if lower.ends_with(".exe") || lower.ends_with(".app") {
+        &file[..file.len() - 4]
+    } else {
+        file
+    }
+}
+
+/// Split a name into lowercase words on separators and camelCase boundaries:
+/// "WindowsTerminal" -> ["windows", "terminal"], "code-insiders" -> ["code",
+/// "insiders"], "unicode" -> ["unicode"].
+fn split_words(stem: &str) -> Vec<String> {
+    let mut words = Vec::new();
+    let mut cur = String::new();
+    let mut prev_lower_or_digit = false;
+    for ch in stem.chars() {
+        if !ch.is_alphanumeric() {
+            if !cur.is_empty() {
+                words.push(std::mem::take(&mut cur));
+            }
+            prev_lower_or_digit = false;
+            continue;
+        }
+        if ch.is_uppercase() && prev_lower_or_digit && !cur.is_empty() {
+            words.push(std::mem::take(&mut cur));
+        }
+        cur.extend(ch.to_lowercase());
+        prev_lower_or_digit = ch.is_lowercase() || ch.is_numeric();
+    }
+    if !cur.is_empty() {
+        words.push(cur);
+    }
+    words
+}
+
+// Shared validation bounds: one source of truth for `validate()` and the UI.
+pub const VAD_THRESHOLD_MIN: f32 = 0.05;
+pub const VAD_THRESHOLD_MAX: f32 = 0.95;
+pub const PHRASE_PAUSE_MIN_SECS: f32 = 0.3;
+pub const PHRASE_PAUSE_MAX_SECS: f32 = 10.0;
+pub const SESSION_TIMEOUT_MAX_SECS: f32 = 300.0;
+
+// Collection caps: bound user text reaching the decoder prompt / keystrokes.
+pub const MAX_VOCAB_ENTRIES: usize = 100;
+pub const MAX_SNIPPETS: usize = 100;
+pub const MAX_APP_PROFILES: usize = 50;
+const MAX_VOCAB_ENTRY_CHARS: usize = 100;
+const MAX_SNIPPET_TRIGGER_CHARS: usize = 100;
+const MAX_SNIPPET_EXPANSION_CHARS: usize = 2_000;
+const MAX_APP_PATTERN_CHARS: usize = 100;
+
+/// Truncate a string to at most `max` characters, on a UTF-8 boundary.
+fn truncate_chars(s: &mut String, max: usize) {
+    if s.chars().count() > max {
+        *s = s.chars().take(max).collect();
     }
 }
 
 fn default_hotkey() -> String {
+    // Avoid Ctrl+single-letter (collides with app shortcuts like Ctrl+Q and is
+    // swallowed globally). The double-tap key is the collision-free primary.
     if cfg!(target_os = "macos") {
         "super+shift+space".to_string()
     } else {
-        "ctrl+q".to_string()
+        "ctrl+shift+space".to_string()
     }
 }
 
@@ -253,6 +339,7 @@ impl Default for Settings {
             translate_to_english: false,
             app_profiles: Vec::new(),
             caption_position: default_caption_position(),
+            save_history: true,
         }
     }
 }
@@ -334,7 +421,9 @@ impl Settings {
 
     fn read_and_validate(path: &PathBuf) -> Result<Self> {
         let content = std::fs::read_to_string(path)?;
-        let settings: Settings = toml::from_str(&content)?;
+        let mut settings: Settings = toml::from_str(&content)?;
+        // Truncate oversized collections before validating (don't reject the file).
+        settings.clamp_collections();
         settings.validate()?;
         Ok(settings)
     }
@@ -356,11 +445,31 @@ impl Settings {
         Ok(())
     }
 
+    /// Clamp collections to their count and per-element length caps, so an
+    /// over-large hand-edited config is truncated rather than rejected.
+    pub fn clamp_collections(&mut self) {
+        self.custom_vocabulary.truncate(MAX_VOCAB_ENTRIES);
+        for w in &mut self.custom_vocabulary {
+            truncate_chars(w, MAX_VOCAB_ENTRY_CHARS);
+        }
+        self.snippets.truncate(MAX_SNIPPETS);
+        for s in &mut self.snippets {
+            truncate_chars(&mut s.trigger, MAX_SNIPPET_TRIGGER_CHARS);
+            truncate_chars(&mut s.expansion, MAX_SNIPPET_EXPANSION_CHARS);
+        }
+        self.app_profiles.truncate(MAX_APP_PROFILES);
+        for p in &mut self.app_profiles {
+            truncate_chars(&mut p.app, MAX_APP_PATTERN_CHARS);
+        }
+    }
+
     /// Validate settings values.
     pub fn validate(&self) -> Result<()> {
-        if !(0.0..=1.0).contains(&self.vad_threshold) {
+        if !(VAD_THRESHOLD_MIN..=VAD_THRESHOLD_MAX).contains(&self.vad_threshold) {
             anyhow::bail!(
-                "vad_threshold must be between 0.0 and 1.0, got {}",
+                "vad_threshold must be between {} and {}, got {}",
+                VAD_THRESHOLD_MIN,
+                VAD_THRESHOLD_MAX,
                 self.vad_threshold
             );
         }
@@ -379,16 +488,19 @@ impl Settings {
             );
         }
 
-        if self.phrase_pause_secs <= 0.0 {
+        if !(PHRASE_PAUSE_MIN_SECS..=PHRASE_PAUSE_MAX_SECS).contains(&self.phrase_pause_secs) {
             anyhow::bail!(
-                "phrase_pause_secs must be > 0.0, got {}",
+                "phrase_pause_secs must be between {} and {}, got {}",
+                PHRASE_PAUSE_MIN_SECS,
+                PHRASE_PAUSE_MAX_SECS,
                 self.phrase_pause_secs
             );
         }
 
-        if self.session_timeout_secs < 0.0 {
+        if !(0.0..=SESSION_TIMEOUT_MAX_SECS).contains(&self.session_timeout_secs) {
             anyhow::bail!(
-                "session_timeout_secs must be >= 0.0 (0 = disabled), got {}",
+                "session_timeout_secs must be between 0.0 (disabled) and {}, got {}",
+                SESSION_TIMEOUT_MAX_SECS,
                 self.session_timeout_secs
             );
         }
@@ -416,13 +528,18 @@ impl Settings {
             anyhow::bail!("language cannot be empty (use 'auto' or a code like 'en')");
         }
 
-        if self.snippets.len() > 100 {
-            anyhow::bail!("too many snippets ({}, max 100)", self.snippets.len());
-        }
-        if self.app_profiles.len() > 50 {
+        if self.snippets.len() > MAX_SNIPPETS {
             anyhow::bail!(
-                "too many app profiles ({}, max 50)",
-                self.app_profiles.len()
+                "too many snippets ({}, max {})",
+                self.snippets.len(),
+                MAX_SNIPPETS
+            );
+        }
+        if self.app_profiles.len() > MAX_APP_PROFILES {
+            anyhow::bail!(
+                "too many app profiles ({}, max {})",
+                self.app_profiles.len(),
+                MAX_APP_PROFILES
             );
         }
 
@@ -450,10 +567,24 @@ mod tests {
     }
 
     #[test]
-    fn app_profile_matches_case_insensitive_substring() {
+    fn app_profile_matches_whole_word_case_insensitive() {
         assert!(profile("code").matches("Code.exe"));
+        assert!(profile("code").matches("code-insiders.exe"));
         assert!(profile("Terminal").matches("WindowsTerminal.exe"));
+        assert!(profile("chrome").matches("chrome.exe"));
         assert!(!profile("slack").matches("Code.exe"));
+    }
+
+    #[test]
+    fn app_profile_does_not_match_mid_word_substring() {
+        // "code" must not match the unrelated "unicode".
+        assert!(!profile("code").matches("unicode.exe"));
+        assert!(!profile("go").matches("google.exe"));
+    }
+
+    #[test]
+    fn app_profile_multi_token_pattern_uses_substring() {
+        assert!(profile("visual studio").matches("Visual Studio Code.exe"));
     }
 
     #[test]
