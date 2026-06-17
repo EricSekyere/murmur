@@ -3,6 +3,7 @@ pub mod config;
 pub mod dictation;
 pub mod history;
 pub mod hotkey;
+pub mod integrity;
 pub mod output;
 pub mod stt;
 pub mod voice_commands;
