@@ -163,31 +163,27 @@ impl SttEngine {
             // Ensure ONNX Runtime DLL is loaded before creating any sessions
             super::runtime::init_ort().context("Failed to initialize ONNX Runtime for Parakeet")?;
 
-            // Use DirectML (GPU) on Windows for ~5-10x faster inference.
-            // Falls back to CPU automatically if GPU is unavailable.
-            let config = parakeet_rs::ExecutionConfig::new()
-                .with_execution_provider(parakeet_rs::ExecutionProvider::DirectML);
-
-            tracing::info!(
-                "Loading Parakeet model from {} with DirectML GPU acceleration...",
-                model_dir
+            // DirectML (GPU) on Windows for ~5-10x faster inference; the default
+            // CPU provider elsewhere (DirectML is Windows-only).
+            #[cfg(windows)]
+            let config = Some(
+                parakeet_rs::ExecutionConfig::new()
+                    .with_execution_provider(parakeet_rs::ExecutionProvider::DirectML),
             );
+            #[cfg(not(windows))]
+            let config: Option<parakeet_rs::ExecutionConfig> = None;
 
-            let engine = match parakeet_rs::ParakeetTDT::from_pretrained(model_dir, Some(config)) {
+            tracing::info!("Loading Parakeet model from {}...", model_dir);
+
+            let engine = match parakeet_rs::ParakeetTDT::from_pretrained(model_dir, config) {
                 Ok(e) => {
-                    tracing::info!("Parakeet engine loaded successfully from: {}", model_dir);
+                    tracing::info!("Parakeet engine loaded from: {}", model_dir);
                     e
                 }
                 Err(e) => {
-                    tracing::error!(
-                        "Parakeet model load failed (DirectML): {}. \
-                         This may indicate a GPU compatibility issue. \
-                         Check that DirectML is supported on this GPU.",
-                        e
-                    );
+                    tracing::error!("Parakeet model load failed: {}", e);
                     return Err(anyhow::anyhow!(
-                        "Failed to load Parakeet model: {}. \
-                         Try a Whisper model if this persists.",
+                        "Failed to load Parakeet model: {}. Try a Whisper model if this persists.",
                         e
                     ));
                 }
