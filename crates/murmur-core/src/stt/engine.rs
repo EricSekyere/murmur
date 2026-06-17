@@ -233,6 +233,11 @@ impl SttEngine {
         self.model = Some(model);
     }
 
+    /// The model this engine was loaded with, if set.
+    pub fn model(&self) -> Option<SttModel> {
+        self.model
+    }
+
     /// Set the running session transcript used as decoder context for the
     /// next call. Pass the trailing ~200 chars of prior output. Pass `None`
     /// to clear (e.g., on a fresh session).
@@ -532,7 +537,7 @@ impl SttEngine {
             segments.len(),
             full_text.trim().chars().count()
         );
-        tracing::debug!("Whisper text: {:?}", full_text.trim());
+        tracing::trace!("Whisper text: {:?}", full_text.trim());
 
         Ok(TranscriptionResult {
             text: full_text.trim().to_string(),
@@ -598,7 +603,7 @@ impl SttEngine {
             elapsed.as_millis(),
             result.text.trim().chars().count()
         );
-        tracing::debug!("Parakeet text: {:?}", result.text.trim());
+        tracing::trace!("Parakeet text: {:?}", result.text.trim());
 
         Ok(TranscriptionResult {
             text: result.text.trim().to_string(),
