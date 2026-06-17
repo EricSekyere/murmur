@@ -1,5 +1,7 @@
 //! Global input: hotkey events, double-tap toggle, and click-to-stop.
 
+// Only the double-tap tracker (Windows/macOS) uses these.
+#[cfg(any(windows, target_os = "macos"))]
 use std::time::{Duration, Instant};
 
 use tauri::Manager;

@@ -35,8 +35,9 @@ whisper-rs = { version = "0.15", optional = true }
 # VAD (optional — needs ONNX Runtime, load-dynamic avoids MSVC STL version issues)
 ort = { version = "2.0.0-rc.11", optional = true, features = ["load-dynamic"] }
 
-# Parakeet STT (optional — uses ONNX Runtime with DirectML GPU acceleration on Windows)
-parakeet-rs = { workspace = true, optional = true, features = ["load-dynamic", "directml"] }
+# Parakeet STT (optional — ONNX Runtime). DirectML is Windows-only and added
+# via the target table below; other platforms use the default CPU provider.
+parakeet-rs = { workspace = true, optional = true, features = ["load-dynamic"] }
 
 # ZIP extraction (optional — for downloading ONNX Runtime DLL on Windows)
 zip = { workspace = true, optional = true }
@@ -72,3 +73,7 @@ sha2 = "0.10"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream"] }
 futures-util = "0.3"
 indicatif = "0.17"
+
+# DirectML GPU execution provider for Parakeet — Windows only.
+[target.'cfg(windows)'.dependencies]
+parakeet-rs = { workspace = true, optional = true, features = ["directml"] }

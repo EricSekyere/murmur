@@ -1,15 +1,42 @@
 name: Release
 
+# Releases ship from the production branch: promote main -> production after a
+# version bump and this builds Windows + Linux and publishes the release. A
+# push that does not bump the version is skipped (see the tag check), so
+# promoting docs or CI changes never re-releases.
 on:
   push:
-    tags:
-      - "v*"
+    branches: [production]
+  workflow_dispatch:
 
 permissions:
   contents: write
 
 jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      release: ${{ steps.v.outputs.release }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: v
+        shell: bash
+        run: |
+          version=$(grep -m1 '"version"' crates/murmur-app/tauri.conf.json \
+            | sed -E 's/.*"version"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/')
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          if git ls-remote --exit-code --tags origin "refs/tags/v$version" >/dev/null 2>&1; then
+            echo "release=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::v$version is already released; skipping."
+          else
+            echo "release=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::Releasing v$version."
+          fi
+
   release-windows:
+    needs: prepare
+    if: needs.prepare.outputs.release == 'true'
     runs-on: windows-2022
     env:
       LIBCLANG_PATH: C:\Program Files\LLVM\bin
@@ -68,10 +95,10 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           projectPath: crates/murmur-app
-          tagName: ${{ github.ref_name }}
-          releaseName: "Murmur ${{ github.ref_name }}"
+          tagName: v${{ needs.prepare.outputs.version }}
+          releaseName: "Murmur v${{ needs.prepare.outputs.version }}"
           releaseBody: |
-            Fast, private, on-device dictation for Windows.
+            Fast, private, on-device dictation for Windows and Linux.
 
             ## New in 0.3.8
 
@@ -117,8 +144,45 @@ jobs:
 
             ## Install
 
-            Download the `.exe` installer below and run it. Models download automatically on first launch. If you already have Murmur installed, it updates itself.
+            **Windows:** download the `.exe` installer and run it. Requires Windows 10/11 x64 with an AVX2-capable CPU (any Intel or AMD CPU from about 2013 onward). An NVIDIA GPU is optional and accelerates the larger models.
 
-            Requires Windows 10/11 x64 with an AVX2-capable CPU (any Intel or AMD CPU from about 2013 onward). An NVIDIA GPU is optional and accelerates the larger models.
+            **Linux (X11):** download the `.AppImage`, `chmod +x`, and run it, or install the `.deb`. Best on an X11 session; on Wayland, typing into other apps is limited.
+
+            Models download automatically on first launch. Installed copies update themselves.
           releaseDraft: false
           prerelease: false
+
+  # Runs after Windows so the GitHub release already exists; this just uploads
+  # the Linux .deb and signed .AppImage to it.
+  release-linux:
+    needs: [prepare, release-windows]
+    if: needs.prepare.outputs.release == 'true'
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev \
+            librsvg2-dev libasound2-dev libxdo-dev \
+            libx11-dev libxtst-dev libxi-dev libxcb1-dev \
+            cmake clang libclang-dev pkg-config
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target"
+
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          APPIMAGE_EXTRACT_AND_RUN: 1
+        with:
+          projectPath: crates/murmur-app
+          tagName: v${{ needs.prepare.outputs.version }}
+          args: --bundles deb,appimage
