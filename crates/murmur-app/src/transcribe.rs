@@ -39,6 +39,13 @@ const MAX_AUDIO_SAMPLES: usize = 25 * 16_000;
 const SAMPLE_RATE: f32 = 16_000.0;
 const SHORT_CLIP_SECS: f32 = 1.5;
 
+/// Whether an explicit non-English language is selected ("auto" counts as
+/// possibly-English, so gates aren't relaxed when unsure).
+pub(crate) fn is_non_english_language(language: &str) -> bool {
+    let l = language.trim().to_lowercase();
+    !l.is_empty() && l != "en" && l != "auto" && l != "english"
+}
+
 /// Per-profile rejection thresholds.
 struct ProfileLimits {
     min_audio_secs: f32,
@@ -109,11 +116,15 @@ pub(crate) fn transcribe_chunk(
         )
     };
     let limits = ProfileLimits::for_profile(profile);
+    // English-tuned gates over-reject accented non-English speech; relax them.
+    let non_english = is_non_english_language(&language);
 
     let prepared = preprocess(app, audio, &limits)?;
     let result = run_engine(app, &state, &prepared, &vocabulary, &language, translate)?;
 
-    if let Some(reason) = quality_reject_reason(&result, &limits, prepared.duration_secs) {
+    if let Some(reason) =
+        quality_reject_reason(&result, &limits, prepared.duration_secs, non_english)
+    {
         return reject(app, &state, reason, &prepared, Some(&result.text));
     }
 
@@ -122,12 +133,13 @@ pub(crate) fn transcribe_chunk(
         emit_diag(app, "rejected", "empty_after_postprocess", &prepared);
         return None;
     }
-    if let Some(reason) = hallucination_reason(&text, profile) {
+    if let Some(reason) = hallucination_reason(&text, profile, non_english) {
         return reject(app, &state, reason, &prepared, Some(&text));
     }
 
     tracing::info!("Transcription accepted ({} chars)", text.chars().count());
-    tracing::debug!("Accepted text: '{}'", text);
+    // Transcript only at trace, so debug-level diagnostics never log it.
+    tracing::trace!("Accepted text: '{}'", text);
     emit_diag(app, "accepted", "accepted", &prepared);
     update_session_context(&state, &text);
     Some((text, result.processing_time_ms))
@@ -264,7 +276,7 @@ fn run_engine(
                 result.processing_time_ms,
                 result.segments.len()
             );
-            tracing::debug!("Engine text: {:?}", result.text);
+            tracing::trace!("Engine text: {:?}", result.text);
             Some(result)
         }
         Err(e) => {
@@ -307,10 +319,13 @@ fn quality_reject_reason(
     result: &TranscriptionResult,
     limits: &ProfileLimits,
     duration_secs: f32,
+    non_english: bool,
 ) -> Option<&'static str> {
     let no_speech = weighted_metric(&result.segments, |s| s.no_speech_prob);
     let confidence = weighted_metric(&result.segments, |s| s.avg_token_prob);
     let is_short = duration_secs < SHORT_CLIP_SECS;
+    // Non-English decodes run lower per-token confidence, so soften the gate.
+    let conf_relax = if non_english { 0.85 } else { 1.0 };
 
     if let Some(p) = no_speech
         && p > limits.no_speech_max
@@ -319,11 +334,12 @@ fn quality_reject_reason(
         return Some("no_speech_prob_high");
     }
 
-    let conf_limit = if is_short {
-        limits.short_min_conf
-    } else {
-        limits.min_conf
-    };
+    let conf_limit = conf_relax
+        * if is_short {
+            limits.short_min_conf
+        } else {
+            limits.min_conf
+        };
     if let Some(c) = confidence
         && c < conf_limit
     {
@@ -349,19 +365,25 @@ fn postprocess_text(result: &TranscriptionResult, developer_mode: bool) -> Strin
     }
 }
 
-/// Classify text-level hallucination patterns. Returns the rejection reason
-/// or None when the text looks like genuine speech.
-fn hallucination_reason(text: &str, profile: TranscriptionProfile) -> Option<&'static str> {
+/// Classify text-level hallucination patterns, or None for genuine speech. The
+/// English word lists are skipped for non-English dictation; the structural
+/// checks always apply.
+fn hallucination_reason(
+    text: &str,
+    profile: TranscriptionProfile,
+    non_english: bool,
+) -> Option<&'static str> {
     let normalized = text
         .trim()
         .trim_end_matches(['.', '!', '?', ','])
         .to_lowercase();
     let stripped = normalized.trim();
 
-    let exact = HALLUCINATIONS.contains(&stripped)
-        || INTERJECTIONS.contains(&stripped)
-        || (matches!(profile, TranscriptionProfile::Strict)
-            && STRICT_EXTRA_HALLUCINATIONS.contains(&stripped));
+    let exact = !non_english
+        && (HALLUCINATIONS.contains(&stripped)
+            || INTERJECTIONS.contains(&stripped)
+            || (matches!(profile, TranscriptionProfile::Strict)
+                && STRICT_EXTRA_HALLUCINATIONS.contains(&stripped)));
     if exact {
         return Some("hallucination_exact");
     }
@@ -459,7 +481,7 @@ fn reject(
     text: Option<&str>,
 ) -> Option<(String, u64)> {
     tracing::warn!("Rejected phrase ({})", reason);
-    tracing::debug!("Rejected text ({}): {:?}", reason, text.unwrap_or(""));
+    tracing::trace!("Rejected text ({}): {:?}", reason, text.unwrap_or(""));
     state
         .session_prev_text
         .lock()
@@ -559,23 +581,39 @@ mod tests {
 
     #[test]
     fn interjections_rejected_only_as_whole_phrase() {
-        assert!(hallucination_reason("Hmm.", TranscriptionProfile::Relaxed).is_some());
+        assert!(hallucination_reason("Hmm.", TranscriptionProfile::Relaxed, false).is_some());
         assert!(
-            hallucination_reason("Ugh, this is broken.", TranscriptionProfile::Relaxed).is_none()
+            hallucination_reason("Ugh, this is broken.", TranscriptionProfile::Relaxed, false)
+                .is_none()
         );
+    }
+
+    #[test]
+    fn non_english_skips_english_word_lists() {
+        // "you" is an English filler word, but as Spanish/French it is real
+        // input ("you" -> French has no such word; treat the list as skipped).
+        assert!(hallucination_reason("you", TranscriptionProfile::Strict, true).is_none());
+        assert!(hallucination_reason("hmm", TranscriptionProfile::Relaxed, true).is_none());
+        // Structural checks still apply regardless of language.
+        assert!(hallucination_reason("(sighs)", TranscriptionProfile::Relaxed, true).is_some());
+        assert!(hallucination_reason("the the the", TranscriptionProfile::Relaxed, true).is_some());
     }
 
     #[test]
     fn bracketed_artifacts_rejected() {
         for text in ["(sighs)", "[music]", "*laughs*"] {
-            assert!(hallucination_reason(text, TranscriptionProfile::Relaxed).is_some());
+            assert!(hallucination_reason(text, TranscriptionProfile::Relaxed, false).is_some());
         }
     }
 
     #[test]
     fn repeated_words_rejected() {
-        assert!(hallucination_reason("the the the", TranscriptionProfile::Relaxed).is_some());
-        assert!(hallucination_reason("the dog barked", TranscriptionProfile::Relaxed).is_none());
+        assert!(
+            hallucination_reason("the the the", TranscriptionProfile::Relaxed, false).is_some()
+        );
+        assert!(
+            hallucination_reason("the dog barked", TranscriptionProfile::Relaxed, false).is_none()
+        );
     }
 
     #[test]
@@ -590,7 +628,7 @@ mod tests {
             "yeah yeah yeah yeah no",
         ] {
             assert!(
-                hallucination_reason(text, TranscriptionProfile::Relaxed).is_some(),
+                hallucination_reason(text, TranscriptionProfile::Relaxed, false).is_some(),
                 "should reject: {text:?}"
             );
         }
@@ -605,7 +643,7 @@ mod tests {
             "very very good work on this",
         ] {
             assert!(
-                hallucination_reason(text, TranscriptionProfile::Relaxed).is_none(),
+                hallucination_reason(text, TranscriptionProfile::Relaxed, false).is_none(),
                 "should keep: {text:?}"
             );
         }
@@ -613,8 +651,8 @@ mod tests {
 
     #[test]
     fn strict_profile_filters_more() {
-        assert!(hallucination_reason("you", TranscriptionProfile::Strict).is_some());
-        assert!(hallucination_reason("you", TranscriptionProfile::Relaxed).is_none());
+        assert!(hallucination_reason("you", TranscriptionProfile::Strict, false).is_some());
+        assert!(hallucination_reason("you", TranscriptionProfile::Relaxed, false).is_none());
     }
 
     #[test]
