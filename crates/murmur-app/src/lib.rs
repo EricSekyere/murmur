@@ -90,6 +90,8 @@ pub fn run() -> anyhow::Result<()> {
             previous_foreground: Mutex::new(0),
             #[cfg(windows)]
             last_external_foreground: Mutex::new(0),
+            startup_notice: Mutex::new(None),
+            suppress_output: std::sync::atomic::AtomicBool::new(false),
         })
         .on_window_event(|window, event| {
             // Hide the main window on close so the tray can re-show it.
@@ -102,6 +104,8 @@ pub fn run() -> anyhow::Result<()> {
         })
         .invoke_handler(tauri::generate_handler![
             commands::get_status,
+            commands::take_startup_notice,
+            commands::set_output_suppressed,
             commands::toggle_recording,
             commands::get_history,
             commands::clear_history,
@@ -257,16 +261,38 @@ fn register_hotkey(app: &tauri::App, hotkey: &str) {
     // force-kill that skipped cleanup).
     let _ = app.global_shortcut().unregister_all();
 
-    match hotkey.parse::<tauri_plugin_global_shortcut::Shortcut>() {
+    let failure = match hotkey.parse::<tauri_plugin_global_shortcut::Shortcut>() {
         Ok(shortcut) => match app.global_shortcut().register(shortcut) {
-            Ok(()) => tracing::info!("Registered global hotkey: {}", hotkey),
-            Err(e) => tracing::warn!(
-                "Could not register hotkey '{}': {:?} (app still works via UI)",
-                hotkey,
-                e
-            ),
+            Ok(()) => {
+                tracing::info!("Registered global hotkey: {}", hotkey);
+                None
+            }
+            Err(e) => {
+                tracing::warn!(
+                    "Could not register hotkey '{}': {:?} (app still works via UI)",
+                    hotkey,
+                    e
+                );
+                Some(format!(
+                    "Hotkey '{hotkey}' is already in use by another app. Murmur still works \
+                     via the mic button or your double-tap key; pick a new hotkey in Settings."
+                ))
+            }
         },
-        Err(e) => tracing::warn!("Could not parse hotkey '{}': {:?}", hotkey, e),
+        Err(e) => {
+            tracing::warn!("Could not parse hotkey '{}': {:?}", hotkey, e);
+            Some(format!(
+                "Hotkey '{hotkey}' is not valid. Set a working hotkey in Settings."
+            ))
+        }
+    };
+
+    if let Some(message) = failure {
+        let state = app.state::<AppState>();
+        *state
+            .startup_notice
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = Some(message);
     }
 }
 

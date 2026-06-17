@@ -40,6 +40,12 @@ pub(crate) struct AppState {
     /// Last foreground window not owned by this process (live-tracked).
     #[cfg(windows)]
     pub last_external_foreground: Mutex<usize>,
+    /// One-shot startup warning (e.g. hotkey registration failed), shown once
+    /// the webview is ready. Cleared on read.
+    pub startup_notice: Mutex<Option<String>>,
+    /// Display-only mode for the onboarding mic test: phrases are shown but not
+    /// typed, run as commands, or saved.
+    pub suppress_output: AtomicBool,
 }
 
 #[derive(serde::Serialize, Clone)]
