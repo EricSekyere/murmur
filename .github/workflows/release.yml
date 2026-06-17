@@ -73,6 +73,16 @@ jobs:
           releaseBody: |
             Fast, private, on-device dictation for Windows.
 
+            ## New in 0.3.8
+
+            - **Privacy controls.** A new Save History toggle keeps no on-disk record of what you dictate, and transcripts no longer reach the debug log.
+            - **Push-to-talk on your hotkey.** Hold to talk now works on your configured hotkey, not just the double-tap key. The default hotkey moved off Ctrl+Q, which collided with app shortcuts like Slack's quit, and Murmur now warns you when its hotkey is already in use.
+            - **More reliable model switching.** Switching models no longer drops a phrase that was mid-flight, and a failed switch no longer leaves the app reporting the wrong active model.
+            - **Better for other languages.** Choosing a non-English language on an English-only model now warns you instead of producing garble, and the quality filters no longer over-reject quiet, accented speech.
+            - **Safer first-run test.** The onboarding mic test is display-only, so it can never type into a background app.
+            - **Smoother model downloads.** The banner shows the model size and a Retry button if a download fails.
+            - **Smaller touches.** Dictation lands in the window you started in (or the clipboard, never a stray one), say "literally" before a command to type the words instead of running it, and the session timeout can be set to always-on for hands-free use.
+
             ## Fixes in 0.3.7
 
             - **Live caption sits correctly on scaled displays.** When the caption follows your active window, it now centers properly beneath it on high-DPI screens (125%, 150%, and up) instead of drifting off-center, and it no longer appears in a screen corner when there is no active window to anchor to.
