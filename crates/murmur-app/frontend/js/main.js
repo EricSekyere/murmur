@@ -44,6 +44,14 @@ async function init() {
     console.error('Failed to get status:', err);
     updateModelBanner({ model_ready: false, model: 'small.en', recording: false, mode: 'idle' });
   }
+
+  // Surface a one-shot startup warning (e.g. the hotkey failed to register).
+  try {
+    const notice = await invoke('take_startup_notice');
+    if (notice) showToast(notice, 'error', 8000);
+  } catch (err) {
+    console.error('Failed to read startup notice:', err);
+  }
 }
 
 init();

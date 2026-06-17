@@ -13,6 +13,9 @@
   const hotkeyEl = document.getElementById('onboarding-hotkey');
   let micActive = false;
 
+  // The mic test needs the model loaded; enable it only when ready.
+  micBtn.disabled = true;
+
   function goTo(step) {
     panels.forEach(p => p.classList.toggle('onboarding__panel--active', +p.dataset.step === step));
     dots.forEach(d => d.classList.toggle('onboarding__dot--active', +d.dataset.step <= step));
@@ -23,8 +26,15 @@
       invoke('toggle_recording').catch(() => {});
       micActive = false;
     }
+    // Restore normal text delivery now the display-only test is over.
+    invoke('set_output_suppressed', { suppressed: false }).catch(() => {});
     localStorage.setItem(SEEN_KEY, '1');
     overlay.hidden = true;
+  }
+
+  function enableMicTest(message) {
+    micBtn.disabled = false;
+    result.textContent = message;
   }
 
   overlay.querySelectorAll('[data-next]').forEach(btn => {
@@ -66,13 +76,15 @@
   // Reflect model readiness on the mic-test step.
   invoke('get_status').then(status => {
     if (status.hotkey) hotkeyEl.textContent = status.hotkey;
-    if (status.model_ready) result.textContent = 'Ready. Click the mic and speak.';
+    if (status.model_ready) enableMicTest('Ready. Click the mic and speak.');
   }).catch(() => {});
 
   listen('model-download-progress', (event) => {
     if (overlay.hidden) return;
-    if (event.payload?.done) result.textContent = 'Ready. Click the mic and speak.';
+    if (event.payload?.done) enableMicTest('Ready. Click the mic and speak.');
   });
 
+  // Run onboarding display-only so the test never types into a background app.
+  invoke('set_output_suppressed', { suppressed: true }).catch(() => {});
   overlay.hidden = false;
 })();
