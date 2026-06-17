@@ -2,6 +2,10 @@
 
 use std::sync::Arc;
 
+use murmur_core::config::settings::{
+    PHRASE_PAUSE_MAX_SECS, PHRASE_PAUSE_MIN_SECS, SESSION_TIMEOUT_MAX_SECS, VAD_THRESHOLD_MAX,
+    VAD_THRESHOLD_MIN,
+};
 use murmur_core::config::{AppProfile, Settings, TranscriptionProfile};
 use murmur_core::output::OutputMode;
 use murmur_core::stt::models::{ModelManager, SttModel};
@@ -12,6 +16,25 @@ use tauri_plugin_global_shortcut::GlobalShortcutExt;
 use crate::model_setup::spawn_download_and_init;
 use crate::session::{end_recording, handle_toggle};
 use crate::state::{AppState, ModelChangedEvent, ModelInfo};
+
+/// Return and clear any one-shot startup warning (e.g. hotkey registration failed).
+#[tauri::command]
+pub(crate) fn take_startup_notice(state: State<'_, AppState>) -> Option<String> {
+    state
+        .startup_notice
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .take()
+}
+
+/// Display-only mode: while suppressed, phrases are shown in the UI but never
+/// typed into the focused app (used by the onboarding mic test).
+#[tauri::command]
+pub(crate) fn set_output_suppressed(state: State<'_, AppState>, suppressed: bool) {
+    state
+        .suppress_output
+        .store(suppressed, std::sync::atomic::Ordering::Release);
+}
 
 #[tauri::command]
 pub(crate) fn get_status(state: State<'_, AppState>) -> serde_json::Value {
@@ -54,6 +77,7 @@ pub(crate) fn get_status(state: State<'_, AppState>) -> serde_json::Value {
         "model_multilingual": settings.model.is_multilingual(),
         "app_profiles": settings.app_profiles,
         "caption_position": settings.caption_position,
+        "save_history": settings.save_history,
     })
 }
 
@@ -154,16 +178,9 @@ pub(crate) async fn change_model(
         }
     }
 
-    // Changing models while recording would silently drop all phrases once
-    // the engine becomes None, so stop first. Use the un-debounced stop:
-    // handle_toggle can swallow this stop if the user just toggled, leaving
-    // the mic running against a None engine.
+    // Keep the old engine in place (don't null it) so an in-flight phrase still
+    // transcribes; "not ready" only blocks new sessions until the swap.
     end_recording(&app);
-
-    {
-        let mut guard = state.engine.lock().unwrap_or_else(|e| e.into_inner());
-        *guard = None;
-    }
     state
         .engine_loaded
         .store(false, std::sync::atomic::Ordering::Release);
@@ -177,11 +194,15 @@ pub(crate) async fn change_model(
         },
     );
 
-    {
+    // Persist first: download_and_init treats the saved model as the source of
+    // truth, so a rapid second switch supersedes this one.
+    let mismatch_warning = {
         let mut settings = state.settings.lock().unwrap_or_else(|e| e.into_inner());
         settings.model = model;
         save_settings(&settings);
-    }
+        language_model_warning(&settings)
+    };
+    emit_settings_warnings(&app, mismatch_warning.into_iter().collect());
 
     spawn_download_and_init(app, Arc::clone(&state.engine), model);
     Ok(())
@@ -235,8 +256,11 @@ pub(crate) fn update_settings(
     translate_to_english: Option<bool>,
     app_profiles: Option<Vec<AppProfile>>,
     caption_position: Option<String>,
+    save_history: Option<bool>,
 ) -> Result<(), String> {
     let mut settings = state.settings.lock().unwrap_or_else(|e| e.into_inner());
+    // Only warn about a model/language mismatch if those fields were touched.
+    let language_touched = language.is_some() || translate_to_english.is_some();
 
     if let Some(ref new_hotkey) = hotkey {
         apply_hotkey(&app, &mut settings, new_hotkey)?;
@@ -252,14 +276,20 @@ pub(crate) fn update_settings(
         settings.transcription_profile = parse_profile(&profile_str)?;
     }
     if let Some(pp) = phrase_pause_secs {
-        if !(0.3..=10.0).contains(&pp) {
-            return Err(format!("phrase_pause_secs must be 0.3-10.0, got {}", pp));
+        if !(PHRASE_PAUSE_MIN_SECS..=PHRASE_PAUSE_MAX_SECS).contains(&pp) {
+            return Err(format!(
+                "phrase_pause_secs must be {}-{}, got {}",
+                PHRASE_PAUSE_MIN_SECS, PHRASE_PAUSE_MAX_SECS, pp
+            ));
         }
         settings.phrase_pause_secs = pp;
     }
     if let Some(st) = session_timeout_secs {
-        if !(0.0..=300.0).contains(&st) {
-            return Err(format!("session_timeout_secs must be 0-300, got {}", st));
+        if !(0.0..=SESSION_TIMEOUT_MAX_SECS).contains(&st) {
+            return Err(format!(
+                "session_timeout_secs must be 0-{}, got {}",
+                SESSION_TIMEOUT_MAX_SECS, st
+            ));
         }
         settings.session_timeout_secs = st;
     }
@@ -283,20 +313,22 @@ pub(crate) fn update_settings(
         }
     }
     if let Some(vocab) = custom_vocabulary {
-        // Trim, drop blanks, cap at 100 entries to keep the prompt bounded.
+        // Trim and drop blanks; clamp_collections enforces the count/length caps.
         settings.custom_vocabulary = vocab
             .into_iter()
             .map(|w| w.trim().to_string())
             .filter(|w| !w.is_empty())
-            .take(100)
             .collect();
     }
     if let Some(sf) = sound_feedback {
         settings.sound_feedback = sf;
     }
     if let Some(vt) = vad_threshold {
-        if !(0.05..=0.95).contains(&vt) {
-            return Err(format!("vad_threshold must be 0.05-0.95, got {}", vt));
+        if !(VAD_THRESHOLD_MIN..=VAD_THRESHOLD_MAX).contains(&vt) {
+            return Err(format!(
+                "vad_threshold must be {}-{}, got {}",
+                VAD_THRESHOLD_MIN, VAD_THRESHOLD_MAX, vt
+            ));
         }
         settings.vad_threshold = vt;
     }
@@ -304,7 +336,7 @@ pub(crate) fn update_settings(
         settings.live_preview = lp;
     }
     if let Some(snips) = snippets {
-        // Trim, drop entries missing a trigger or expansion, cap at 100.
+        // Trim and drop entries missing a trigger/expansion.
         settings.snippets = snips
             .into_iter()
             .map(|s| Snippet {
@@ -312,8 +344,10 @@ pub(crate) fn update_settings(
                 expansion: s.expansion,
             })
             .filter(|s| !s.trigger.is_empty() && !s.expansion.is_empty())
-            .take(100)
             .collect();
+        // Warn about snippets that can never fire (shadowed by a built-in, or duplicate).
+        let warnings = murmur_core::voice_commands::snippet_warnings(&settings.snippets);
+        emit_settings_warnings(&app, warnings);
     }
     if let Some(lang) = language {
         let trimmed = lang.trim();
@@ -325,8 +359,7 @@ pub(crate) fn update_settings(
         settings.translate_to_english = tr;
     }
     if let Some(profiles) = app_profiles {
-        // Trim the app pattern, drop entries with no pattern or no override,
-        // cap at 50 to keep session-start matching cheap.
+        // Trim the pattern, drop entries with no pattern or no override.
         settings.app_profiles = profiles
             .into_iter()
             .map(|p| AppProfile {
@@ -337,7 +370,6 @@ pub(crate) fn update_settings(
             .filter(|p| {
                 !p.app.is_empty() && (p.output_mode.is_some() || p.developer_mode.is_some())
             })
-            .take(50)
             .collect();
     }
     if let Some(pos) = caption_position {
@@ -349,6 +381,20 @@ pub(crate) fn update_settings(
         let _ = app.emit(
             "caption-mode",
             serde_json::json!({ "at_window": pos == "window" }),
+        );
+    }
+    if let Some(sh) = save_history {
+        settings.save_history = sh;
+    }
+
+    // Same gate the loader uses, so the UI can't persist a config it would reject.
+    settings.clamp_collections();
+    settings.validate().map_err(|e| e.to_string())?;
+
+    if language_touched {
+        emit_settings_warnings(
+            &app,
+            language_model_warning(&settings).into_iter().collect(),
         );
     }
 
@@ -391,6 +437,32 @@ fn apply_hotkey(
     settings.hotkey = trimmed;
     tracing::info!("Hotkey updated to: {}", settings.hotkey);
     Ok(())
+}
+
+/// Emit non-blocking settings warnings to the UI (no-op when empty).
+fn emit_settings_warnings(app: &tauri::AppHandle, messages: Vec<String>) {
+    if !messages.is_empty() {
+        let _ = app.emit(
+            "settings-warning",
+            serde_json::json!({ "messages": messages }),
+        );
+    }
+}
+
+/// Warning when language/translate needs a multilingual model but the active
+/// one is English-only (else non-English speech decodes as garbled English).
+fn language_model_warning(settings: &Settings) -> Option<String> {
+    if settings.model.is_multilingual() {
+        return None;
+    }
+    let non_english = crate::transcribe::is_non_english_language(&settings.language);
+    (settings.translate_to_english || non_english).then(|| {
+        format!(
+            "The {} model only transcribes English. Switch to a multilingual model \
+             (Large v3 Turbo) to dictate in other languages or to translate.",
+            settings.model.name()
+        )
+    })
 }
 
 fn parse_output_mode(mode_str: &str) -> Result<OutputMode, String> {

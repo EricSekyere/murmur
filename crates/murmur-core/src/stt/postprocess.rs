@@ -284,8 +284,8 @@ fn expand_symbols(text: &str) -> String {
         }
 
         if !matched {
-            result.push(bytes[i] as char);
-            i += 1;
+            // Advance by whole UTF-8 chars; `bytes[i] as char` corrupts non-ASCII.
+            i = push_char_at(&mut result, text, i);
         }
     }
 
@@ -838,6 +838,17 @@ mod tests {
     #[test]
     fn symbol_fat_arrow() {
         assert_eq!(expand_symbols("fat arrow function"), "=>function");
+    }
+
+    #[test]
+    fn symbol_expansion_preserves_non_ascii() {
+        // Byte-as-char rewriting used to corrupt non-ASCII; it must pass through.
+        assert_eq!(
+            expand_symbols("café déjà vu Iñtërnatização 日本語 🚀"),
+            "café déjà vu Iñtërnatização 日本語 🚀"
+        );
+        // A symbol still expands and the surrounding accents survive.
+        assert_eq!(expand_symbols("café equals déjà"), "café =déjà");
     }
 
     // ── Casing formatters ────────────────────────────────────────────────

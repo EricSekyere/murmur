@@ -228,6 +228,7 @@ fn run_session(
         level_tick: 0,
         saw_signal: false,
         consecutive_no_sample_ticks: 0,
+        consecutive_silent_ticks: 0,
         startup_deadline: Instant::now() + Duration::from_millis(1200),
         silence_deadline: Instant::now() + Duration::from_secs(3),
         live_preview: params.live_preview,
@@ -290,6 +291,8 @@ struct Monitor<'a> {
     level_tick: u32,
     saw_signal: bool,
     consecutive_no_sample_ticks: u32,
+    /// Post-signal ticks where the stream delivers only digital silence.
+    consecutive_silent_ticks: u32,
     startup_deadline: Instant,
     silence_deadline: Instant,
     live_preview: bool,
@@ -454,6 +457,22 @@ impl Monitor<'_> {
             return self.fail_no_signal(
                 "Microphone stopped delivering audio. The input device may have been disconnected or changed.",
             );
+        }
+
+        // A driver delivering only digital silence after a disconnect/mute
+        // evades the no-sample check above. Room noise floor sits above this
+        // threshold, so real speech pauses don't trip it.
+        if self.saw_signal {
+            if saw_new_samples && chunk_rms <= 0.00005 {
+                self.consecutive_silent_ticks += 1;
+            } else if saw_new_samples {
+                self.consecutive_silent_ticks = 0;
+            }
+            if self.consecutive_silent_ticks >= MID_SESSION_STALL_TICKS {
+                return self.fail_no_signal(
+                    "Microphone is delivering only silence. The input device may have been disconnected, muted, or changed.",
+                );
+            }
         }
 
         if !self.saw_signal

@@ -13,6 +13,12 @@ listen('update-available', (event) => {
   updateBanner.hidden = false;
 });
 
+// Update check failed (offline or feed unreachable): note it gently, once.
+listen('update-check-failed', () => {
+  console.warn('Update check failed; updates may not be reaching this install.');
+  showToast("Couldn't check for updates", 'info', 4000);
+});
+
 updateDismiss.addEventListener('click', () => {
   updateBanner.hidden = true;
 });

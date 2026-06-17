@@ -5,6 +5,9 @@ use std::sync::OnceLock;
 
 const ORT_VERSION: &str = "1.23.0";
 
+/// Pinned SHA256 of the ORT archive (empty until pinned; logged on first download).
+const ORT_ARCHIVE_SHA256: &str = "";
+
 /// ONNX Runtime DLL filename for the current platform.
 #[cfg(target_os = "windows")]
 const DLL_FILENAME: &str = "onnxruntime.dll";
@@ -102,6 +105,7 @@ pub async fn download() -> Result<PathBuf> {
         .await
         .context("Failed to read ONNX Runtime download")?;
 
+    crate::integrity::verify_or_log_sha256(&bytes, ORT_ARCHIVE_SHA256, "ONNX Runtime archive")?;
     tracing::info!("Downloaded {} bytes, extracting DLL...", bytes.len());
 
     let dir_clone = dir.clone();
@@ -151,6 +155,7 @@ where
         on_progress(downloaded, total_size);
     }
 
+    crate::integrity::verify_or_log_sha256(&all_bytes, ORT_ARCHIVE_SHA256, "ONNX Runtime archive")?;
     tracing::info!("Downloaded {} bytes, extracting DLL...", all_bytes.len());
 
     let dir_clone = dir.clone();

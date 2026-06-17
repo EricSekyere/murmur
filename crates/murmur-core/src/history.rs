@@ -36,12 +36,26 @@ impl History {
         Ok(dir.join("history.json"))
     }
 
-    /// Load from disk, falling back to an empty log on any read/parse error so
-    /// a corrupt file never blocks startup.
+    /// Load from disk; on a read/parse error fall back to empty. A file that
+    /// exists but fails to parse is backed up to `history.json.bak` first.
     pub fn load(path: &PathBuf) -> Self {
-        match std::fs::read_to_string(path) {
-            Ok(content) => serde_json::from_str(&content).unwrap_or_default(),
-            Err(_) => Self::default(),
+        let content = match std::fs::read_to_string(path) {
+            Ok(content) => content,
+            Err(_) => return Self::default(),
+        };
+        match serde_json::from_str(&content) {
+            Ok(history) => history,
+            Err(e) => {
+                let backup = path.with_extension("json.bak");
+                tracing::warn!(
+                    "History at {} is unreadable ({}); backing it up to {} and starting fresh",
+                    path.display(),
+                    e,
+                    backup.display()
+                );
+                let _ = std::fs::rename(path, &backup);
+                Self::default()
+            }
         }
     }
 

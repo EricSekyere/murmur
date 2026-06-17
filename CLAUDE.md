@@ -76,6 +76,11 @@ Voice-to-text desktop tool for developers. See `prd.md` for full requirements an
 - Avoid: deep nesting, magic numbers, unnecessary clones, ignored `Result`s.
 - Prefer early returns, combinators (`map`, `and_then`), and constants with meaningful names.
 
+### Comments
+- **Comment the *why*, not the *what*.** Don't restate what the code plainly does or narrate each step. Reserve comments for non-obvious rationale, invariants, gotchas, and edge cases.
+- Prefer self-documenting names over explanatory comments. No redundant, decorative, or restating comments.
+- Keep it lean: a single line of context beats a paragraph. A `///` doc comment on a public item; sparse `//` notes only where the reason isn't obvious from the code.
+
 ### File Operations
 - Atomic config writes: write to tempfile, then rename.
 - Validate config on load. Verify model SHA256 checksums after download.

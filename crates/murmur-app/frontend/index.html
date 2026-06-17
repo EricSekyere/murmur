@@ -23,6 +23,7 @@
         <div id="model-progress-fill" class="progress-bar__fill"></div>
       </div>
       <span id="model-progress-pct" class="banner__pct" hidden>0%</span>
+      <button id="model-retry" class="btn-small" type="button" hidden>Retry</button>
     </div>
 
     <!-- Error Banner: shown on start/stop failures -->
@@ -84,7 +85,7 @@
 
         <!-- Footer chips -->
         <footer>
-          <span id="hotkey-display" class="hotkey-badge">ctrl+q</span>
+          <span id="hotkey-display" class="hotkey-badge">ctrl+shift+space</span>
           <span id="output-mode-display" class="output-mode-badge">keyboard</span>
           <span id="model-info" class="model-info">Model: small.en</span>
         </footer>
@@ -422,10 +423,10 @@
                 <div class="settings-row">
                   <div class="settings-row__text">
                     <label class="settings-label" for="session-timeout-range">Session Timeout</label>
-                    <span class="settings-hint">Total silence before session auto-stops.</span>
+                    <span class="settings-hint">Total silence before a session auto-stops. Set to 0 to keep listening until you stop it yourself (hands-free).</span>
                   </div>
                   <div class="settings-slider-wrap">
-                    <input type="range" id="session-timeout-range" min="5" max="120" step="5" value="30">
+                    <input type="range" id="session-timeout-range" min="0" max="120" step="5" value="30">
                     <span id="session-timeout-value" class="settings-slider-val">30s</span>
                   </div>
                 </div>
@@ -468,6 +469,20 @@
                   </div>
                   <label class="toggle-switch">
                     <input type="checkbox" id="sound-feedback-toggle" checked>
+                    <span class="toggle-switch__slider"></span>
+                  </label>
+                </div>
+              </div>
+
+              <!-- Save History -->
+              <div class="settings-group">
+                <div class="settings-row">
+                  <div class="settings-row__text">
+                    <label class="settings-label" for="save-history-toggle">Save History</label>
+                    <span class="settings-hint">Keep an on-device, searchable log of dictated phrases. Turn off to store nothing on disk.</span>
+                  </div>
+                  <label class="toggle-switch">
+                    <input type="checkbox" id="save-history-toggle" checked>
                     <span class="toggle-switch__slider"></span>
                   </label>
                 </div>
@@ -650,7 +665,7 @@
           <p class="onboarding__text">Private, on-device dictation. Speak and your words appear in whatever app you're using — nothing leaves your machine.</p>
           <ul class="onboarding__list">
             <li><kbd>Double-tap Right Ctrl</kbd> to start and stop</li>
-            <li>Or press your hotkey <kbd id="onboarding-hotkey">ctrl+q</kbd></li>
+            <li>Or press your hotkey <kbd id="onboarding-hotkey">ctrl+shift+space</kbd></li>
             <li>Say <em>"new line"</em>, <em>"new paragraph"</em>, or <em>"scratch that"</em> while dictating</li>
           </ul>
           <div class="onboarding__actions">

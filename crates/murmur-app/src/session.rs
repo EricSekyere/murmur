@@ -330,26 +330,59 @@ fn handle_phrase(
 
     if let Some((text, processing_time_ms)) = transcribe_chunk(app, buffer) {
         stats.had_transcription = true;
-        match voice_commands::parse(&text) {
-            VoiceCommand::Text => {
-                // A user snippet expands to its replacement text; otherwise
-                // the spoken phrase is delivered verbatim.
-                let expansion = {
-                    let settings = state.settings.lock().unwrap_or_else(|e| e.into_inner());
-                    voice_commands::match_snippet(&text, &settings.snippets).map(str::to_string)
-                };
-                let delivered = expansion.as_deref().unwrap_or(text.as_str());
-                deliver_text(
-                    app,
-                    state,
-                    delivered,
-                    output_mode,
-                    processing_time_ms,
-                    #[cfg(windows)]
-                    previous_hwnd,
-                );
+        // Display-only mode (onboarding test): show the words, deliver nothing.
+        if state
+            .suppress_output
+            .load(std::sync::atomic::Ordering::Acquire)
+        {
+            let _ = app.emit(
+                "streaming-phrase",
+                serde_json::json!({ "text": text, "processing_time_ms": processing_time_ms }),
+            );
+            crate::caption::hide(app);
+            let still_recording = *state.recording.lock().unwrap_or_else(|e| e.into_inner());
+            if still_recording {
+                emit_recording_state(app, true, false);
             }
-            command => execute_command(app, state, command),
+            return;
+        }
+        // Literal escape ("literally <command>"): deliver the words verbatim.
+        let literal = {
+            let settings = state.settings.lock().unwrap_or_else(|e| e.into_inner());
+            voice_commands::literal_escape(&text, &settings.snippets)
+        };
+        if let Some(literal_text) = literal {
+            deliver_text(
+                app,
+                state,
+                &literal_text,
+                output_mode,
+                processing_time_ms,
+                #[cfg(windows)]
+                previous_hwnd,
+            );
+        } else {
+            match voice_commands::parse(&text) {
+                VoiceCommand::Text => {
+                    // A user snippet expands to its replacement text; otherwise
+                    // the spoken phrase is delivered verbatim.
+                    let expansion = {
+                        let settings = state.settings.lock().unwrap_or_else(|e| e.into_inner());
+                        voice_commands::match_snippet(&text, &settings.snippets).map(str::to_string)
+                    };
+                    let delivered = expansion.as_deref().unwrap_or(text.as_str());
+                    deliver_text(
+                        app,
+                        state,
+                        delivered,
+                        output_mode,
+                        processing_time_ms,
+                        #[cfg(windows)]
+                        previous_hwnd,
+                    );
+                }
+                command => execute_command(app, state, command),
+            }
         }
     }
 
@@ -405,8 +438,17 @@ fn deliver_text(
 }
 
 /// Append a delivered phrase to the persistent history and save it. Best
-/// effort: a failed write is logged, never surfaced to the user.
+/// effort: a failed write is logged, never surfaced to the user. Skipped
+/// entirely when the user has turned history off.
 fn record_history(state: &AppState, text: &str) {
+    if !state
+        .settings
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .save_history
+    {
+        return;
+    }
     let app_name = current_app_name();
     let mut history = state.history.lock().unwrap_or_else(|e| e.into_inner());
     history.add(text, app_name);

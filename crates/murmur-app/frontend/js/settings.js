@@ -36,7 +36,7 @@ settingsToggle.addEventListener('click', async () => {
     }
     if (status.session_timeout_secs != null) {
       sessionTimeoutRange.value = status.session_timeout_secs;
-      sessionTimeoutValue.textContent = `${status.session_timeout_secs}s`;
+      sessionTimeoutValue.textContent = formatTimeout(status.session_timeout_secs);
     }
     if (status.click_to_stop != null) {
       clickToStopToggle.checked = status.click_to_stop;
@@ -70,6 +70,9 @@ settingsToggle.addEventListener('click', async () => {
     }
     if (status.sound_feedback != null) {
       soundFeedbackToggle.checked = status.sound_feedback;
+    }
+    if (status.save_history != null) {
+      saveHistoryToggle.checked = status.save_history;
     }
     if (status.live_preview != null) {
       livePreviewToggle.checked = status.live_preview;
@@ -258,8 +261,12 @@ micSensitivityRange.addEventListener('change', async () => {
   }
 });
 
+function formatTimeout(secs) {
+  return Number(secs) === 0 ? 'Always on' : `${secs}s`;
+}
+
 sessionTimeoutRange.addEventListener('input', () => {
-  sessionTimeoutValue.textContent = `${sessionTimeoutRange.value}s`;
+  sessionTimeoutValue.textContent = formatTimeout(sessionTimeoutRange.value);
 });
 
 sessionTimeoutRange.addEventListener('change', async () => {
@@ -327,6 +334,17 @@ livePreviewToggle.addEventListener('change', async () => {
     await invoke('update_settings', { live_preview: enabled });
   } catch (err) {
     livePreviewToggle.checked = !enabled;
+    showToast(`Failed: ${err}`, 'error');
+  }
+});
+
+saveHistoryToggle.addEventListener('change', async () => {
+  const enabled = saveHistoryToggle.checked;
+  try {
+    await invoke('update_settings', { save_history: enabled });
+    showToast(enabled ? 'History on' : 'History off — nothing stored', 'success');
+  } catch (err) {
+    saveHistoryToggle.checked = !enabled;
     showToast(`Failed: ${err}`, 'error');
   }
 });
@@ -562,6 +580,27 @@ listen('model-changed', (event) => {
   }
 });
 
+// Non-blocking warnings from saving settings (e.g. a snippet that can never
+// fire because a built-in command shadows it or it duplicates another).
+listen('settings-warning', (event) => {
+  const messages = event?.payload?.messages || [];
+  messages.forEach(msg => showToast(msg, 'error', 6000));
+});
+
+// Retry a failed model download from the banner.
+if (modelRetry) {
+  modelRetry.addEventListener('click', async () => {
+    modelRetry.hidden = true;
+    modelBannerText.textContent = 'Retrying download...';
+    try {
+      await invoke('download_model');
+    } catch (err) {
+      modelBannerText.textContent = `Download failed: ${err}`;
+      modelRetry.hidden = false;
+    }
+  });
+}
+
 listen('model-download-progress', (event) => {
   const data = event.payload;
   const inlineProgress = () =>
@@ -574,6 +613,7 @@ listen('model-download-progress', (event) => {
     modelBannerText.textContent = data.message || 'Download failed';
     modelProgressWrap.hidden = true;
     modelProgressPct.hidden = true;
+    if (modelRetry) modelRetry.hidden = false;
     const progressEl = inlineProgress();
     if (progressEl) progressEl.hidden = true;
     if (changingModelId) {
@@ -582,6 +622,8 @@ listen('model-download-progress', (event) => {
     }
     return;
   }
+
+  if (modelRetry) modelRetry.hidden = true;
 
   if (data.done) {
     modelReady = true;

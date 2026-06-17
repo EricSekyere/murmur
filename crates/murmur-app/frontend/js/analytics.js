@@ -36,7 +36,12 @@ function loadAnalytics() {
       data.todaySessions = 0;
       data.todayDate = today;
     }
-    if (!data.hourlyWords) data.hourlyWords = new Array(24).fill(0);
+    // Validate shape (not just presence): a bad array yields NaN in peak-hour math.
+    if (!Array.isArray(data.hourlyWords) || data.hourlyWords.length !== 24) {
+      data.hourlyWords = new Array(24).fill(0);
+    } else {
+      data.hourlyWords = data.hourlyWords.map(n => (Number.isFinite(n) ? n : 0));
+    }
     if (!data.lastSession) data.lastSession = null;
     if (!data.totalWpmSum) data.totalWpmSum = 0;
     return data;

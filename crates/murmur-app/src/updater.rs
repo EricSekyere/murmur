@@ -13,26 +13,35 @@ struct UpdateAvailable {
 }
 
 /// Check for an update in the background and, if one is found, emit
-/// `update-available` so the UI can offer it. Failures are logged only —
-/// a missing network or release should never disrupt the app.
+/// `update-available` so the UI can offer it. On failure (no network, or a
+/// `latest.json` that 404s because the repo is private) emit
+/// `update-check-failed` so the UI can note that updates aren't reaching the
+/// user, instead of failing silently. Never disrupts the app.
 pub(crate) fn spawn_startup_check(app: tauri::AppHandle) {
     tauri::async_runtime::spawn(async move {
-        match app.updater() {
-            Ok(updater) => match updater.check().await {
-                Ok(Some(update)) => {
-                    tracing::info!("Update available: {}", update.version);
-                    let _ = app.emit(
-                        "update-available",
-                        UpdateAvailable {
-                            version: update.version.clone(),
-                            notes: update.body.clone().unwrap_or_default(),
-                        },
-                    );
-                }
-                Ok(None) => tracing::debug!("No update available"),
-                Err(e) => tracing::warn!("Update check failed: {}", e),
-            },
-            Err(e) => tracing::warn!("Updater unavailable: {}", e),
+        let result = match app.updater() {
+            Ok(updater) => updater.check().await,
+            Err(e) => Err(e),
+        };
+        match result {
+            Ok(Some(update)) => {
+                tracing::info!("Update available: {}", update.version);
+                let _ = app.emit(
+                    "update-available",
+                    UpdateAvailable {
+                        version: update.version.clone(),
+                        notes: update.body.clone().unwrap_or_default(),
+                    },
+                );
+            }
+            Ok(None) => tracing::debug!("No update available"),
+            Err(e) => {
+                tracing::warn!("Update check failed: {}", e);
+                let _ = app.emit(
+                    "update-check-failed",
+                    serde_json::json!({ "error": e.to_string() }),
+                );
+            }
         }
     });
 }
