@@ -2,6 +2,8 @@
 pub mod capture;
 pub mod silence;
 pub mod vad;
+#[cfg(all(feature = "audio", windows))]
+pub mod wasapi;
 
 /// Holds captured PCM audio samples (16kHz mono f32).
 /// Always available regardless of feature flags.

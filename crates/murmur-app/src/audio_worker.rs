@@ -39,6 +39,8 @@ pub(crate) struct StartParams {
     pub session_timeout: Duration,
     /// Emit periodic `PartialPhrase` snapshots for live preview.
     pub live_preview: bool,
+    /// Use the OS echo-cancelling capture path when available.
+    pub echo_cancellation: bool,
 }
 
 enum Cmd {
@@ -176,7 +178,11 @@ fn run_session(
     cmd_rx: &mpsc::Receiver<Cmd>,
     result_tx: &mpsc::Sender<AudioResult>,
 ) {
-    if let Err(msg) = start_capture(capture, params.audio_device.as_deref()) {
+    if let Err(msg) = start_capture(
+        capture,
+        params.audio_device.as_deref(),
+        params.echo_cancellation,
+    ) {
         let _ = result_tx.send(AudioResult::StartFailed(msg));
         return;
     }
@@ -199,6 +205,7 @@ fn run_session(
     }
     let _ = result_tx.send(AudioResult::Started);
 
+    let echo_cancellation = capture.echo_cancellation_active();
     let mut analyzed_up_to = 0usize;
     let calibration = calibrate(
         &live_buf,
@@ -206,10 +213,11 @@ fn run_session(
         native_channels,
         native_rate,
         params.rms_threshold,
+        echo_cancellation,
     );
     keep_calibration_preroll(&live_buf, &mut analyzed_up_to, native_rate, native_channels);
 
-    let session = build_session(params, &calibration, native_rate);
+    let session = build_session(params, &calibration, native_rate, echo_cancellation);
 
     Monitor {
         cmd_rx,
@@ -237,8 +245,14 @@ fn run_session(
 }
 
 /// CPAL's native backend (WASAPI) can panic on some drivers â€” contain it.
-fn start_capture(capture: &mut AudioCapture, device: Option<&str>) -> Result<(), String> {
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| capture.start(device)));
+fn start_capture(
+    capture: &mut AudioCapture,
+    device: Option<&str>,
+    echo_cancellation: bool,
+) -> Result<(), String> {
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        capture.start(device, echo_cancellation)
+    }));
     match result {
         Ok(Ok(())) => Ok(()),
         Ok(Err(e)) => Err(e.to_string()),

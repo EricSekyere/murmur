@@ -77,3 +77,12 @@ indicatif = "0.17"
 # DirectML GPU execution provider for Parakeet — Windows only.
 [target.'cfg(windows)'.dependencies]
 parakeet-rs = { workspace = true, optional = true, features = ["directml"] }
+# WASAPI: open the mic in communications mode so Windows applies its built-in
+# echo cancellation. Used by audio::wasapi.
+windows = { version = "0.58", features = [
+    "Win32_Foundation",
+    "Win32_Media_Audio",
+    "Win32_Security",
+    "Win32_System_Com",
+    "Win32_System_Threading",
+] }

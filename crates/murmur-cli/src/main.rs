@@ -317,7 +317,7 @@ async fn cmd_listen(stdout: bool, clipboard: bool, model_name: Option<String>) -
             Ok(murmur_core::hotkey::HotkeyEvent::Pressed) => {
                 tracing::info!("Hotkey pressed — recording...");
                 println!("Recording...");
-                capture.start(settings.audio_device.as_deref())?;
+                capture.start(settings.audio_device.as_deref(), settings.echo_cancellation)?;
             }
             Ok(murmur_core::hotkey::HotkeyEvent::Released) => {
                 tracing::info!("Hotkey released — transcribing...");
