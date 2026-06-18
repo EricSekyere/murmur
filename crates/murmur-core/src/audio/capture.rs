@@ -221,6 +221,21 @@ impl AudioCapture {
         }
         self.stream.is_some()
     }
+
+    /// Whether the OS echo-cancelling capture path is the active source (as
+    /// opposed to the raw CPAL mic it falls back to). Calibration uses this to
+    /// skip the gain boost the raw mic needs: the voice stream is already
+    /// AGC-leveled by the OS, so boosting it just re-amplifies idle noise.
+    pub fn echo_cancellation_active(&self) -> bool {
+        #[cfg(windows)]
+        {
+            self.voice.is_some()
+        }
+        #[cfg(not(windows))]
+        {
+            false
+        }
+    }
 }
 
 fn select_input_device(host: &cpal::Host, preferred_device: Option<&str>) -> Result<cpal::Device> {

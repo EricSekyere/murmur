@@ -205,6 +205,7 @@ fn run_session(
     }
     let _ = result_tx.send(AudioResult::Started);
 
+    let echo_cancellation = capture.echo_cancellation_active();
     let mut analyzed_up_to = 0usize;
     let calibration = calibrate(
         &live_buf,
@@ -212,10 +213,11 @@ fn run_session(
         native_channels,
         native_rate,
         params.rms_threshold,
+        echo_cancellation,
     );
     keep_calibration_preroll(&live_buf, &mut analyzed_up_to, native_rate, native_channels);
 
-    let session = build_session(params, &calibration, native_rate);
+    let session = build_session(params, &calibration, native_rate, echo_cancellation);
 
     Monitor {
         cmd_rx,
