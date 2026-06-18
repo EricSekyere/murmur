@@ -28,6 +28,7 @@ Voice-to-text desktop tool for developers. See `prd.md` for full requirements an
 | `keyboard` | enigo      | Yes     | Keystroke simulation                 |
 | `stt`      | whisper-rs | No      | Requires cmake + libclang            |
 | `vad`      | ort        | No      | ONNX Runtime for Silero VAD          |
+| `indexer`  | ignore, regex | No   | Codebase-derived vocabulary (lexical scan) |
 | `full`     | all above  | No      | Enables everything; needs native tools|
 
 ## Build Prerequisites

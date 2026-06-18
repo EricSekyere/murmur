@@ -9,7 +9,7 @@ description = "Core library for Murmur voice-to-text tool"
 [features]
 default = ["audio", "keyboard"]
 # Enable all features (requires cmake + libclang for whisper.cpp, ONNX Runtime for VAD + Parakeet)
-full = ["audio", "stt", "vad", "keyboard", "parakeet"]
+full = ["audio", "stt", "vad", "keyboard", "parakeet", "indexer"]
 # Audio capture via CPAL
 audio = ["dep:cpal"]
 # Speech-to-text via whisper.cpp (requires cmake + libclang)
@@ -24,6 +24,8 @@ vad = ["audio", "dep:ort", "dep:zip", "dep:flate2", "dep:tar"]
 parakeet = ["dep:parakeet-rs", "dep:ort", "dep:zip", "dep:flate2", "dep:tar"]
 # Keystroke simulation
 keyboard = ["dep:enigo"]
+# Codebase-derived vocabulary: lexical project indexer (gitignore-aware walk + regex)
+indexer = ["dep:ignore", "dep:regex"]
 
 [dependencies]
 # Audio (optional — needs system audio libs)
@@ -73,6 +75,13 @@ sha2 = "0.10"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream"] }
 futures-util = "0.3"
 indicatif = "0.17"
+
+# Codebase indexer (optional — gitignore-aware walk + identifier extraction)
+ignore = { version = "0.4", optional = true }
+regex = { version = "1", optional = true }
+
+[dev-dependencies]
+tempfile = "3"
 
 # DirectML GPU execution provider for Parakeet — Windows only.
 [target.'cfg(windows)'.dependencies]
