@@ -23,7 +23,7 @@ use murmur_core::config::Settings;
 use murmur_core::output::OutputMode;
 use murmur_core::stt::engine::SttEngine;
 use tauri::{
-    Manager,
+    Emitter, Manager,
     image::Image,
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
@@ -67,6 +67,7 @@ pub fn run() -> anyhow::Result<()> {
         }))
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_dialog::init())
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(move |app, _shortcut, event| {
@@ -120,6 +121,8 @@ pub fn run() -> anyhow::Result<()> {
             commands::list_audio_devices,
             commands::set_widget_visible,
             commands::locate_widget,
+            commands::pick_project_folder,
+            commands::set_codebase_vocabulary,
             updater::install_update,
         ])
         .setup(move |app| setup_app(app, engine_for_setup, model, &hotkey, show_widget_on_start))
@@ -235,19 +238,33 @@ pub(crate) fn spawn_project_index(app: tauri::AppHandle) {
         };
         match index_project(&root, &cfg) {
             Ok(symbols) => {
-                tracing::info!(
-                    "Codebase index: {} symbols from {}",
-                    symbols.len(),
-                    root.display()
-                );
+                let count = symbols.len();
+                tracing::info!("Codebase index: {} symbols from {}", count, root.display());
                 let state = app.state::<AppState>();
                 *state
                     .project_vocab
                     .lock()
                     .unwrap_or_else(|e| e.into_inner()) = symbols;
+                let _ = app.emit(
+                    "codebase-index",
+                    serde_json::json!({
+                        "count": count,
+                        "root": root.to_string_lossy(),
+                        "enabled": true,
+                    }),
+                );
             }
             Err(e) => {
                 tracing::warn!("Codebase index failed for {}: {:#}", root.display(), e);
+                let _ = app.emit(
+                    "codebase-index",
+                    serde_json::json!({
+                        "count": 0,
+                        "root": root.to_string_lossy(),
+                        "enabled": true,
+                        "error": e.to_string(),
+                    }),
+                );
             }
         }
     });

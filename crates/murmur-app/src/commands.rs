@@ -78,7 +78,79 @@ pub(crate) fn get_status(state: State<'_, AppState>) -> serde_json::Value {
         "app_profiles": settings.app_profiles,
         "caption_position": settings.caption_position,
         "save_history": settings.save_history,
+        "codebase_vocab_enabled": settings.indexer.enabled,
+        "codebase_vocab_root": settings
+            .indexer
+            .project_root
+            .as_ref()
+            .map(|p| p.to_string_lossy().into_owned()),
+        "codebase_vocab_count": state
+            .project_vocab
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .len(),
     })
+}
+
+/// Open a native folder picker and return the chosen path, or None if cancelled.
+/// Async so the blocking dialog runs off the main thread.
+#[tauri::command]
+pub(crate) async fn pick_project_folder(app: tauri::AppHandle) -> Option<String> {
+    use tauri_plugin_dialog::DialogExt;
+    app.dialog()
+        .file()
+        .blocking_pick_folder()
+        .and_then(|p| p.into_path().ok())
+        .map(|p| p.to_string_lossy().into_owned())
+}
+
+/// Enable/disable codebase vocabulary and optionally set the project root, then
+/// persist and re-index (or clear) in the background. The result count is
+/// reported via the `codebase-index` event.
+#[tauri::command]
+pub(crate) fn set_codebase_vocabulary(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    enabled: bool,
+    project_root: Option<String>,
+) -> Result<(), String> {
+    let (active, root_for_event) = {
+        let mut settings = state.settings.lock().unwrap_or_else(|e| e.into_inner());
+        settings.indexer.enabled = enabled;
+        if let Some(root) = project_root {
+            let trimmed = root.trim();
+            settings.indexer.project_root =
+                (!trimmed.is_empty()).then(|| std::path::PathBuf::from(trimmed));
+        }
+        let path = Settings::default_path().map_err(|e| e.to_string())?;
+        settings
+            .save(&path)
+            .map_err(|e| format!("Failed to save settings: {e}"))?;
+        let active = settings.indexer.enabled && settings.indexer.project_root.is_some();
+        let root_str = settings
+            .indexer
+            .project_root
+            .as_ref()
+            .map(|p| p.to_string_lossy().into_owned());
+        (active, root_str)
+    };
+
+    if active {
+        // spawn_project_index re-reads settings, indexes, and emits the result.
+        crate::spawn_project_index(app);
+    } else {
+        // Disabled or no folder: stop injecting immediately and report it.
+        state
+            .project_vocab
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clear();
+        let _ = app.emit(
+            "codebase-index",
+            serde_json::json!({ "count": 0, "root": root_for_event, "enabled": enabled }),
+        );
+    }
+    Ok(())
 }
 
 #[tauri::command]

@@ -74,6 +74,14 @@ settingsToggle.addEventListener('click', async () => {
     if (status.save_history != null) {
       saveHistoryToggle.checked = status.save_history;
     }
+    if (status.codebase_vocab_enabled != null) {
+      codebaseVocabToggle.checked = status.codebase_vocab_enabled;
+    }
+    updateCodebaseVocabStatus(
+      status.codebase_vocab_root,
+      status.codebase_vocab_count,
+      status.codebase_vocab_enabled
+    );
     if (status.live_preview != null) {
       livePreviewToggle.checked = status.live_preview;
     }
@@ -85,6 +93,54 @@ settingsToggle.addEventListener('click', async () => {
   } catch (err) {
     console.error('Failed to get settings:', err);
   }
+});
+
+// --- Codebase vocabulary ---
+
+// Render the status line from the current root, indexed count, and enabled flag.
+function updateCodebaseVocabStatus(root, count, enabled) {
+  if (!root) {
+    codebaseVocabStatus.textContent = 'No project folder selected.';
+    return;
+  }
+  const name = root.replace(/[\\/]+$/, '').split(/[\\/]/).pop() || root;
+  if (!enabled) {
+    codebaseVocabStatus.textContent = `${name} (off)`;
+    return;
+  }
+  codebaseVocabStatus.textContent = count > 0
+    ? `${name} — ${count} symbol${count === 1 ? '' : 's'} indexed`
+    : `${name} — indexing…`;
+}
+
+codebaseVocabToggle.addEventListener('change', async () => {
+  const enabled = codebaseVocabToggle.checked;
+  try {
+    await invoke('set_codebase_vocabulary', { enabled, project_root: null });
+    showToast(enabled ? 'Codebase vocabulary on' : 'Codebase vocabulary off', 'success');
+  } catch (err) {
+    codebaseVocabToggle.checked = !enabled;
+    showToast(`Failed: ${err}`, 'error');
+  }
+});
+
+codebaseVocabFolder.addEventListener('click', async () => {
+  try {
+    const folder = await invoke('pick_project_folder');
+    if (!folder) return; // user cancelled
+    codebaseVocabToggle.checked = true;
+    updateCodebaseVocabStatus(folder, 0, true); // optimistic until the event lands
+    await invoke('set_codebase_vocabulary', { enabled: true, project_root: folder });
+    showToast('Indexing project…', 'success');
+  } catch (err) {
+    showToast(`Failed: ${err}`, 'error');
+  }
+});
+
+// Backend reports the indexed symbol count when a scan finishes.
+listen('codebase-index', (event) => {
+  const p = event.payload || {};
+  updateCodebaseVocabStatus(p.root, p.count, p.enabled);
 });
 
 developerModeToggle.addEventListener('change', async () => {

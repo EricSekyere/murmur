@@ -74,3 +74,6 @@ const soundFeedbackToggle = document.getElementById('sound-feedback-toggle');
 const livePreviewToggle   = document.getElementById('live-preview-toggle');
 const saveHistoryToggle   = document.getElementById('save-history-toggle');
 const captionPositionSelect = document.getElementById('caption-position-select');
+const codebaseVocabToggle = document.getElementById('codebase-vocab-toggle');
+const codebaseVocabFolder = document.getElementById('codebase-vocab-folder');
+const codebaseVocabStatus = document.getElementById('codebase-vocab-status');
