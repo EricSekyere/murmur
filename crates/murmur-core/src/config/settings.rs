@@ -31,6 +31,44 @@ pub enum TranscriptionProfile {
     Strict,
 }
 
+/// Upper bounds for the codebase indexer, enforced on load.
+const MAX_INDEX_SYMBOLS: usize = 128;
+const MAX_INDEX_EXTENSIONS: usize = 32;
+
+/// Codebase-derived vocabulary: scan `project_root` for distinctive identifiers
+/// and inject them into the STT vocabulary so project symbols transcribe
+/// correctly. Disabled by default; only helps Whisper (Parakeet has no biasing).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IndexerSettings {
+    /// Whether to index the project and inject its symbols.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Project root to scan. Indexing only runs when this is set.
+    #[serde(default)]
+    pub project_root: Option<PathBuf>,
+    /// Maximum symbols to inject (clamped to 1..=128 on load).
+    #[serde(default = "default_index_max_symbols")]
+    pub max_symbols: usize,
+    /// Source extensions to scan; empty means the built-in defaults.
+    #[serde(default)]
+    pub extensions: Vec<String>,
+}
+
+impl Default for IndexerSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            project_root: None,
+            max_symbols: default_index_max_symbols(),
+            extensions: Vec::new(),
+        }
+    }
+}
+
+fn default_index_max_symbols() -> usize {
+    64
+}
+
 /// Application settings, loaded from TOML config file.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Settings {
@@ -155,6 +193,10 @@ pub struct Settings {
     /// now; falls back to the raw mic elsewhere or if it can't be opened.
     #[serde(default = "default_true")]
     pub echo_cancellation: bool,
+
+    /// Codebase-derived vocabulary settings (off by default).
+    #[serde(default)]
+    pub indexer: IndexerSettings,
 }
 
 impl AppProfile {
@@ -347,6 +389,7 @@ impl Default for Settings {
             caption_position: default_caption_position(),
             save_history: true,
             echo_cancellation: true,
+            indexer: IndexerSettings::default(),
         }
     }
 }
@@ -468,6 +511,8 @@ impl Settings {
         for p in &mut self.app_profiles {
             truncate_chars(&mut p.app, MAX_APP_PATTERN_CHARS);
         }
+        self.indexer.max_symbols = self.indexer.max_symbols.clamp(1, MAX_INDEX_SYMBOLS);
+        self.indexer.extensions.truncate(MAX_INDEX_EXTENSIONS);
     }
 
     /// Validate settings values.
