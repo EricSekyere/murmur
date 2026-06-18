@@ -1,8 +1,11 @@
 name: Build Linux
 
 on:
+  # Build on PRs (covers feature branches) and on pushes to the long-lived
+  # branches. Scoping push this way avoids the duplicate run you'd otherwise
+  # get when pushing to a branch that already has an open PR.
   push:
-    branches: ["**"]
+    branches: [main, production]
   pull_request:
   workflow_dispatch:
 
