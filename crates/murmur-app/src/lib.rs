@@ -92,6 +92,7 @@ pub fn run() -> anyhow::Result<()> {
             last_external_foreground: Mutex::new(0),
             startup_notice: Mutex::new(None),
             suppress_output: std::sync::atomic::AtomicBool::new(false),
+            project_vocab: Mutex::new(Vec::new()),
         })
         .on_window_event(|window, event| {
             // Hide the main window on close so the tray can re-show it.
@@ -199,9 +200,57 @@ fn setup_app(
     model_setup::spawn_download_and_init(app.handle().clone(), engine, model);
     input::spawn_global_input_listener(app.handle().clone());
     updater::spawn_startup_check(app.handle().clone());
+    spawn_project_index(app.handle().clone());
 
     tracing::info!("Murmur app started");
     Ok(())
+}
+
+/// Index the configured project in the background and store its symbols in
+/// `project_vocab`, so transcription can bias toward them. No-ops when the
+/// indexer is disabled or no project root is set. Safe to call again (e.g.
+/// after a settings change) — it overwrites the cached result.
+pub(crate) fn spawn_project_index(app: tauri::AppHandle) {
+    let (enabled, root, max_symbols, extensions) = {
+        let state = app.state::<AppState>();
+        let settings = state.settings.lock().unwrap_or_else(|e| e.into_inner());
+        let idx = &settings.indexer;
+        (
+            idx.enabled,
+            idx.project_root.clone(),
+            idx.max_symbols,
+            idx.extensions.clone(),
+        )
+    };
+    let Some(root) = root.filter(|_| enabled) else {
+        return;
+    };
+
+    std::thread::spawn(move || {
+        use murmur_core::indexer::{IndexConfig, index_project};
+        let cfg = IndexConfig {
+            max_symbols,
+            extensions,
+            ..IndexConfig::default()
+        };
+        match index_project(&root, &cfg) {
+            Ok(symbols) => {
+                tracing::info!(
+                    "Codebase index: {} symbols from {}",
+                    symbols.len(),
+                    root.display()
+                );
+                let state = app.state::<AppState>();
+                *state
+                    .project_vocab
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner()) = symbols;
+            }
+            Err(e) => {
+                tracing::warn!("Codebase index failed for {}: {:#}", root.display(), e);
+            }
+        }
+    });
 }
 
 fn build_tray(app: &mut tauri::App) -> tauri::Result<()> {

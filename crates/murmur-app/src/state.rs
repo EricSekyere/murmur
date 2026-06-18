@@ -46,6 +46,10 @@ pub(crate) struct AppState {
     /// Display-only mode for the onboarding mic test: phrases are shown but not
     /// typed, run as commands, or saved.
     pub suppress_output: AtomicBool,
+    /// Codebase-derived vocabulary from the configured project, indexed in the
+    /// background at startup. Merged with the user's manual vocabulary at
+    /// transcription time; empty when the indexer is disabled.
+    pub project_vocab: Mutex<Vec<String>>,
 }
 
 #[derive(serde::Serialize, Clone)]
