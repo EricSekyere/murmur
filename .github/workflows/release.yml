@@ -100,6 +100,10 @@ jobs:
           releaseBody: |
             Fast, private, on-device dictation for Windows and Linux.
 
+            ## New in 0.3.10
+
+            - **Echo cancellation (Windows).** When sound is playing through your speakers, the microphone no longer picks it up and transcribes it. Murmur opens the mic in the same communications mode conferencing apps use, so video, music, and call audio are filtered out before they reach the recognizer. It is on by default and stays quiet during silence instead of inventing filler text. Linux and macOS still use the raw microphone for now.
+
             ## New in 0.3.9
 
             - **Linux (X11): dictation types directly into apps.** On an X11 session, recognized text is injected straight into the focused window instead of going through a clipboard paste. On Wayland, where apps can't be typed into directly, Murmur falls back to copying the text so you can paste it. This is the first release with a Linux `.deb` and `.AppImage`.
