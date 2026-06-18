@@ -113,6 +113,7 @@ fn start_session(app: &tauri::AppHandle, state: &AppState) {
             phrase_pause: Duration::from_secs_f32(settings.phrase_pause_secs),
             session_timeout: Duration::from_secs_f32(settings.session_timeout_secs),
             live_preview: settings.live_preview,
+            echo_cancellation: settings.echo_cancellation,
         }
     };
     let send_result = match state.audio.get() {

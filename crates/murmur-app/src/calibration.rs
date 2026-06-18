@@ -13,6 +13,12 @@ pub(crate) struct Calibration {
     pub effective_ambient: f32,
 }
 
+/// Silero VAD floor for the echo-cancelled path. Communications-mode AGC
+/// amplifies idle noise toward speaking level during silence, which the
+/// default 0.30 reads as speech; real speech still spikes well past this.
+#[cfg(feature = "vad")]
+const ECHO_CANCEL_VAD_THRESHOLD: f32 = 0.50;
+
 /// Estimate the noise floor from a short startup window.
 ///
 /// Uses the MINIMUM chunk RMS, not the mean: users start talking immediately
@@ -25,6 +31,7 @@ pub(crate) fn calibrate(
     native_channels: u16,
     native_rate: u32,
     configured_threshold: f32,
+    echo_cancellation: bool,
 ) -> Calibration {
     let start = Instant::now();
     let mut chunk_levels = Vec::new();
@@ -55,8 +62,12 @@ pub(crate) fn calibrate(
 
     // Boost quiet mics so detection, the UI level meter, and STT all see
     // usable levels. Capped at 5x: more amplifies the noise floor into
-    // whisper-hallucination territory.
-    let mic_gain = if ambient_rms > 0.0001 && ambient_rms < 0.02 {
+    // whisper-hallucination territory. The echo-cancelled path is already
+    // AGC-leveled by the OS, so a boost there would re-amplify the AGC's
+    // silence-noise into that same territory — leave it at unity.
+    let mic_gain = if echo_cancellation {
+        1.0
+    } else if ambient_rms > 0.0001 && ambient_rms < 0.02 {
         (0.02 / ambient_rms).min(5.0)
     } else if ambient_rms <= 0.0001 {
         3.0
@@ -67,6 +78,11 @@ pub(crate) fn calibrate(
     let effective_ambient = ambient_rms * mic_gain;
     let threshold = if configured_threshold > 0.0 {
         configured_threshold
+    } else if echo_cancellation {
+        // Noise suppression keeps the idle floor near zero, so the
+        // ambient-derived threshold would collapse to its minimum and stop
+        // gating. Use a fixed floor; VAD does the real speech detection.
+        0.010
     } else {
         (effective_ambient * 1.8).clamp(0.001, 0.015)
     };
@@ -122,9 +138,10 @@ pub(crate) fn build_session(
     params: &StartParams,
     calibration: &Calibration,
     native_rate: u32,
+    echo_cancellation: bool,
 ) -> DictationSession {
     #[cfg(not(feature = "vad"))]
-    let _ = params.vad_threshold;
+    let _ = (params.vad_threshold, echo_cancellation);
 
     #[cfg_attr(not(feature = "vad"), allow(unused_mut))]
     let mut session = DictationSession::new(
@@ -138,7 +155,7 @@ pub(crate) fn build_session(
     );
 
     #[cfg(feature = "vad")]
-    if let Some(vad) = load_vad(params.vad_threshold) {
+    if let Some(vad) = load_vad(params.vad_threshold, echo_cancellation) {
         session = session.with_vad(vad);
     }
 
@@ -148,7 +165,10 @@ pub(crate) fn build_session(
 /// Load Silero VAD when its model file is on disk; fall back to RMS
 /// detection silently otherwise so the app keeps working.
 #[cfg(feature = "vad")]
-fn load_vad(vad_threshold: f32) -> Option<murmur_core::audio::vad::VoiceActivityDetector> {
+fn load_vad(
+    vad_threshold: f32,
+    echo_cancellation: bool,
+) -> Option<murmur_core::audio::vad::VoiceActivityDetector> {
     use murmur_core::audio::vad as silero;
 
     if !silero::is_downloaded() {
@@ -162,10 +182,17 @@ fn load_vad(vad_threshold: f32) -> Option<murmur_core::audio::vad::VoiceActivity
             return None;
         }
     };
-    let threshold = if (0.05..=0.95).contains(&vad_threshold) {
+    let base = if (0.05..=0.95).contains(&vad_threshold) {
         vad_threshold
     } else {
         silero::DEFAULT_THRESHOLD
+    };
+    // The echo-cancelled path needs a higher floor (AGC noise reads as speech
+    // at the default), but never override a user who set something stricter.
+    let threshold = if echo_cancellation {
+        base.max(ECHO_CANCEL_VAD_THRESHOLD)
+    } else {
+        base
     };
     match silero::VoiceActivityDetector::new(&path.to_string_lossy(), threshold) {
         Ok(vad) => {

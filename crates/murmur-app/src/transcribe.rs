@@ -25,12 +25,12 @@ const HALLUCINATIONS: &[&str] = &[
     "the end",
 ];
 const STRICT_EXTRA_HALLUCINATIONS: &[&str] = &["bye", "goodbye", "you", "so"];
-/// Breath/sigh artifacts, rejected only when they are the ENTIRE phrase —
-/// "ugh, this is broken" passes through untouched.
+/// Breath, sigh, and bare-filler artifacts, rejected only when they are the
+/// ENTIRE phrase — "ugh, this is broken" or "okay, next step" pass untouched.
 const INTERJECTIONS: &[&str] = &[
     "hmm", "hm", "mm", "mmm", "mm-hmm", "mhm", "uh", "um", "umm", "ugh", "ah", "aah", "oh", "ooh",
     "huh", "ha", "haha", "ha ha", "phew", "whew", "ahem", "heh", "pfft", "shh", "tsk", "whoo",
-    "hoo", "argh", "eugh", "ew",
+    "hoo", "argh", "eugh", "ew", "okay", "ok", "mkay",
 ];
 
 /// 25s cap keeps inference latency bounded while leaving room for the
@@ -368,6 +368,17 @@ fn postprocess_text(result: &TranscriptionResult, developer_mode: bool) -> Strin
 /// Classify text-level hallucination patterns, or None for genuine speech. The
 /// English word lists are skipped for non-English dictation; the structural
 /// checks always apply.
+/// Whether `text` is a hallucination/filler artifact rather than real speech.
+/// Shared with the live preview so its caption doesn't flash fillers the
+/// final-delivery path would reject.
+pub(crate) fn is_hallucination_text(
+    text: &str,
+    profile: TranscriptionProfile,
+    non_english: bool,
+) -> bool {
+    hallucination_reason(text, profile, non_english).is_some()
+}
+
 fn hallucination_reason(
     text: &str,
     profile: TranscriptionProfile,
@@ -584,6 +595,14 @@ mod tests {
         assert!(hallucination_reason("Hmm.", TranscriptionProfile::Relaxed, false).is_some());
         assert!(
             hallucination_reason("Ugh, this is broken.", TranscriptionProfile::Relaxed, false)
+                .is_none()
+        );
+        // Bare "okay"/"ok" are filler whisper emits on silence; filter them as
+        // whole phrases but never when they lead a real sentence.
+        assert!(hallucination_reason("Okay.", TranscriptionProfile::Relaxed, false).is_some());
+        assert!(hallucination_reason("OK", TranscriptionProfile::Relaxed, false).is_some());
+        assert!(
+            hallucination_reason("Okay, next step.", TranscriptionProfile::Relaxed, false)
                 .is_none()
         );
     }

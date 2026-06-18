@@ -149,6 +149,12 @@ pub struct Settings {
     /// Persist delivered phrases to the searchable history log (off = store nothing).
     #[serde(default = "default_true")]
     pub save_history: bool,
+
+    /// Use the OS voice-capture path (echo cancellation + noise suppression) so
+    /// the mic doesn't pick up audio from your own speakers. Windows only for
+    /// now; falls back to the raw mic elsewhere or if it can't be opened.
+    #[serde(default = "default_true")]
+    pub echo_cancellation: bool,
 }
 
 impl AppProfile {
@@ -340,6 +346,7 @@ impl Default for Settings {
             app_profiles: Vec::new(),
             caption_position: default_caption_position(),
             save_history: true,
+            echo_cancellation: true,
         }
     }
 }
