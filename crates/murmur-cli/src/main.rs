@@ -5,6 +5,7 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use murmur_core::config::Settings;
 use murmur_core::output::OutputMode;
 use murmur_core::stt::models::{Backend, ModelManager, SttModel};
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -74,6 +75,16 @@ enum Commands {
         #[arg(long, default_value_t = 3)]
         seconds: u64,
     },
+
+    /// Index a project and print the ranked codebase vocabulary it would inject.
+    Index {
+        /// Project root to scan.
+        path: PathBuf,
+
+        /// Maximum number of symbols to print.
+        #[arg(long, default_value_t = 64)]
+        max: usize,
+    },
 }
 
 #[tokio::main]
@@ -105,8 +116,29 @@ async fn main() -> Result<()> {
             all,
             seconds,
         } => cmd_audio_test(device, all, seconds)?,
+        Commands::Index { path, max } => cmd_index(path, max)?,
     }
 
+    Ok(())
+}
+
+/// Print the ranked codebase vocabulary for a project. Audio-free, so it works
+/// without the STT features and is the cheap way to eyeball the ranking.
+fn cmd_index(path: PathBuf, max: usize) -> Result<()> {
+    use murmur_core::indexer::{IndexConfig, index_project_ranked};
+
+    let cfg = IndexConfig {
+        max_symbols: max,
+        ..IndexConfig::default()
+    };
+    let ranked = index_project_ranked(&path, &cfg)
+        .with_context(|| format!("Failed to index {}", path.display()))?;
+
+    println!("{} symbols from {}", ranked.len(), path.display());
+    println!("{:>8}  {:>5}  symbol", "score", "freq");
+    for s in &ranked {
+        println!("{:>8.2}  {:>5}  {}", s.score, s.freq, s.text);
+    }
     Ok(())
 }
 
