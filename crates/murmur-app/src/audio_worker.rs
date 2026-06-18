@@ -191,7 +191,7 @@ fn run_session(
     );
 
     if !probe_initial_samples(&live_buf) {
-        let msg = "Microphone opened but produced no audio samples. Check Windows microphone privacy permissions and selected input device.".to_string();
+        let msg = "Microphone opened but produced no audio samples. Check your microphone permissions and the selected input device.".to_string();
         tracing::error!("{}", msg);
         stop_capture(capture, "startup sample probe failure");
         let _ = result_tx.send(AudioResult::StartFailed(msg));
@@ -482,7 +482,7 @@ impl Monitor<'_> {
             && self.effective_ambient <= 0.00005
         {
             return self.fail_no_signal(
-                "Microphone stream is delivering digital silence. Check Windows microphone permissions, input device, mute switch, and input volume.",
+                "Microphone stream is delivering digital silence. Check your microphone permissions, input device, mute switch, and input volume.",
             );
         }
         Flow::Continue
