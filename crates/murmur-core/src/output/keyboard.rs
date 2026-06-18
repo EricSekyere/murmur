@@ -7,7 +7,8 @@ use anyhow::Result;
 /// Dictation and IME input. Works in any window that accepts keyboard input:
 /// terminals, browsers, editors, elevated windows. No clipboard involved.
 ///
-/// On other platforms, falls back to clipboard + paste.
+/// On Linux/X11, types directly via enigo (XTEST). macOS and Linux/Wayland
+/// fall back to clipboard + paste.
 pub struct KeyboardOutput {
     /// Milliseconds to wait before sending input, giving the target window
     /// time to regain focus after a hotkey release.
@@ -48,10 +49,15 @@ impl KeyboardOutput {
             send_unicode_input(text)
         }
 
-        #[cfg(not(windows))]
+        #[cfg(target_os = "macos")]
         {
             tracing::debug!("Typing {} characters via clipboard paste", text.len());
             clipboard_paste(text)
+        }
+
+        #[cfg(all(unix, not(target_os = "macos")))]
+        {
+            linux_type_text(text)
         }
     }
 }
@@ -679,6 +685,35 @@ fn send_unicode_input(text: &str) -> Result<()> {
     }
 
     Ok(())
+}
+
+// ─── Linux text output ───────────────────────────────────────────────────────
+
+/// Type text into the focused app on Linux. On X11 inject it directly via
+/// enigo (XTEST); on Wayland, where input synthesis can't reach other apps,
+/// fall back to clipboard + paste (enigo typing would silently no-op there).
+#[cfg(all(unix, not(target_os = "macos")))]
+fn linux_type_text(text: &str) -> Result<()> {
+    if is_wayland() {
+        tracing::warn!(
+            "Wayland session: can't type into other apps directly; using clipboard paste"
+        );
+        return clipboard_paste(text);
+    }
+    use enigo::{Enigo, Keyboard, Settings};
+    tracing::debug!("Typing {} chars via enigo (X11)", text.chars().count());
+    let mut enigo = Enigo::new(&Settings::default())?;
+    enigo.text(text)?;
+    Ok(())
+}
+
+/// Whether the current session is Wayland rather than X11.
+#[cfg(all(unix, not(target_os = "macos")))]
+fn is_wayland() -> bool {
+    std::env::var_os("WAYLAND_DISPLAY").is_some()
+        || std::env::var("XDG_SESSION_TYPE")
+            .map(|v| v.eq_ignore_ascii_case("wayland"))
+            .unwrap_or(false)
 }
 
 // ─── Non-Windows: clipboard + paste fallback ─────────────────────────────────
