@@ -11,6 +11,9 @@ use std::sync::{Arc, Mutex};
 pub struct AudioCapture {
     buffer: Arc<Mutex<Vec<f32>>>,
     stream: Option<cpal::Stream>,
+    /// Active Windows voice-capture session (echo cancellation), when used.
+    #[cfg(windows)]
+    voice: Option<super::wasapi::WasapiVoiceCapture>,
     native_rate: u32,
     native_channels: u16,
 }
@@ -21,13 +24,76 @@ impl AudioCapture {
         Ok(Self {
             buffer: Arc::new(Mutex::new(Vec::new())),
             stream: None,
+            #[cfg(windows)]
+            voice: None,
             native_rate: AudioBuffer::SAMPLE_RATE,
             native_channels: 1,
         })
     }
 
-    /// Start recording from the default microphone.
-    pub fn start(&mut self, preferred_device: Option<&str>) -> Result<()> {
+    /// Start recording. With `echo_cancellation` on, prefer the OS voice-capture
+    /// path (Windows AEC) on the default mic; otherwise, or on failure, use the
+    /// raw CPAL microphone.
+    pub fn start(&mut self, preferred_device: Option<&str>, echo_cancellation: bool) -> Result<()> {
+        self.stream = None;
+        #[cfg(windows)]
+        {
+            self.voice = None;
+        }
+
+        let on_default = preferred_device
+            .map(str::trim)
+            .filter(|n| !n.is_empty())
+            .is_none();
+        if echo_cancellation && on_default && self.try_start_voice_capture().is_some() {
+            return Ok(());
+        }
+
+        self.start_cpal(preferred_device)
+    }
+
+    /// Try the OS echo-cancelling capture path. Returns `Some(())` on success.
+    /// Linux and macOS have no implementation yet (they return `None`, so the
+    /// caller falls back to the raw mic). Plan: PipeWire/Pulse echo-cancel on
+    /// Linux, the VoiceProcessingIO AudioUnit on macOS.
+    fn try_start_voice_capture(&mut self) -> Option<()> {
+        #[cfg(windows)]
+        {
+            const MAX_SAMPLES: usize = 60 * 48_000 * 2;
+            if let Ok(mut buf) = self.buffer.lock() {
+                buf.clear();
+                let want = 30 * 48_000 * 2;
+                let cap = buf.capacity();
+                if cap < want {
+                    buf.reserve(want - cap);
+                }
+            }
+            match super::wasapi::open_voice_capture(Arc::clone(&self.buffer), MAX_SAMPLES) {
+                Ok((cap, rate, channels)) => {
+                    self.native_rate = rate;
+                    self.native_channels = channels;
+                    self.voice = Some(cap);
+                    tracing::info!(
+                        "Voice capture (echo cancellation) active: {}Hz, {} channel(s)",
+                        rate,
+                        channels
+                    );
+                    Some(())
+                }
+                Err(e) => {
+                    tracing::warn!("Voice capture unavailable ({e}); using raw microphone");
+                    None
+                }
+            }
+        }
+        #[cfg(not(windows))]
+        {
+            None
+        }
+    }
+
+    /// Raw microphone capture via CPAL (no echo cancellation).
+    fn start_cpal(&mut self, preferred_device: Option<&str>) -> Result<()> {
         let host = cpal::default_host();
         let device = select_input_device(&host, preferred_device)?;
 
@@ -88,6 +154,10 @@ impl AudioCapture {
     /// Stop recording and return the captured audio buffer (16 kHz mono).
     pub fn stop(&mut self) -> Result<AudioBuffer> {
         self.stream = None;
+        #[cfg(windows)]
+        {
+            self.voice = None;
+        }
         let mut samples = self.buffer.lock().map_err(|e| anyhow::anyhow!("{}", e))?;
         let raw = std::mem::take(&mut *samples);
 
@@ -145,6 +215,10 @@ impl AudioCapture {
 
     /// Check if currently recording.
     pub fn is_recording(&self) -> bool {
+        #[cfg(windows)]
+        if self.voice.is_some() {
+            return true;
+        }
         self.stream.is_some()
     }
 }
