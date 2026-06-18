@@ -1,5 +1,7 @@
 #[cfg(feature = "audio")]
 pub mod capture;
+#[cfg(all(feature = "audio", target_os = "linux"))]
+pub mod pulse;
 pub mod silence;
 pub mod vad;
 #[cfg(all(feature = "audio", windows))]
