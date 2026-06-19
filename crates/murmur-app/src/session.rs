@@ -467,8 +467,13 @@ fn deliver_text(
 
     // Focused modes append a trailing space (dispatch_output); clipboard-only
     // doesn't type, so there is nothing to scratch. Count grapheme clusters,
-    // not scalar values, so one backspace per visible character: emoji,
-    // combining marks, and newlines in a snippet expansion each erase as one.
+    // not scalar values or UTF-16 units, so one backspace per visible character:
+    // emoji, combining marks, and newlines in a snippet expansion each erase as
+    // one. This is correct for grapheme-aware targets (browsers, Electron
+    // editors, terminals — the developer audience). A legacy Win32 Edit control
+    // deletes one UTF-16 unit per backspace, so it would under-delete a
+    // multi-unit grapheme and leave a visible stray glyph — the safer failure
+    // mode than over-deleting real text the user did not intend to remove.
     let delivered = if matches!(output_mode, OutputMode::Clipboard | OutputMode::Stdout) {
         0
     } else {

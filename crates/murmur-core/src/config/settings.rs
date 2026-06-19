@@ -421,21 +421,56 @@ impl Settings {
         };
         let old_dir = config_base.join("voitex");
         let new_dir = config_base.join("murmur");
-        if old_dir.exists() && !new_dir.exists() {
-            match std::fs::rename(&old_dir, &new_dir) {
-                Ok(()) => tracing::info!(
-                    "Migrated config directory from {} to {}",
+        if !old_dir.exists() || new_dir.exists() {
+            return;
+        }
+
+        if std::fs::rename(&old_dir, &new_dir).is_ok() {
+            tracing::info!(
+                "Migrated config directory from {} to {}",
+                old_dir.display(),
+                new_dir.display()
+            );
+            return;
+        }
+
+        // rename fails across volumes (EXDEV) — e.g. a legacy config on a
+        // different drive than the new config dir. Fall back to a recursive
+        // copy so settings still carry over; remove a partial copy on failure
+        // so a later run can retry from the intact old directory.
+        match Self::copy_dir_recursive(&old_dir, &new_dir) {
+            Ok(()) => {
+                let _ = std::fs::remove_dir_all(&old_dir);
+                tracing::info!(
+                    "Migrated config directory (copied) from {} to {}",
                     old_dir.display(),
                     new_dir.display()
-                ),
-                Err(e) => tracing::warn!(
+                );
+            }
+            Err(e) => {
+                let _ = std::fs::remove_dir_all(&new_dir);
+                tracing::warn!(
                     "Failed to migrate config directory from {} to {}: {}",
                     old_dir.display(),
                     new_dir.display(),
                     e
-                ),
+                );
             }
         }
+    }
+
+    fn copy_dir_recursive(from: &std::path::Path, to: &std::path::Path) -> std::io::Result<()> {
+        std::fs::create_dir_all(to)?;
+        for entry in std::fs::read_dir(from)? {
+            let entry = entry?;
+            let dst = to.join(entry.file_name());
+            if entry.file_type()?.is_dir() {
+                Self::copy_dir_recursive(&entry.path(), &dst)?;
+            } else {
+                std::fs::copy(entry.path(), &dst)?;
+            }
+        }
+        Ok(())
     }
 
     /// Load settings from a TOML file, falling back to defaults.

@@ -161,7 +161,22 @@ fn run_worker(cmd_rx: &mpsc::Receiver<Cmd>, result_tx: &mpsc::Sender<AudioResult
     while let Ok(cmd) = cmd_rx.recv() {
         match cmd {
             Cmd::StartStreaming(params) => {
-                run_session(&mut capture, &params, cmd_rx, result_tx);
+                // Contain a panic inside a single session (a driver or VAD bug)
+                // so it ends that session instead of unwinding the whole worker
+                // thread — which would wedge every future session with a closed
+                // channel. The thread-level catch in Handle::spawn remains a
+                // last resort for a panic outside a session.
+                let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    run_session(&mut capture, &params, cmd_rx, result_tx);
+                }));
+                if let Err(panic_info) = outcome {
+                    let msg = panic_message(panic_info, "panic in recording session");
+                    tracing::error!("Recording session panicked, recovering: {}", msg);
+                    // Best-effort cleanup, then unblock the app-side streaming
+                    // worker so the UI returns to idle.
+                    stop_capture(&mut capture, "panic recovery");
+                    let _ = result_tx.send(AudioResult::StreamingDone);
+                }
             }
             Cmd::Stop => {
                 tracing::debug!("Stop received outside monitoring loop, ignoring");

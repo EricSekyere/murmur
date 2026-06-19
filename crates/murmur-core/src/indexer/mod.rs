@@ -83,21 +83,38 @@ pub fn index_projects(roots: &[PathBuf], cfg: &IndexConfig) -> Result<Vec<String
     let now = SystemTime::now();
     let mut acc = rank::SymbolAccumulator::new();
     let mut scanned = 0usize;
-    for root in roots {
+    for root in dedup_roots(roots) {
         if scanned >= cfg.max_files {
             break;
         }
-        if !root.exists() {
-            tracing::debug!("Skipping missing project root: {}", root.display());
-            continue;
-        }
-        walk_into(root, &exts, cfg, now, &mut acc, &mut scanned);
+        walk_into(&root, &exts, cfg, now, &mut acc, &mut scanned);
     }
     Ok(acc
         .select(cfg.max_symbols, cfg.max_chars)
         .into_iter()
         .map(|s| s.text)
         .collect())
+}
+
+/// Canonicalize the roots and drop any that is the same as, or nested under,
+/// another, so overlapping or duplicate roots (e.g. `repo` and `repo/src`)
+/// don't get their shared files scanned twice — which would inflate the IDF and
+/// term frequencies and skew the ranked vocabulary. Missing roots fail to
+/// canonicalize and are dropped (index_projects is best-effort).
+fn dedup_roots(roots: &[PathBuf]) -> Vec<PathBuf> {
+    let mut canon: Vec<PathBuf> = roots
+        .iter()
+        .filter_map(|r| std::fs::canonicalize(r).ok())
+        .collect();
+    // Shortest first so an ancestor is always kept before its descendants.
+    canon.sort_by_key(|p| p.components().count());
+    let mut kept: Vec<PathBuf> = Vec::new();
+    for root in canon {
+        if !kept.iter().any(|k| root.starts_with(k)) {
+            kept.push(root);
+        }
+    }
+    kept
 }
 
 /// Walk one root (gitignore-aware) and fold its identifiers into `acc`,
@@ -232,6 +249,28 @@ mod tests {
     fn missing_root_errors() {
         let err = index_project(Path::new("definitely/not/here"), &IndexConfig::default());
         assert!(err.is_err());
+    }
+
+    #[test]
+    fn dedup_roots_drops_nested_and_duplicate_roots() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        fs::create_dir_all(root.join("src")).unwrap();
+        let sub = root.join("src");
+
+        // A duplicate and a descendant both collapse to the single ancestor.
+        let kept = dedup_roots(&[root.to_path_buf(), sub.clone(), root.to_path_buf()]);
+        assert_eq!(kept.len(), 1);
+        assert_eq!(kept[0], fs::canonicalize(root).unwrap());
+
+        // Two unrelated roots are both kept; a missing root is dropped.
+        let other = tempfile::tempdir().unwrap();
+        let kept = dedup_roots(&[
+            root.to_path_buf(),
+            other.path().to_path_buf(),
+            root.join("does-not-exist"),
+        ]);
+        assert_eq!(kept.len(), 2);
     }
 
     #[test]
