@@ -14,6 +14,7 @@ mod sound;
 mod state;
 mod transcribe;
 mod updater;
+mod watcher;
 
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -94,6 +95,7 @@ pub fn run() -> anyhow::Result<()> {
             startup_notice: Mutex::new(None),
             suppress_output: std::sync::atomic::AtomicBool::new(false),
             project_vocab: Mutex::new(Vec::new()),
+            codebase_watcher: Mutex::new(None),
         })
         .on_window_event(|window, event| {
             // Hide the main window on close so the tray can re-show it.
@@ -204,6 +206,7 @@ fn setup_app(
     input::spawn_global_input_listener(app.handle().clone());
     updater::spawn_startup_check(app.handle().clone());
     spawn_project_index(app.handle().clone());
+    watcher::rewatch(app.handle());
 
     tracing::info!("Murmur app started");
     Ok(())
@@ -214,32 +217,36 @@ fn setup_app(
 /// indexer is disabled or no project root is set. Safe to call again (e.g.
 /// after a settings change) — it overwrites the cached result.
 pub(crate) fn spawn_project_index(app: tauri::AppHandle) {
-    let (enabled, root, max_symbols, extensions) = {
+    let (enabled, roots, max_symbols, extensions) = {
         let state = app.state::<AppState>();
         let settings = state.settings.lock().unwrap_or_else(|e| e.into_inner());
         let idx = &settings.indexer;
         (
             idx.enabled,
-            idx.project_root.clone(),
+            idx.project_roots.clone(),
             idx.max_symbols,
             idx.extensions.clone(),
         )
     };
-    let Some(root) = root.filter(|_| enabled) else {
+    if !enabled || roots.is_empty() {
         return;
-    };
+    }
 
     std::thread::spawn(move || {
-        use murmur_core::indexer::{IndexConfig, index_project};
+        use murmur_core::indexer::{IndexConfig, index_projects};
         let cfg = IndexConfig {
             max_symbols,
             extensions,
             ..IndexConfig::default()
         };
-        match index_project(&root, &cfg) {
+        match index_projects(&roots, &cfg) {
             Ok(symbols) => {
                 let count = symbols.len();
-                tracing::info!("Codebase index: {} symbols from {}", count, root.display());
+                tracing::info!(
+                    "Codebase index: {} symbols from {} folder(s)",
+                    count,
+                    roots.len()
+                );
                 let state = app.state::<AppState>();
                 *state
                     .project_vocab
@@ -247,23 +254,14 @@ pub(crate) fn spawn_project_index(app: tauri::AppHandle) {
                     .unwrap_or_else(|e| e.into_inner()) = symbols;
                 let _ = app.emit(
                     "codebase-index",
-                    serde_json::json!({
-                        "count": count,
-                        "root": root.to_string_lossy(),
-                        "enabled": true,
-                    }),
+                    serde_json::json!({ "count": count, "enabled": true }),
                 );
             }
             Err(e) => {
-                tracing::warn!("Codebase index failed for {}: {:#}", root.display(), e);
+                tracing::warn!("Codebase index failed: {:#}", e);
                 let _ = app.emit(
                     "codebase-index",
-                    serde_json::json!({
-                        "count": 0,
-                        "root": root.to_string_lossy(),
-                        "enabled": true,
-                        "error": e.to_string(),
-                    }),
+                    serde_json::json!({ "count": 0, "enabled": true, "error": e.to_string() }),
                 );
             }
         }

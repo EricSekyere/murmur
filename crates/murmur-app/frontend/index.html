@@ -529,17 +529,18 @@
                 <div class="settings-row">
                   <div class="settings-row__text">
                     <label class="settings-label" for="codebase-vocab-toggle">Codebase Vocabulary</label>
-                    <span class="settings-hint">Scan a project folder and bias transcription toward its identifiers, so symbols like calculateTotalRevenue transcribe correctly. Whisper models only.</span>
+                    <span class="settings-hint">Scan your project folders and bias transcription toward their identifiers, so symbols like calculateTotalRevenue transcribe correctly. Re-indexes automatically when files change. Whisper models only.</span>
                   </div>
                   <label class="toggle-switch">
                     <input type="checkbox" id="codebase-vocab-toggle">
                     <span class="toggle-switch__slider"></span>
                   </label>
                 </div>
+                <div id="codebase-vocab-list" class="folder-list"></div>
                 <div class="settings-actions">
-                  <button id="codebase-vocab-folder" class="btn-small">Choose Folder…</button>
+                  <button id="codebase-vocab-folder" class="btn-small">Add Folder…</button>
                 </div>
-                <span class="settings-hint" id="codebase-vocab-status">No project folder selected.</span>
+                <span class="settings-hint" id="codebase-vocab-status">No project folders selected.</span>
               </div>
 
               <!-- Text Snippets -->

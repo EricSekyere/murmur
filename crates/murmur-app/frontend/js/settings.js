@@ -74,14 +74,12 @@ settingsToggle.addEventListener('click', async () => {
     if (status.save_history != null) {
       saveHistoryToggle.checked = status.save_history;
     }
-    if (status.codebase_vocab_enabled != null) {
-      codebaseVocabToggle.checked = status.codebase_vocab_enabled;
-    }
-    updateCodebaseVocabStatus(
-      status.codebase_vocab_root,
-      status.codebase_vocab_count,
-      status.codebase_vocab_enabled
-    );
+    codebaseVocabToggle.checked = !!status.codebase_vocab_enabled;
+    codebaseRoots = Array.isArray(status.codebase_vocab_roots)
+      ? status.codebase_vocab_roots.slice()
+      : [];
+    renderCodebaseRoots();
+    updateCodebaseVocabStatus(status.codebase_vocab_count || 0);
     if (status.live_preview != null) {
       livePreviewToggle.checked = status.live_preview;
     }
@@ -97,40 +95,78 @@ settingsToggle.addEventListener('click', async () => {
 
 // --- Codebase vocabulary ---
 
-// Render the status line from the current root, indexed count, and enabled flag.
-function updateCodebaseVocabStatus(root, count, enabled) {
-  if (!root) {
-    codebaseVocabStatus.textContent = 'No project folder selected.';
-    return;
+let codebaseRoots = []; // project folders, mirrored to the backend on change
+
+const folderName = (root) => root.replace(/[\\/]+$/, '').split(/[\\/]/).pop() || root;
+
+// Render the chosen project folders as a removable list.
+function renderCodebaseRoots() {
+  codebaseVocabList.innerHTML = '';
+  codebaseRoots.forEach((root, i) => {
+    const item = document.createElement('div');
+    item.className = 'folder-list__item';
+    const name = document.createElement('span');
+    name.className = 'folder-list__name';
+    name.textContent = folderName(root);
+    name.title = root;
+    const remove = document.createElement('button');
+    remove.type = 'button';
+    remove.className = 'folder-list__remove';
+    remove.textContent = '×';
+    remove.setAttribute('aria-label', `Remove ${folderName(root)}`);
+    remove.addEventListener('click', async () => {
+      codebaseRoots.splice(i, 1);
+      renderCodebaseRoots();
+      await saveCodebaseVocab();
+    });
+    item.append(name, remove);
+    codebaseVocabList.appendChild(item);
+  });
+}
+
+// Status line derived from the folder count, toggle state, and indexed count.
+function updateCodebaseVocabStatus(count) {
+  const n = codebaseRoots.length;
+  if (n === 0) {
+    codebaseVocabStatus.textContent = 'No project folders selected.';
+  } else if (!codebaseVocabToggle.checked) {
+    codebaseVocabStatus.textContent = `Off (${n} folder${n === 1 ? '' : 's'})`;
+  } else {
+    codebaseVocabStatus.textContent = count > 0
+      ? `${count} symbol${count === 1 ? '' : 's'} from ${n} folder${n === 1 ? '' : 's'}`
+      : `Indexing ${n} folder${n === 1 ? '' : 's'}…`;
   }
-  const name = root.replace(/[\\/]+$/, '').split(/[\\/]/).pop() || root;
-  if (!enabled) {
-    codebaseVocabStatus.textContent = `${name} (off)`;
-    return;
+}
+
+async function saveCodebaseVocab() {
+  try {
+    await invoke('set_codebase_vocabulary', {
+      enabled: codebaseVocabToggle.checked,
+      project_roots: codebaseRoots,
+    });
+    updateCodebaseVocabStatus(0); // optimistic until the index event arrives
+  } catch (err) {
+    showToast(`Failed: ${err}`, 'error');
   }
-  codebaseVocabStatus.textContent = count > 0
-    ? `${name} — ${count} symbol${count === 1 ? '' : 's'} indexed`
-    : `${name} — indexing…`;
 }
 
 codebaseVocabToggle.addEventListener('change', async () => {
-  const enabled = codebaseVocabToggle.checked;
-  try {
-    await invoke('set_codebase_vocabulary', { enabled, project_root: null });
-    showToast(enabled ? 'Codebase vocabulary on' : 'Codebase vocabulary off', 'success');
-  } catch (err) {
-    codebaseVocabToggle.checked = !enabled;
-    showToast(`Failed: ${err}`, 'error');
-  }
+  await saveCodebaseVocab();
+  showToast(codebaseVocabToggle.checked ? 'Codebase vocabulary on' : 'Codebase vocabulary off', 'success');
 });
 
 codebaseVocabFolder.addEventListener('click', async () => {
   try {
     const folder = await invoke('pick_project_folder');
     if (!folder) return; // user cancelled
+    if (codebaseRoots.includes(folder)) {
+      showToast('Folder already added', 'success');
+      return;
+    }
+    codebaseRoots.push(folder);
     codebaseVocabToggle.checked = true;
-    updateCodebaseVocabStatus(folder, 0, true); // optimistic until the event lands
-    await invoke('set_codebase_vocabulary', { enabled: true, project_root: folder });
+    renderCodebaseRoots();
+    await saveCodebaseVocab();
     showToast('Indexing project…', 'success');
   } catch (err) {
     showToast(`Failed: ${err}`, 'error');
@@ -139,8 +175,7 @@ codebaseVocabFolder.addEventListener('click', async () => {
 
 // Backend reports the indexed symbol count when a scan finishes.
 listen('codebase-index', (event) => {
-  const p = event.payload || {};
-  updateCodebaseVocabStatus(p.root, p.count, p.enabled);
+  updateCodebaseVocabStatus((event.payload || {}).count || 0);
 });
 
 developerModeToggle.addEventListener('change', async () => {

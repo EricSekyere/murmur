@@ -77,3 +77,4 @@ const captionPositionSelect = document.getElementById('caption-position-select')
 const codebaseVocabToggle = document.getElementById('codebase-vocab-toggle');
 const codebaseVocabFolder = document.getElementById('codebase-vocab-folder');
 const codebaseVocabStatus = document.getElementById('codebase-vocab-status');
+const codebaseVocabList   = document.getElementById('codebase-vocab-list');

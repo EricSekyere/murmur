@@ -11,7 +11,7 @@
 mod extract;
 mod rank;
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 use anyhow::{Result, bail};
@@ -64,12 +64,49 @@ pub fn index_project_ranked(root: &Path, cfg: &IndexConfig) -> Result<Vec<Ranked
     if !root.exists() {
         bail!("project root does not exist: {}", root.display());
     }
-
     let exts = resolve_extensions(cfg);
     let now = SystemTime::now();
     let mut acc = rank::SymbolAccumulator::new();
     let mut scanned = 0usize;
+    walk_into(root, &exts, cfg, now, &mut acc, &mut scanned);
+    Ok(acc.select(cfg.max_symbols, cfg.max_chars))
+}
 
+/// Index several project roots into one shared TF-IDF budget and return the
+/// combined symbol list. Missing roots are skipped, so a temporarily
+/// unavailable folder doesn't fail the whole pass.
+pub fn index_projects(roots: &[PathBuf], cfg: &IndexConfig) -> Result<Vec<String>> {
+    let exts = resolve_extensions(cfg);
+    let now = SystemTime::now();
+    let mut acc = rank::SymbolAccumulator::new();
+    let mut scanned = 0usize;
+    for root in roots {
+        if scanned >= cfg.max_files {
+            break;
+        }
+        if !root.exists() {
+            tracing::debug!("Skipping missing project root: {}", root.display());
+            continue;
+        }
+        walk_into(root, &exts, cfg, now, &mut acc, &mut scanned);
+    }
+    Ok(acc
+        .select(cfg.max_symbols, cfg.max_chars)
+        .into_iter()
+        .map(|s| s.text)
+        .collect())
+}
+
+/// Walk one root (gitignore-aware) and fold its identifiers into `acc`,
+/// honoring the shared `scanned`/`max_files` budget.
+fn walk_into(
+    root: &Path,
+    exts: &[String],
+    cfg: &IndexConfig,
+    now: SystemTime,
+    acc: &mut rank::SymbolAccumulator,
+    scanned: &mut usize,
+) {
     // require_git(false) applies .gitignore even outside a detected repo;
     // git_global(false) keeps the result independent of the user's machine.
     let walker = WalkBuilder::new(root)
@@ -79,14 +116,14 @@ pub fn index_project_ranked(root: &Path, cfg: &IndexConfig) -> Result<Vec<Ranked
         .build();
 
     for entry in walker {
-        if scanned >= cfg.max_files {
+        if *scanned >= cfg.max_files {
             break;
         }
         let Ok(entry) = entry else { continue };
         if !entry.file_type().is_some_and(|t| t.is_file()) {
             continue;
         }
-        if !has_extension(entry.path(), &exts) {
+        if !has_extension(entry.path(), exts) {
             continue;
         }
         let Ok(meta) = entry.metadata() else { continue };
@@ -99,10 +136,14 @@ pub fn index_project_ranked(root: &Path, cfg: &IndexConfig) -> Result<Vec<Ranked
         };
         let weight = rank::recency_weight(file_age_days(&meta, now));
         acc.add_file(extract::extract_identifiers(&content), weight);
-        scanned += 1;
+        *scanned += 1;
     }
+}
 
-    Ok(acc.select(cfg.max_symbols, cfg.max_chars))
+/// Source extensions scanned by default. Exposed so a file watcher can decide
+/// which changes are worth a re-index.
+pub fn default_extensions() -> &'static [&'static str] {
+    DEFAULT_EXTENSIONS
 }
 
 fn resolve_extensions(cfg: &IndexConfig) -> Vec<String> {

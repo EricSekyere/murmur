@@ -79,11 +79,12 @@ pub(crate) fn get_status(state: State<'_, AppState>) -> serde_json::Value {
         "caption_position": settings.caption_position,
         "save_history": settings.save_history,
         "codebase_vocab_enabled": settings.indexer.enabled,
-        "codebase_vocab_root": settings
+        "codebase_vocab_roots": settings
             .indexer
-            .project_root
-            .as_ref()
-            .map(|p| p.to_string_lossy().into_owned()),
+            .project_roots
+            .iter()
+            .map(|p| p.to_string_lossy().into_owned())
+            .collect::<Vec<_>>(),
         "codebase_vocab_count": state
             .project_vocab
             .lock()
@@ -112,32 +113,31 @@ pub(crate) fn set_codebase_vocabulary(
     app: tauri::AppHandle,
     state: State<'_, AppState>,
     enabled: bool,
-    project_root: Option<String>,
+    project_roots: Option<Vec<String>>,
 ) -> Result<(), String> {
-    let (active, root_for_event) = {
+    let active = {
         let mut settings = state.settings.lock().unwrap_or_else(|e| e.into_inner());
         settings.indexer.enabled = enabled;
-        if let Some(root) = project_root {
-            let trimmed = root.trim();
-            settings.indexer.project_root =
-                (!trimmed.is_empty()).then(|| std::path::PathBuf::from(trimmed));
+        if let Some(roots) = project_roots {
+            // Trim, drop blanks, dedup; clamp_collections caps the count on save.
+            let mut seen = std::collections::HashSet::new();
+            settings.indexer.project_roots = roots
+                .into_iter()
+                .map(|r| r.trim().to_string())
+                .filter(|r| !r.is_empty() && seen.insert(r.clone()))
+                .map(std::path::PathBuf::from)
+                .collect();
         }
         let path = Settings::default_path().map_err(|e| e.to_string())?;
         settings
             .save(&path)
             .map_err(|e| format!("Failed to save settings: {e}"))?;
-        let active = settings.indexer.enabled && settings.indexer.project_root.is_some();
-        let root_str = settings
-            .indexer
-            .project_root
-            .as_ref()
-            .map(|p| p.to_string_lossy().into_owned());
-        (active, root_str)
+        settings.indexer.enabled && !settings.indexer.project_roots.is_empty()
     };
 
     if active {
         // spawn_project_index re-reads settings, indexes, and emits the result.
-        crate::spawn_project_index(app);
+        crate::spawn_project_index(app.clone());
     } else {
         // Disabled or no folder: stop injecting immediately and report it.
         state
@@ -147,9 +147,11 @@ pub(crate) fn set_codebase_vocabulary(
             .clear();
         let _ = app.emit(
             "codebase-index",
-            serde_json::json!({ "count": 0, "root": root_for_event, "enabled": enabled }),
+            serde_json::json!({ "count": 0, "enabled": enabled }),
         );
     }
+    // Re-point (or stop) the file watcher for the new root set.
+    crate::watcher::rewatch(&app);
     Ok(())
 }
 

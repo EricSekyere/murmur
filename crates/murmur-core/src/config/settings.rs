@@ -34,18 +34,20 @@ pub enum TranscriptionProfile {
 /// Upper bounds for the codebase indexer, enforced on load.
 const MAX_INDEX_SYMBOLS: usize = 128;
 const MAX_INDEX_EXTENSIONS: usize = 32;
+const MAX_INDEX_ROOTS: usize = 16;
 
 /// Codebase-derived vocabulary: scan `project_root` for distinctive identifiers
 /// and inject them into the STT vocabulary so project symbols transcribe
 /// correctly. Disabled by default; only helps Whisper (Parakeet has no biasing).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IndexerSettings {
-    /// Whether to index the project and inject its symbols.
+    /// Whether to index the projects and inject their symbols.
     #[serde(default)]
     pub enabled: bool,
-    /// Project root to scan. Indexing only runs when this is set.
+    /// Project roots to scan. Indexing only runs when at least one is set;
+    /// symbols from all roots share one ranked budget.
     #[serde(default)]
-    pub project_root: Option<PathBuf>,
+    pub project_roots: Vec<PathBuf>,
     /// Maximum symbols to inject (clamped to 1..=128 on load).
     #[serde(default = "default_index_max_symbols")]
     pub max_symbols: usize,
@@ -58,7 +60,7 @@ impl Default for IndexerSettings {
     fn default() -> Self {
         Self {
             enabled: false,
-            project_root: None,
+            project_roots: Vec::new(),
             max_symbols: default_index_max_symbols(),
             extensions: Vec::new(),
         }
@@ -513,6 +515,7 @@ impl Settings {
         }
         self.indexer.max_symbols = self.indexer.max_symbols.clamp(1, MAX_INDEX_SYMBOLS);
         self.indexer.extensions.truncate(MAX_INDEX_EXTENSIONS);
+        self.indexer.project_roots.truncate(MAX_INDEX_ROOTS);
     }
 
     /// Validate settings values.
