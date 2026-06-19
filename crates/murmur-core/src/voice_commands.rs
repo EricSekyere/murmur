@@ -93,6 +93,12 @@ fn strip_literal_prefix(s: &str) -> Option<&str> {
 /// after [`parse`] returns [`VoiceCommand::Text`].
 pub fn match_snippet<'a>(phrase: &str, snippets: &'a [Snippet]) -> Option<&'a str> {
     let normalized = normalize(phrase);
+    // A trigger that normalizes to "" (empty, or pure punctuation like "...")
+    // would match the bare "." / "?" that Whisper emits on silence or noise,
+    // auto-typing the expansion. Never fire on an empty match.
+    if normalized.is_empty() {
+        return None;
+    }
     snippets
         .iter()
         .find(|s| normalize(&s.trigger) == normalized)
@@ -159,6 +165,35 @@ mod tests {
         assert_eq!(parse("paste that"), VoiceCommand::Text);
         assert_eq!(parse("cut that"), VoiceCommand::Text);
         assert_eq!(parse("select all"), VoiceCommand::Text);
+    }
+
+    #[test]
+    fn empty_or_punctuation_trigger_never_fires_on_silence() {
+        // A hand-edited or punctuation-only trigger normalizes to "" and would
+        // otherwise match the bare "." / "?" Whisper emits on silence/noise.
+        let snippets = vec![
+            Snippet {
+                trigger: "...".to_string(),
+                expansion: "my-secret-signature".to_string(),
+            },
+            Snippet {
+                trigger: "".to_string(),
+                expansion: "boom".to_string(),
+            },
+        ];
+        for phrase in [".", "?", "!!", "  ,  ", "", "..."] {
+            assert_eq!(
+                match_snippet(phrase, &snippets),
+                None,
+                "phrase {phrase:?} must not match an empty-normalized trigger"
+            );
+        }
+        // A real trigger still works.
+        let real = vec![Snippet {
+            trigger: "my email".to_string(),
+            expansion: "a@b.com".to_string(),
+        }];
+        assert_eq!(match_snippet("my email", &real), Some("a@b.com"));
     }
 
     #[test]

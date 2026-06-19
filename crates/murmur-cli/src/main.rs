@@ -5,6 +5,7 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use murmur_core::config::Settings;
 use murmur_core::output::OutputMode;
 use murmur_core::stt::models::{Backend, ModelManager, SttModel};
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -74,11 +75,62 @@ enum Commands {
         #[arg(long, default_value_t = 3)]
         seconds: u64,
     },
+
+    /// Index a project and print the ranked codebase vocabulary it would inject.
+    Index {
+        /// Project root to scan.
+        path: PathBuf,
+
+        /// Maximum number of symbols to print.
+        #[arg(long, default_value_t = 64)]
+        max: usize,
+    },
+
+    /// Run or set up the MCP server for Claude/Cursor.
+    Mcp {
+        #[command(subcommand)]
+        action: Option<McpAction>,
+    },
+}
+
+#[derive(Subcommand)]
+enum McpAction {
+    /// Run the stdio MCP server. This is what an MCP client invokes; it is also
+    /// the default when `murmur mcp` is run with no action.
+    Serve,
+
+    /// Add Murmur to an MCP client's config so it can read your transcription
+    /// history. Configures all detected clients unless `--client` is given.
+    Install {
+        /// Configure only this client (default: every detected client).
+        #[arg(long)]
+        client: Option<ClientArg>,
+    },
+}
+
+/// CLI surface for [`murmur_mcp::ClientKind`], kept here so the clap derive
+/// stays out of the shared crate.
+#[derive(Clone, Copy, clap::ValueEnum)]
+enum ClientArg {
+    Cursor,
+    ClaudeDesktop,
+}
+
+impl From<ClientArg> for murmur_mcp::ClientKind {
+    fn from(arg: ClientArg) -> Self {
+        match arg {
+            ClientArg::Cursor => murmur_mcp::ClientKind::Cursor,
+            ClientArg::ClaudeDesktop => murmur_mcp::ClientKind::ClaudeDesktop,
+        }
+    }
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // Logs go to stderr so they never corrupt stdout, which the `mcp`
+    // subcommand uses as the MCP JSON-RPC channel.
     tracing_subscriber::fmt()
+        .with_writer(std::io::stderr)
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
                 .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
@@ -105,8 +157,61 @@ async fn main() -> Result<()> {
             all,
             seconds,
         } => cmd_audio_test(device, all, seconds)?,
+        Commands::Index { path, max } => cmd_index(path, max)?,
+        Commands::Mcp { action } => match action {
+            None | Some(McpAction::Serve) => murmur_mcp::serve().await?,
+            Some(McpAction::Install { client }) => cmd_mcp_install(client.map(Into::into))?,
+        },
     }
 
+    Ok(())
+}
+
+/// Configure MCP clients and print a short, actionable report.
+fn cmd_mcp_install(client: Option<murmur_mcp::ClientKind>) -> Result<()> {
+    let report = murmur_mcp::install(client)?;
+
+    for c in &report.configured {
+        println!("- Configured {}: {}", c.client, c.path);
+    }
+    for label in &report.skipped {
+        println!("- {label} not detected, skipped (use `--client` to configure it anyway).");
+    }
+
+    if report.configured.is_empty() {
+        println!("No MCP clients were configured.");
+    } else {
+        println!();
+        println!("Restart the client (or toggle the server in its MCP settings) to load it.");
+        println!(
+            "Murmur then exposes your transcription history as the get_recent_transcripts and \
+             search_transcripts tools."
+        );
+    }
+
+    println!();
+    println!("For Claude Code, run:");
+    println!("  {}", report.claude_code_command);
+    Ok(())
+}
+
+/// Print the ranked codebase vocabulary for a project. Audio-free, so it works
+/// without the STT features and is the cheap way to eyeball the ranking.
+fn cmd_index(path: PathBuf, max: usize) -> Result<()> {
+    use murmur_core::indexer::{IndexConfig, index_project_ranked};
+
+    let cfg = IndexConfig {
+        max_symbols: max,
+        ..IndexConfig::default()
+    };
+    let ranked = index_project_ranked(&path, &cfg)
+        .with_context(|| format!("Failed to index {}", path.display()))?;
+
+    println!("{} symbols from {}", ranked.len(), path.display());
+    println!("{:>8}  {:>5}  symbol", "score", "freq");
+    for s in &ranked {
+        println!("{:>8.2}  {:>5}  {}", s.score, s.freq, s.text);
+    }
     Ok(())
 }
 

@@ -195,6 +195,28 @@
             </button>
             <div id="analytics-panel" class="analytics-panel" hidden>
               <div class="analytics-group">
+                <h3 class="analytics-group__title">Usage (all time)</h3>
+                <div class="analytics-grid">
+                  <div class="stat-card">
+                    <span class="stat-card__value" id="usage-total-words">0</span>
+                    <span class="stat-card__label">Words</span>
+                  </div>
+                  <div class="stat-card">
+                    <span class="stat-card__value" id="usage-week-words">0</span>
+                    <span class="stat-card__label">This week</span>
+                  </div>
+                  <div class="stat-card">
+                    <span class="stat-card__value" id="usage-streak">0</span>
+                    <span class="stat-card__label">Day streak</span>
+                  </div>
+                  <div class="stat-card">
+                    <span class="stat-card__value" id="usage-phrases">0</span>
+                    <span class="stat-card__label">Phrases</span>
+                  </div>
+                </div>
+                <ul class="usage-apps" id="usage-top-apps" aria-label="Top applications"></ul>
+              </div>
+              <div class="analytics-group">
                 <h3 class="analytics-group__title">Last Session</h3>
                 <div class="analytics-grid">
                   <div class="stat-card">
@@ -268,6 +290,9 @@
               </svg>
             </button>
             <div id="settings-panel" class="settings-panel" hidden>
+              <div class="settings-actions">
+                <button id="whats-new-btn" class="btn-small">What's New</button>
+              </div>
               <!-- Hotkey -->
               <div class="settings-group">
                 <div class="settings-row">
@@ -488,6 +513,20 @@
                 </div>
               </div>
 
+              <!-- Clean up speech -->
+              <div class="settings-group">
+                <div class="settings-row">
+                  <div class="settings-row__text">
+                    <label class="settings-label" for="clean-speech-toggle">Clean up speech</label>
+                    <span class="settings-hint">Strip "um"/"uh" disfluencies and format spoken number lists in ordinary dictation. Turn off for verbatim text. Developer mode always cleans up.</span>
+                  </div>
+                  <label class="toggle-switch">
+                    <input type="checkbox" id="clean-speech-toggle" checked>
+                    <span class="toggle-switch__slider"></span>
+                  </label>
+                </div>
+              </div>
+
               <!-- Live Preview -->
               <div class="settings-group">
                 <div class="settings-row">
@@ -521,7 +560,39 @@
                 <textarea id="vocabulary-input" class="settings-textarea" rows="4" placeholder="GitHub&#10;Kubernetes&#10;PostgreSQL"></textarea>
                 <div class="settings-actions">
                   <button id="vocabulary-save" class="btn-small" disabled>Save Dictionary</button>
+                  <button id="vocabulary-learn" class="btn-small" title="Scan your history for technical terms you've dictated repeatedly and add them">Learn from history</button>
                 </div>
+              </div>
+
+              <!-- Codebase Vocabulary -->
+              <div class="settings-group">
+                <div class="settings-row">
+                  <div class="settings-row__text">
+                    <label class="settings-label" for="codebase-vocab-toggle">Codebase Vocabulary</label>
+                    <span class="settings-hint">Scan your project folders and bias transcription toward their identifiers, so symbols like calculateTotalRevenue transcribe correctly. Re-indexes automatically when files change. Whisper models only.</span>
+                  </div>
+                  <label class="toggle-switch">
+                    <input type="checkbox" id="codebase-vocab-toggle">
+                    <span class="toggle-switch__slider"></span>
+                  </label>
+                </div>
+                <div id="codebase-vocab-list" class="folder-list"></div>
+                <div class="settings-actions">
+                  <button id="codebase-vocab-folder" class="btn-small">Add Folder…</button>
+                </div>
+                <span class="settings-hint" id="codebase-vocab-status">No project folders selected.</span>
+              </div>
+
+              <!-- Editor integration (MCP) -->
+              <div class="settings-group">
+                <div class="settings-row__text">
+                  <label class="settings-label">Connect to Cursor / Claude</label>
+                  <span class="settings-hint">Let Claude and Cursor read your recent dictation through Murmur's built-in MCP server. One click adds it to any installed editor; restart the editor afterward to finish. Everything stays on your machine.</span>
+                </div>
+                <div class="settings-actions">
+                  <button id="mcp-install-btn" class="btn-small">Connect editors</button>
+                </div>
+                <span class="settings-hint" id="mcp-install-status"></span>
               </div>
 
               <!-- Text Snippets -->
@@ -711,6 +782,19 @@
       </div>
     </div>
 
+    <!-- What's New overlay -->
+    <div id="whats-new" class="whatsnew" hidden>
+      <div class="whatsnew__card">
+        <button class="whatsnew__close" id="whats-new-close" aria-label="Close">×</button>
+        <h2 class="whatsnew__title">What's New</h2>
+        <p class="whatsnew__sub" id="whats-new-version"></p>
+        <div class="whatsnew__body" id="whats-new-body"></div>
+        <div class="whatsnew__actions">
+          <button class="model-card__btn" id="whats-new-ok">Got it</button>
+        </div>
+      </div>
+    </div>
+
   </div>
   <script src="js/dom.js"></script>
   <script src="js/ui.js"></script>
@@ -719,6 +803,7 @@
   <script src="js/settings.js"></script>
   <script src="js/analytics.js"></script>
   <script src="js/updater.js"></script>
+  <script src="js/whatsnew.js"></script>
   <script src="js/main.js"></script>
   <script src="js/dashboard.js"></script>
   <script src="js/onboarding.js"></script>

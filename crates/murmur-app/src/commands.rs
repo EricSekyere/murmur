@@ -78,7 +78,97 @@ pub(crate) fn get_status(state: State<'_, AppState>) -> serde_json::Value {
         "app_profiles": settings.app_profiles,
         "caption_position": settings.caption_position,
         "save_history": settings.save_history,
+        "clean_speech": settings.clean_speech,
+        "codebase_vocab_enabled": settings.indexer.enabled,
+        "codebase_vocab_roots": settings
+            .indexer
+            .project_roots
+            .iter()
+            .map(|p| p.to_string_lossy().into_owned())
+            .collect::<Vec<_>>(),
+        "codebase_vocab_count": state
+            .project_vocab
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .len(),
+        "app_version": env!("CARGO_PKG_VERSION"),
+        "whats_new_seen": settings.whats_new_seen_version,
     })
+}
+
+/// Record that the user has seen this version's "What's New" highlights, so the
+/// panel doesn't auto-open again until the next update.
+#[tauri::command]
+pub(crate) fn mark_whats_new_seen(state: State<'_, AppState>) -> Result<(), String> {
+    let mut settings = state.settings.lock().unwrap_or_else(|e| e.into_inner());
+    settings.whats_new_seen_version = Some(env!("CARGO_PKG_VERSION").to_string());
+    let path = Settings::default_path().map_err(|e| e.to_string())?;
+    settings
+        .save(&path)
+        .map_err(|e| format!("Failed to save settings: {e}"))?;
+    Ok(())
+}
+
+/// Open a native folder picker and return the chosen path, or None if cancelled.
+/// Async so the blocking dialog runs off the main thread.
+#[tauri::command]
+pub(crate) async fn pick_project_folder(app: tauri::AppHandle) -> Option<String> {
+    use tauri_plugin_dialog::DialogExt;
+    app.dialog()
+        .file()
+        .blocking_pick_folder()
+        .and_then(|p| p.into_path().ok())
+        .map(|p| p.to_string_lossy().into_owned())
+}
+
+/// Enable/disable codebase vocabulary and optionally set the project root, then
+/// persist and re-index (or clear) in the background. The result count is
+/// reported via the `codebase-index` event.
+#[tauri::command]
+pub(crate) fn set_codebase_vocabulary(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    enabled: bool,
+    project_roots: Option<Vec<String>>,
+) -> Result<(), String> {
+    let active = {
+        let mut settings = state.settings.lock().unwrap_or_else(|e| e.into_inner());
+        settings.indexer.enabled = enabled;
+        if let Some(roots) = project_roots {
+            // Trim, drop blanks, dedup; clamp_collections caps the count on save.
+            let mut seen = std::collections::HashSet::new();
+            settings.indexer.project_roots = roots
+                .into_iter()
+                .map(|r| r.trim().to_string())
+                .filter(|r| !r.is_empty() && seen.insert(r.clone()))
+                .map(std::path::PathBuf::from)
+                .collect();
+        }
+        let path = Settings::default_path().map_err(|e| e.to_string())?;
+        settings
+            .save(&path)
+            .map_err(|e| format!("Failed to save settings: {e}"))?;
+        settings.indexer.enabled && !settings.indexer.project_roots.is_empty()
+    };
+
+    if active {
+        // spawn_project_index re-reads settings, indexes, and emits the result.
+        crate::spawn_project_index(app.clone());
+    } else {
+        // Disabled or no folder: stop injecting immediately and report it.
+        state
+            .project_vocab
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clear();
+        let _ = app.emit(
+            "codebase-index",
+            serde_json::json!({ "count": 0, "enabled": enabled }),
+        );
+    }
+    // Re-point (or stop) the file watcher for the new root set.
+    crate::watcher::rewatch(&app);
+    Ok(())
 }
 
 #[tauri::command]
@@ -257,6 +347,7 @@ pub(crate) fn update_settings(
     app_profiles: Option<Vec<AppProfile>>,
     caption_position: Option<String>,
     save_history: Option<bool>,
+    clean_speech: Option<bool>,
 ) -> Result<(), String> {
     let mut settings = state.settings.lock().unwrap_or_else(|e| e.into_inner());
     // Only warn about a model/language mismatch if those fields were touched.
@@ -384,7 +475,20 @@ pub(crate) fn update_settings(
         );
     }
     if let Some(sh) = save_history {
+        // Turning history off purges what is already stored, so nothing lingers
+        // on disk or stays readable through the MCP server. (settings → history
+        // lock order matches record_history.)
+        if !sh && settings.save_history {
+            let mut history = state.history.lock().unwrap_or_else(|e| e.into_inner());
+            history.clear();
+            if let Err(e) = history.save(&state.history_path) {
+                tracing::warn!("Failed to purge history on opt-out: {}", e);
+            }
+        }
         settings.save_history = sh;
+    }
+    if let Some(cs) = clean_speech {
+        settings.clean_speech = cs;
     }
 
     // Same gate the loader uses, so the UI can't persist a config it would reject.
@@ -581,4 +685,53 @@ pub(crate) fn set_widget_visible(
     settings.show_widget = visible;
     save_settings(&settings);
     Ok(())
+}
+
+/// Wire Murmur into detected MCP clients (Cursor, Claude Desktop) so Claude and
+/// Cursor can read the transcription history. The written config points at this
+/// app binary, which serves MCP when relaunched as `murmur-app mcp`.
+#[tauri::command]
+pub(crate) fn mcp_install() -> Result<murmur_mcp::InstallReport, String> {
+    murmur_mcp::install(None).map_err(|e| e.to_string())
+}
+
+/// Mine local history for distinctive technical terms the user has dictated
+/// repeatedly and add them to the custom vocabulary so the decoder biases toward
+/// them (Whisper only; Parakeet has no biasing API). Returns how many were added.
+#[tauri::command]
+pub(crate) fn learn_vocabulary(state: State<'_, AppState>) -> Result<usize, String> {
+    // Hold settings across the read+write; lock history inside (settings → history
+    // order matches record_history) so the candidate set and the merge are
+    // consistent against a concurrent vocabulary edit.
+    let mut settings = state.settings.lock().unwrap_or_else(|e| e.into_inner());
+    let learned = {
+        let history = state.history.lock().unwrap_or_else(|e| e.into_inner());
+        history.learn_terms(&settings.custom_vocabulary, 20)
+    };
+    if learned.is_empty() {
+        return Ok(0);
+    }
+    let before = settings.custom_vocabulary.len();
+    settings.custom_vocabulary.extend(learned);
+    settings.clamp_collections();
+    settings.validate().map_err(|e| e.to_string())?;
+    let added = settings.custom_vocabulary.len().saturating_sub(before);
+    if let Ok(path) = Settings::default_path() {
+        settings.save(&path).map_err(|e| e.to_string())?;
+    }
+    Ok(added)
+}
+
+/// On-device usage stats (words, top apps, streak) derived from local history.
+#[tauri::command]
+pub(crate) fn get_usage_stats(state: State<'_, AppState>) -> murmur_core::history::UsageStats {
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    state
+        .history
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .stats(now_ms)
 }

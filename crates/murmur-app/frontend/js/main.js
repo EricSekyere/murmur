@@ -25,6 +25,7 @@ if (findPillBtn) {
 async function init() {
   createVoiceBars();
   renderAnalytics();
+  renderUsageStats();
   renderDiagnostics();
   try {
     const status = await invoke('get_status');
@@ -40,6 +41,7 @@ async function init() {
     }
     developerModeToggle.checked = !!status.developer_mode;
     devModeBadge.hidden = !status.developer_mode;
+    maybeShowWhatsNew(status);
   } catch (err) {
     console.error('Failed to get status:', err);
     updateModelBanner({ model_ready: false, model: 'small.en', recording: false, mode: 'idle' });

@@ -68,6 +68,13 @@ const SAMPLES_PER_MS: usize = 16;
 #[cfg(feature = "stt")]
 const WHISPER_LEAD_MS: usize = 100;
 
+/// Char budget for the vocabulary clause in Whisper's prompt. The prompt window
+/// is ~224 tokens, shared with the style hint and rolling context, so a long
+/// glossary (a big manual list, or the codebase indexer) must be capped or it
+/// crowds out decoding and degrades transcription.
+#[cfg(feature = "stt")]
+const MAX_VOCAB_PROMPT_CHARS: usize = 400;
+
 /// Default leading-silence padding for Parakeet. Its mel windowing drops
 /// more of the start than Whisper — transcribe-rs uses 250ms.
 #[cfg(feature = "parakeet")]
@@ -347,6 +354,26 @@ impl SttEngine {
         Ok(result)
     }
 
+    /// Trim a comma-joined glossary to a char budget at a comma boundary, so the
+    /// vocabulary clause cannot exceed the prompt's token budget no matter how
+    /// many words the caller supplies.
+    #[cfg(feature = "stt")]
+    fn cap_glossary(glossary: &str, max_chars: usize) -> &str {
+        if glossary.chars().count() <= max_chars {
+            return glossary;
+        }
+        let cut = glossary
+            .char_indices()
+            .nth(max_chars)
+            .map(|(i, _)| i)
+            .unwrap_or(glossary.len());
+        let head = &glossary[..cut];
+        match head.rfind(',') {
+            Some(comma) => &head[..comma],
+            None => head,
+        }
+    }
+
     #[cfg(feature = "stt")]
     #[allow(clippy::too_many_arguments)]
     fn transcribe_whisper(
@@ -422,7 +449,7 @@ impl SttEngine {
                 prompt.push(' ');
             }
             prompt.push_str("Vocabulary: ");
-            prompt.push_str(glossary.trim());
+            prompt.push_str(Self::cap_glossary(glossary.trim(), MAX_VOCAB_PROMPT_CHARS));
             prompt.push('.');
         }
         // The rolling session context is the prior English transcript, so only
@@ -611,5 +638,24 @@ impl SttEngine {
     /// Get the path to the loaded model.
     pub fn model_path(&self) -> &str {
         &self.model_path
+    }
+}
+
+#[cfg(all(test, feature = "stt"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cap_glossary_passes_through_within_budget() {
+        let g = "FooBar, baz, qux";
+        assert_eq!(SttEngine::cap_glossary(g, 100), g);
+    }
+
+    #[test]
+    fn cap_glossary_trims_at_comma_boundary() {
+        // The 20-char prefix lands inside "charlie"; trimming backs up to the
+        // last comma so no entry is split.
+        let g = "alpha, bravo, charlie, delta, echo";
+        assert_eq!(SttEngine::cap_glossary(g, 20), "alpha, bravo");
     }
 }

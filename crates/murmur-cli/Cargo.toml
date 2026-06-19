@@ -15,7 +15,8 @@ name = "murmur"
 path = "src/main.rs"
 
 [dependencies]
-murmur-core.workspace = true
+murmur-core = { workspace = true, features = ["indexer", "treesitter"] }
+murmur-mcp.workspace = true
 clap = { version = "4", features = ["derive"] }
 toml.workspace = true
 tokio.workspace = true

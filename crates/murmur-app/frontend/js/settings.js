@@ -74,6 +74,15 @@ settingsToggle.addEventListener('click', async () => {
     if (status.save_history != null) {
       saveHistoryToggle.checked = status.save_history;
     }
+    if (status.clean_speech != null) {
+      cleanSpeechToggle.checked = status.clean_speech;
+    }
+    codebaseVocabToggle.checked = !!status.codebase_vocab_enabled;
+    codebaseRoots = Array.isArray(status.codebase_vocab_roots)
+      ? status.codebase_vocab_roots.slice()
+      : [];
+    renderCodebaseRoots();
+    updateCodebaseVocabStatus(status.codebase_vocab_count || 0);
     if (status.live_preview != null) {
       livePreviewToggle.checked = status.live_preview;
     }
@@ -85,6 +94,119 @@ settingsToggle.addEventListener('click', async () => {
   } catch (err) {
     console.error('Failed to get settings:', err);
   }
+});
+
+// --- Codebase vocabulary ---
+
+let codebaseRoots = []; // project folders, mirrored to the backend on change
+
+const folderName = (root) => root.replace(/[\\/]+$/, '').split(/[\\/]/).pop() || root;
+
+// Render the chosen project folders as a removable list.
+function renderCodebaseRoots() {
+  codebaseVocabList.innerHTML = '';
+  codebaseRoots.forEach((root, i) => {
+    const item = document.createElement('div');
+    item.className = 'folder-list__item';
+    const name = document.createElement('span');
+    name.className = 'folder-list__name';
+    name.textContent = folderName(root);
+    name.title = root;
+    const remove = document.createElement('button');
+    remove.type = 'button';
+    remove.className = 'folder-list__remove';
+    remove.textContent = '×';
+    remove.setAttribute('aria-label', `Remove ${folderName(root)}`);
+    remove.addEventListener('click', async () => {
+      codebaseRoots.splice(i, 1);
+      renderCodebaseRoots();
+      await saveCodebaseVocab();
+    });
+    item.append(name, remove);
+    codebaseVocabList.appendChild(item);
+  });
+}
+
+// Status line derived from the folder count, toggle state, and indexed count.
+function updateCodebaseVocabStatus(count) {
+  const n = codebaseRoots.length;
+  if (n === 0) {
+    codebaseVocabStatus.textContent = 'No project folders selected.';
+  } else if (!codebaseVocabToggle.checked) {
+    codebaseVocabStatus.textContent = `Off (${n} folder${n === 1 ? '' : 's'})`;
+  } else {
+    codebaseVocabStatus.textContent = count > 0
+      ? `${count} symbol${count === 1 ? '' : 's'} from ${n} folder${n === 1 ? '' : 's'}`
+      : `Indexing ${n} folder${n === 1 ? '' : 's'}…`;
+  }
+}
+
+async function saveCodebaseVocab() {
+  try {
+    await invoke('set_codebase_vocabulary', {
+      enabled: codebaseVocabToggle.checked,
+      project_roots: codebaseRoots,
+    });
+    updateCodebaseVocabStatus(0); // optimistic until the index event arrives
+  } catch (err) {
+    showToast(`Failed: ${err}`, 'error');
+  }
+}
+
+codebaseVocabToggle.addEventListener('change', async () => {
+  await saveCodebaseVocab();
+  showToast(codebaseVocabToggle.checked ? 'Codebase vocabulary on' : 'Codebase vocabulary off', 'success');
+});
+
+codebaseVocabFolder.addEventListener('click', async () => {
+  try {
+    const folder = await invoke('pick_project_folder');
+    if (!folder) return; // user cancelled
+    if (codebaseRoots.includes(folder)) {
+      showToast('Folder already added', 'success');
+      return;
+    }
+    codebaseRoots.push(folder);
+    codebaseVocabToggle.checked = true;
+    renderCodebaseRoots();
+    await saveCodebaseVocab();
+    showToast('Indexing project…', 'success');
+  } catch (err) {
+    showToast(`Failed: ${err}`, 'error');
+  }
+});
+
+mcpInstallBtn.addEventListener('click', async () => {
+  const previous = mcpInstallBtn.textContent;
+  mcpInstallBtn.disabled = true;
+  mcpInstallBtn.textContent = 'Connecting…';
+  try {
+    const report = await invoke('mcp_install');
+    const configured = report.configured || [];
+    const skipped = report.skipped || [];
+    if (configured.length === 0) {
+      mcpInstallStatus.textContent = skipped.length
+        ? `No editor detected (${skipped.join(', ')}). Open Cursor or Claude Desktop first, then try again.`
+        : 'No editor detected.';
+      showToast('No MCP editor detected', 'error');
+    } else {
+      const names = configured.map((c) => c.client).join(', ');
+      mcpInstallStatus.textContent =
+        `Connected ${names}. Restart ${configured.length === 1 ? 'it' : 'them'} to load Murmur's tools.`;
+      showToast(`Connected ${names}`, 'success');
+    }
+  } catch (err) {
+    mcpInstallStatus.textContent = `Failed: ${err}`;
+    showToast(`Failed: ${err}`, 'error');
+  } finally {
+    mcpInstallBtn.disabled = false;
+    mcpInstallBtn.textContent = previous;
+  }
+});
+
+// Backend reports the indexed symbol count when a scan finishes.
+listen('codebase-index', (event) => {
+  updateCodebaseVocabStatus((event.payload || {}).count || 0);
 });
 
 developerModeToggle.addEventListener('change', async () => {
@@ -349,6 +471,17 @@ saveHistoryToggle.addEventListener('change', async () => {
   }
 });
 
+cleanSpeechToggle.addEventListener('change', async () => {
+  const enabled = cleanSpeechToggle.checked;
+  try {
+    await invoke('update_settings', { clean_speech: enabled });
+    showToast(enabled ? 'Speech cleanup on' : 'Verbatim — no cleanup', 'success');
+  } catch (err) {
+    cleanSpeechToggle.checked = !enabled;
+    showToast(`Failed: ${err}`, 'error');
+  }
+});
+
 captionPositionSelect.addEventListener('change', async () => {
   const caption_position = captionPositionSelect.value;
   try {
@@ -375,6 +508,31 @@ vocabularySave.addEventListener('click', async () => {
   } catch (err) {
     vocabularySave.disabled = false;
     showToast(`Failed: ${err}`, 'error');
+  }
+});
+
+vocabularyLearn.addEventListener('click', async () => {
+  const previous = vocabularyLearn.textContent;
+  vocabularyLearn.disabled = true;
+  vocabularyLearn.textContent = 'Scanning…';
+  try {
+    const added = await invoke('learn_vocabulary');
+    if (added > 0) {
+      // Reflect the merged dictionary back into the textarea.
+      const status = await invoke('get_status');
+      if (Array.isArray(status.custom_vocabulary)) {
+        vocabularyInput.value = status.custom_vocabulary.join('\n');
+        vocabularySave.disabled = true;
+      }
+      showToast(`Learned ${added} ${added === 1 ? 'term' : 'terms'} from history`, 'success');
+    } else {
+      showToast('No new terms found in history', 'success');
+    }
+  } catch (err) {
+    showToast(`Failed: ${err}`, 'error');
+  } finally {
+    vocabularyLearn.disabled = false;
+    vocabularyLearn.textContent = previous;
   }
 });
 

@@ -3,6 +3,8 @@ pub mod config;
 pub mod dictation;
 pub mod history;
 pub mod hotkey;
+#[cfg(feature = "indexer")]
+pub mod indexer;
 pub mod integrity;
 pub mod output;
 pub mod stt;

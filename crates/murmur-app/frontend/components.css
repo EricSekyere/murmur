@@ -728,6 +728,151 @@
   cursor: not-allowed;
 }
 
+/* Folder list (codebase vocabulary project roots) */
+.folder-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 8px 0;
+}
+
+.folder-list__item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 10px;
+  background: var(--color-surface-raised);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  font-size: 0.78rem;
+}
+
+.folder-list__name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--color-text);
+}
+
+.folder-list__remove {
+  background: none;
+  border: none;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  font-size: 1rem;
+  line-height: 1;
+  padding: 0 4px;
+}
+
+.folder-list__remove:hover {
+  color: var(--color-accent);
+}
+
+/* Usage dashboard: top-apps list */
+.usage-apps {
+  list-style: none;
+  margin: 12px 0 0;
+  padding: 0;
+}
+
+.usage-apps__item {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 7px 0;
+  border-top: 1px solid var(--color-border);
+  font-size: 0.85rem;
+}
+
+.usage-apps__name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--color-text);
+}
+
+.usage-apps__count {
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+}
+
+/* What's New overlay */
+.whatsnew {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(4px);
+}
+
+.whatsnew[hidden] {
+  display: none;
+}
+
+.whatsnew__card {
+  position: relative;
+  width: min(520px, 92vw);
+  max-height: 80vh;
+  overflow-y: auto;
+  background: var(--color-surface-raised, #16161f);
+  border: 1px solid var(--color-border, rgba(255, 255, 255, 0.1));
+  border-radius: var(--radius-lg, 16px);
+  padding: 28px 28px 22px;
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.5);
+}
+
+.whatsnew__close {
+  position: absolute;
+  top: 12px;
+  right: 14px;
+  background: none;
+  border: none;
+  color: var(--color-text-secondary);
+  font-size: 1.4rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.whatsnew__close:hover {
+  color: var(--color-text);
+}
+
+.whatsnew__title {
+  margin: 0 0 4px;
+  font-size: 1.3rem;
+  color: var(--color-text);
+}
+
+.whatsnew__sub {
+  margin: 0 0 18px;
+  color: var(--color-accent);
+  font-size: 0.82rem;
+}
+
+.whatsnew__item {
+  display: flex;
+  gap: 10px;
+  padding: 8px 0;
+  color: var(--color-text-secondary);
+  font-size: 0.86rem;
+  line-height: 1.45;
+}
+
+.whatsnew__item b {
+  color: var(--color-text);
+  font-weight: 600;
+}
+
+.whatsnew__actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 14px;
+}
+
 /* Select Dropdown */
 .settings-select {
   background: var(--color-surface-raised);
