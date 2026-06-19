@@ -40,10 +40,13 @@ This PRD was written as a forward-looking plan. The product has since shipped on
 - **App shell.** Tauri v2 system tray, dashboard, and first-run onboarding; sound feedback; TOML config with atomic writes, validation, corrupt-config recovery, and migration from the former "Voitex" name.
 - **Distribution.** Signed auto-update (tauri-plugin-updater, minisign) and a GitHub release pipeline (tauri-action) producing the Windows build.
 
+### Recently built (on the `feat/codebase-vocabulary` branch, pending release)
+- **Codebase-derived vocabulary** (Section 5.6). A gitignore-aware indexer extracts identifiers from the active project(s) and biases the Whisper decoder toward them, so symbols like `IndexerSettings` transcribe correctly. Extraction is AST-accurate via tree-sitter (Rust, Python, JS, TS/TSX, Go, Java) with a lexical regex fallback for other languages. Multiple project roots, a file watcher for live re-index, a settings UI, and the `murmur index` CLI are wired in.
+- **Claude/Cursor MCP server** (`murmur mcp`, Section 5.4 / Epic 3.3). A stdio Model Context Protocol server (rmcp) exposes the local transcription history through `get_recent_transcripts` and `search_transcripts` tools. Read-only and fully local: the client spawns the process and talks over stdin/stdout.
+
 ### Not yet built (still aspirational in this document)
 - **Directory and path mapping** from spoken references (Section 5.5).
-- **Codebase-derived vocabulary** via tree-sitter (Section 5.6); vocabulary today is a manual list, not auto-extracted.
-- **Per-agent integrations:** VS Code / Cursor extension, Claude Code MCP server, and the local WebSocket API (Section 5.4, Epics 3.2 / 3.3 / 3.5). Integration today is the universal OS-level typing path plus CLI stdout piping.
+- **Other per-agent integrations:** the VS Code / Cursor extension and the local WebSocket API (Section 5.4, Epics 3.2 / 3.5). Integration today is the universal OS-level typing path, CLI stdout piping, and the MCP server above.
 - **Distinct coding / prose / command modes** (F6, Epic 2.4). A transcription profile setting exists, but not the full mode system.
 - **Continuous always-listening mode and wake word** (Epic 4.2).
 
@@ -427,8 +430,8 @@ All dependencies must be compatible with **MIT or Apache 2.0**. No GPL dependenc
 
 **Phase 2 Exit Criteria:** (status as of v0.3.6)
 - [x] Voice commands work reliably
-- [~] Custom vocabulary supported as a manual user list; codebase auto-extraction (tree-sitter) not built
-- [ ] Project file index built and kept up to date (not built)
+- [x] Custom vocabulary from the codebase: tree-sitter (with lexical fallback) auto-extraction, on top of the manual user list
+- [x] Project file index built and kept up to date (gitignore-aware walk + notify file watcher, multiple roots)
 - [~] Transcription profile switching exists; full coding/prose/command modes not built
 - [x] System tray UI functional on Windows (macOS not yet shipped)
 
@@ -453,12 +456,12 @@ All dependencies must be compatible with **MIT or Apache 2.0**. No GPL dependenc
 - Status bar indicator showing Murmur connection state
 - **Deliverable:** Voice-to-Cursor with full project awareness
 
-#### Epic 3.3: Claude Code MCP Integration
-- Implement MCP server in Murmur (stdio transport)
-- Expose tools: `voice_listen` (start recording), `voice_transcribe` (return text)
-- Expose resources: `project_files` (file index), `voice_history` (recent transcriptions)
-- Claude Code config: `claude mcp add murmur -- murmur mcp-server`
-- **Deliverable:** Claude Code can request voice input as a tool
+#### Epic 3.3: Claude Code MCP Integration  *(built — `murmur mcp`)*
+- [x] MCP server in Murmur over stdio transport (rmcp).
+- [x] Expose the transcription history as tools: `get_recent_transcripts` (newest-first list) and `search_transcripts` (case-insensitive substring search). Read-only and fully local.
+- Claude Code config: `claude mcp add murmur -- murmur mcp`; or in a client's MCP JSON, `{ "command": "murmur", "args": ["mcp"] }`.
+- [ ] Not built: remote-control tools (`voice_listen` / `voice_transcribe`) that would start recording from the agent — out of scope for a local push-to-talk tool.
+- **Deliverable:** Claude/Cursor can pull recent voice transcriptions as a tool.
 
 #### Epic 3.4: Advanced Code Formatting
 - Implement case conversion commands: "camel case get user data" -> `getUserData`
@@ -476,7 +479,7 @@ All dependencies must be compatible with **MIT or Apache 2.0**. No GPL dependenc
 **Phase 3 Exit Criteria:** (not started; deprioritized in favor of the dictation-quality and live-preview work that shipped instead)
 - [ ] "Navigate to source components header" resolves correctly (directory mapping not built)
 - [ ] VS Code/Cursor extension installed and working (not built)
-- [ ] Claude Code MCP server functional (not built)
+- [x] Claude Code MCP server functional (`murmur mcp`: exposes transcription history as tools)
 - [ ] WebSocket API documented and tested (not built)
 - [ ] Case conversion commands work (not built)
 

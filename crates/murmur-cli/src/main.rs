@@ -1,3 +1,5 @@
+mod mcp;
+
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use cpal::SampleFormat;
@@ -85,11 +87,17 @@ enum Commands {
         #[arg(long, default_value_t = 64)]
         max: usize,
     },
+
+    /// Run a stdio MCP server exposing transcription history to Claude/Cursor.
+    Mcp,
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // Logs go to stderr so they never corrupt stdout, which the `mcp`
+    // subcommand uses as the MCP JSON-RPC channel.
     tracing_subscriber::fmt()
+        .with_writer(std::io::stderr)
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
                 .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
@@ -117,6 +125,7 @@ async fn main() -> Result<()> {
             seconds,
         } => cmd_audio_test(device, all, seconds)?,
         Commands::Index { path, max } => cmd_index(path, max)?,
+        Commands::Mcp => mcp::run().await?,
     }
 
     Ok(())
