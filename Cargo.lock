@@ -3074,6 +3074,7 @@ dependencies = [
  "tracing-appender",
  "tracing-subscriber",
  "unicode-segmentation",
+ "windows 0.58.0",
 ]
 
 [[package]]

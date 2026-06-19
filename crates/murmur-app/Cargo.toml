@@ -41,3 +41,12 @@ cpal = "0.15"
 unicode-segmentation = "1"
 notify = "6"
 notify-debouncer-mini = "0.4"
+
+# UI Automation: locate the focused input so the live caption anchors by the
+# text field, not the window bottom. Used by caption::focused_input_rect.
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.58", features = [
+    "Win32_Foundation",
+    "Win32_System_Com",
+    "Win32_UI_Accessibility",
+] }

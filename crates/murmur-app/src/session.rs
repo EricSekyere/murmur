@@ -239,13 +239,18 @@ fn streaming_worker(app: &tauri::AppHandle) {
         crate::sound::play_start();
     }
 
-    // When the caption should roam to the active window, pass that window so
-    // the preview worker positions the caption near it. A zero hwnd means no
-    // external window was captured, so leave the caption under the pill.
+    // When the caption should roam to the active window, capture that window
+    // and (best-effort) the focused input's rect so the preview worker anchors
+    // the caption by the text field. A zero hwnd means no external window was
+    // captured, so leave the caption under the pill.
     #[cfg(windows)]
-    let caption_target = (caption_at_window && previous_hwnd != 0).then_some(previous_hwnd);
+    let caption_target =
+        (caption_at_window && previous_hwnd != 0).then(|| crate::caption::CaptionAnchor {
+            hwnd: previous_hwnd,
+            focus: crate::caption::focused_input_rect(previous_hwnd),
+        });
     #[cfg(not(windows))]
-    let caption_target: Option<usize> = None;
+    let caption_target: Option<crate::caption::CaptionAnchor> = None;
 
     // Live preview runs on its own thread so interim decodes never stall the
     // delivery of finished phrases. `None` when the feature is off.
