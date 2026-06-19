@@ -40,6 +40,18 @@ Requires Windows 10/11 x64 with an AVX2-capable CPU (any Intel/AMD CPU from ~201
 
 Each phrase is transcribed when you pause and typed into the active window; stopping flushes the final phrase.
 
+## Editor integration (MCP)
+
+Murmur ships an MCP server so Claude and Cursor can read your recent dictation. One command wires it up:
+
+```sh
+murmur mcp install          # configure every detected client (Cursor, Claude Desktop)
+murmur mcp install --client cursor
+claude mcp add murmur -- murmur mcp   # Claude Code
+```
+
+It writes the server (pointing at your `murmur` binary) into the client's config, then restart the client. Two read-only tools become available: `get_recent_transcripts` and `search_transcripts`. Everything stays local — the client spawns `murmur mcp` and talks to it over stdin/stdout, no network.
+
 ## Building from source
 
 Prerequisites: Rust 1.93+, CMake, LLVM/libclang, `cargo install tauri-cli --version '^2'`. Optional: CUDA Toolkit 12.x (auto-detected, enables GPU Whisper), NSIS (installer bundling).

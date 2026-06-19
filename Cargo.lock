@@ -3135,6 +3135,7 @@ dependencies = [
  "anyhow",
  "clap",
  "cpal",
+ "dirs",
  "murmur-core",
  "rmcp",
  "serde",

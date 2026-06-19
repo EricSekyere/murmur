@@ -1,4 +1,5 @@
 mod mcp;
+mod mcp_install;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
@@ -88,8 +89,26 @@ enum Commands {
         max: usize,
     },
 
-    /// Run a stdio MCP server exposing transcription history to Claude/Cursor.
-    Mcp,
+    /// Run or set up the MCP server for Claude/Cursor.
+    Mcp {
+        #[command(subcommand)]
+        action: Option<McpAction>,
+    },
+}
+
+#[derive(Subcommand)]
+enum McpAction {
+    /// Run the stdio MCP server. This is what an MCP client invokes; it is also
+    /// the default when `murmur mcp` is run with no action.
+    Serve,
+
+    /// Add Murmur to an MCP client's config so it can read your transcription
+    /// history. Configures all detected clients unless `--client` is given.
+    Install {
+        /// Configure only this client (default: every detected client).
+        #[arg(long)]
+        client: Option<mcp_install::ClientKind>,
+    },
 }
 
 #[tokio::main]
@@ -125,7 +144,10 @@ async fn main() -> Result<()> {
             seconds,
         } => cmd_audio_test(device, all, seconds)?,
         Commands::Index { path, max } => cmd_index(path, max)?,
-        Commands::Mcp => mcp::run().await?,
+        Commands::Mcp { action } => match action {
+            None | Some(McpAction::Serve) => mcp::run().await?,
+            Some(McpAction::Install { client }) => mcp_install::install(client)?,
+        },
     }
 
     Ok(())

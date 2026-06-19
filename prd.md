@@ -459,7 +459,7 @@ All dependencies must be compatible with **MIT or Apache 2.0**. No GPL dependenc
 #### Epic 3.3: Claude Code MCP Integration  *(built — `murmur mcp`)*
 - [x] MCP server in Murmur over stdio transport (rmcp).
 - [x] Expose the transcription history as tools: `get_recent_transcripts` (newest-first list) and `search_transcripts` (case-insensitive substring search). Read-only and fully local.
-- Claude Code config: `claude mcp add murmur -- murmur mcp`; or in a client's MCP JSON, `{ "command": "murmur", "args": ["mcp"] }`.
+- [x] One-command setup: `murmur mcp install` auto-detects Cursor / Claude Desktop and writes the server entry (pointing at the resolved binary path) into their config idempotently. For Claude Code: `claude mcp add murmur -- murmur mcp`.
 - [ ] Not built: remote-control tools (`voice_listen` / `voice_transcribe`) that would start recording from the agent — out of scope for a local push-to-talk tool.
 - **Deliverable:** Claude/Cursor can pull recent voice transcriptions as a tool.
 
