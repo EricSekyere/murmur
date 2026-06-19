@@ -78,6 +78,7 @@ pub(crate) fn get_status(state: State<'_, AppState>) -> serde_json::Value {
         "app_profiles": settings.app_profiles,
         "caption_position": settings.caption_position,
         "save_history": settings.save_history,
+        "clean_speech": settings.clean_speech,
         "codebase_vocab_enabled": settings.indexer.enabled,
         "codebase_vocab_roots": settings
             .indexer
@@ -346,6 +347,7 @@ pub(crate) fn update_settings(
     app_profiles: Option<Vec<AppProfile>>,
     caption_position: Option<String>,
     save_history: Option<bool>,
+    clean_speech: Option<bool>,
 ) -> Result<(), String> {
     let mut settings = state.settings.lock().unwrap_or_else(|e| e.into_inner());
     // Only warn about a model/language mismatch if those fields were touched.
@@ -484,6 +486,9 @@ pub(crate) fn update_settings(
             }
         }
         settings.save_history = sh;
+    }
+    if let Some(cs) = clean_speech {
+        settings.clean_speech = cs;
     }
 
     // Same gate the loader uses, so the UI can't persist a config it would reject.
@@ -688,4 +693,45 @@ pub(crate) fn set_widget_visible(
 #[tauri::command]
 pub(crate) fn mcp_install() -> Result<murmur_mcp::InstallReport, String> {
     murmur_mcp::install(None).map_err(|e| e.to_string())
+}
+
+/// Mine local history for distinctive technical terms the user has dictated
+/// repeatedly and add them to the custom vocabulary so the decoder biases toward
+/// them (Whisper only; Parakeet has no biasing API). Returns how many were added.
+#[tauri::command]
+pub(crate) fn learn_vocabulary(state: State<'_, AppState>) -> Result<usize, String> {
+    // Hold settings across the read+write; lock history inside (settings → history
+    // order matches record_history) so the candidate set and the merge are
+    // consistent against a concurrent vocabulary edit.
+    let mut settings = state.settings.lock().unwrap_or_else(|e| e.into_inner());
+    let learned = {
+        let history = state.history.lock().unwrap_or_else(|e| e.into_inner());
+        history.learn_terms(&settings.custom_vocabulary, 20)
+    };
+    if learned.is_empty() {
+        return Ok(0);
+    }
+    let before = settings.custom_vocabulary.len();
+    settings.custom_vocabulary.extend(learned);
+    settings.clamp_collections();
+    settings.validate().map_err(|e| e.to_string())?;
+    let added = settings.custom_vocabulary.len().saturating_sub(before);
+    if let Ok(path) = Settings::default_path() {
+        settings.save(&path).map_err(|e| e.to_string())?;
+    }
+    Ok(added)
+}
+
+/// On-device usage stats (words, top apps, streak) derived from local history.
+#[tauri::command]
+pub(crate) fn get_usage_stats(state: State<'_, AppState>) -> murmur_core::history::UsageStats {
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    state
+        .history
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .stats(now_ms)
 }

@@ -190,6 +190,12 @@ pub struct Settings {
     #[serde(default = "default_true")]
     pub save_history: bool,
 
+    /// Clean up ordinary dictation: strip "um"/"uh" disfluencies and format
+    /// spoken number lists. Off = deliver verbatim. Developer mode always runs
+    /// its own fuller post-processing regardless of this flag.
+    #[serde(default = "default_true")]
+    pub clean_speech: bool,
+
     /// Use the OS voice-capture path (echo cancellation + noise suppression) so
     /// the mic doesn't pick up audio from your own speakers. Windows only for
     /// now; falls back to the raw mic elsewhere or if it can't be opened.
@@ -395,6 +401,7 @@ impl Default for Settings {
             app_profiles: Vec::new(),
             caption_position: default_caption_position(),
             save_history: true,
+            clean_speech: true,
             echo_cancellation: true,
             indexer: IndexerSettings::default(),
             whats_new_seen_version: None,

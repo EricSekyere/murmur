@@ -195,6 +195,28 @@
             </button>
             <div id="analytics-panel" class="analytics-panel" hidden>
               <div class="analytics-group">
+                <h3 class="analytics-group__title">Usage (all time)</h3>
+                <div class="analytics-grid">
+                  <div class="stat-card">
+                    <span class="stat-card__value" id="usage-total-words">0</span>
+                    <span class="stat-card__label">Words</span>
+                  </div>
+                  <div class="stat-card">
+                    <span class="stat-card__value" id="usage-week-words">0</span>
+                    <span class="stat-card__label">This week</span>
+                  </div>
+                  <div class="stat-card">
+                    <span class="stat-card__value" id="usage-streak">0</span>
+                    <span class="stat-card__label">Day streak</span>
+                  </div>
+                  <div class="stat-card">
+                    <span class="stat-card__value" id="usage-phrases">0</span>
+                    <span class="stat-card__label">Phrases</span>
+                  </div>
+                </div>
+                <ul class="usage-apps" id="usage-top-apps" aria-label="Top applications"></ul>
+              </div>
+              <div class="analytics-group">
                 <h3 class="analytics-group__title">Last Session</h3>
                 <div class="analytics-grid">
                   <div class="stat-card">
@@ -491,6 +513,20 @@
                 </div>
               </div>
 
+              <!-- Clean up speech -->
+              <div class="settings-group">
+                <div class="settings-row">
+                  <div class="settings-row__text">
+                    <label class="settings-label" for="clean-speech-toggle">Clean up speech</label>
+                    <span class="settings-hint">Strip "um"/"uh" disfluencies and format spoken number lists in ordinary dictation. Turn off for verbatim text. Developer mode always cleans up.</span>
+                  </div>
+                  <label class="toggle-switch">
+                    <input type="checkbox" id="clean-speech-toggle" checked>
+                    <span class="toggle-switch__slider"></span>
+                  </label>
+                </div>
+              </div>
+
               <!-- Live Preview -->
               <div class="settings-group">
                 <div class="settings-row">
@@ -524,6 +560,7 @@
                 <textarea id="vocabulary-input" class="settings-textarea" rows="4" placeholder="GitHub&#10;Kubernetes&#10;PostgreSQL"></textarea>
                 <div class="settings-actions">
                   <button id="vocabulary-save" class="btn-small" disabled>Save Dictionary</button>
+                  <button id="vocabulary-learn" class="btn-small" title="Scan your history for technical terms you've dictated repeatedly and add them">Learn from history</button>
                 </div>
               </div>
 

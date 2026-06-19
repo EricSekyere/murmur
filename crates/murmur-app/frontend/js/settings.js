@@ -74,6 +74,9 @@ settingsToggle.addEventListener('click', async () => {
     if (status.save_history != null) {
       saveHistoryToggle.checked = status.save_history;
     }
+    if (status.clean_speech != null) {
+      cleanSpeechToggle.checked = status.clean_speech;
+    }
     codebaseVocabToggle.checked = !!status.codebase_vocab_enabled;
     codebaseRoots = Array.isArray(status.codebase_vocab_roots)
       ? status.codebase_vocab_roots.slice()
@@ -468,6 +471,17 @@ saveHistoryToggle.addEventListener('change', async () => {
   }
 });
 
+cleanSpeechToggle.addEventListener('change', async () => {
+  const enabled = cleanSpeechToggle.checked;
+  try {
+    await invoke('update_settings', { clean_speech: enabled });
+    showToast(enabled ? 'Speech cleanup on' : 'Verbatim — no cleanup', 'success');
+  } catch (err) {
+    cleanSpeechToggle.checked = !enabled;
+    showToast(`Failed: ${err}`, 'error');
+  }
+});
+
 captionPositionSelect.addEventListener('change', async () => {
   const caption_position = captionPositionSelect.value;
   try {
@@ -494,6 +508,31 @@ vocabularySave.addEventListener('click', async () => {
   } catch (err) {
     vocabularySave.disabled = false;
     showToast(`Failed: ${err}`, 'error');
+  }
+});
+
+vocabularyLearn.addEventListener('click', async () => {
+  const previous = vocabularyLearn.textContent;
+  vocabularyLearn.disabled = true;
+  vocabularyLearn.textContent = 'Scanning…';
+  try {
+    const added = await invoke('learn_vocabulary');
+    if (added > 0) {
+      // Reflect the merged dictionary back into the textarea.
+      const status = await invoke('get_status');
+      if (Array.isArray(status.custom_vocabulary)) {
+        vocabularyInput.value = status.custom_vocabulary.join('\n');
+        vocabularySave.disabled = true;
+      }
+      showToast(`Learned ${added} ${added === 1 ? 'term' : 'terms'} from history`, 'success');
+    } else {
+      showToast('No new terms found in history', 'success');
+    }
+  } catch (err) {
+    showToast(`Failed: ${err}`, 'error');
+  } finally {
+    vocabularyLearn.disabled = false;
+    vocabularyLearn.textContent = previous;
   }
 });
 

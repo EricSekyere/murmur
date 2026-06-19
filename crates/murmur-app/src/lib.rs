@@ -169,6 +169,8 @@ pub fn run() -> anyhow::Result<()> {
             commands::set_codebase_vocabulary,
             commands::mark_whats_new_seen,
             commands::mcp_install,
+            commands::get_usage_stats,
+            commands::learn_vocabulary,
             updater::install_update,
         ])
         .setup(move |app| setup_app(app, engine_for_setup, model, &hotkey, show_widget_on_start))
