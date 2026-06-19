@@ -76,6 +76,7 @@ fn restore_foreground_window(hwnd: usize) -> bool {
         fn GetWindowThreadProcessId(hwnd: usize, lpdw_process_id: *mut u32) -> u32;
         fn IsWindow(hwnd: usize) -> i32;
         fn IsWindowVisible(hwnd: usize) -> i32;
+        fn IsIconic(hwnd: usize) -> i32;
         fn ShowWindow(hwnd: usize, n_cmd_show: i32) -> i32;
     }
     const SW_RESTORE: i32 = 9;
@@ -92,7 +93,12 @@ fn restore_foreground_window(hwnd: usize) -> bool {
     }
 
     unsafe {
-        ShowWindow(hwnd, SW_RESTORE);
+        // Only un-minimize a genuinely minimized target. SW_RESTORE on a
+        // maximized window un-maximizes it, which yanked a full-screen browser
+        // out of full screen the moment dictation raised the target window.
+        if IsIconic(hwnd) != 0 {
+            ShowWindow(hwnd, SW_RESTORE);
+        }
         BringWindowToTop(hwnd);
         SetForegroundWindow(hwnd);
     }
@@ -114,7 +120,12 @@ fn restore_foreground_window(hwnd: usize) -> bool {
             AttachThreadInput(current_thread, target_thread, 1);
         }
 
-        ShowWindow(hwnd, SW_RESTORE);
+        // Only un-minimize a genuinely minimized target. SW_RESTORE on a
+        // maximized window un-maximizes it, which yanked a full-screen browser
+        // out of full screen the moment dictation raised the target window.
+        if IsIconic(hwnd) != 0 {
+            ShowWindow(hwnd, SW_RESTORE);
+        }
         BringWindowToTop(hwnd);
         SetForegroundWindow(hwnd);
 
