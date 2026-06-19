@@ -4,12 +4,15 @@
 //! ranked, budget-capped subset to feed the STT engine's vocabulary so project
 //! symbols (`calculateTotalRevenue`, `IndexerSettings`) transcribe correctly.
 //!
-//! This is the cheap MVP: a regex + frequency scan, no AST. Tree-sitter is a
-//! later accuracy upgrade. The biasing only helps Whisper; Parakeet exposes no
+//! Identifier extraction is AST-accurate via tree-sitter when the `treesitter`
+//! feature is on (skipping comments, strings, and keywords), and falls back to
+//! a regex scan otherwise. The biasing only helps Whisper; Parakeet exposes no
 //! biasing API.
 
 mod extract;
 mod rank;
+#[cfg(feature = "treesitter")]
+mod treesitter;
 
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
@@ -135,9 +138,27 @@ fn walk_into(
             continue;
         };
         let weight = rank::recency_weight(file_age_days(&meta, now));
-        acc.add_file(extract::extract_identifiers(&content), weight);
+        fold_identifiers(acc, entry.path(), &content, weight);
         *scanned += 1;
     }
+}
+
+/// Fold a file's identifiers into `acc`: AST-accurate via tree-sitter when the
+/// `treesitter` feature supports the language, otherwise the lexical scan.
+#[cfg_attr(not(feature = "treesitter"), allow(unused_variables))]
+fn fold_identifiers(acc: &mut rank::SymbolAccumulator, path: &Path, content: &str, weight: f64) {
+    #[cfg(feature = "treesitter")]
+    if let Some(ext) = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(str::to_lowercase)
+        && treesitter::supports(&ext)
+        && let Some(symbols) = treesitter::extract_symbols(content, &ext)
+    {
+        acc.add_file(symbols.iter().map(String::as_str), weight);
+        return;
+    }
+    acc.add_file(extract::extract_identifiers(content), weight);
 }
 
 /// Source extensions scanned by default. Exposed so a file watcher can decide

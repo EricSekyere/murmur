@@ -29,6 +29,7 @@ Voice-to-text desktop tool for developers. See `prd.md` for full requirements an
 | `stt`      | whisper-rs | No      | Requires cmake + libclang            |
 | `vad`      | ort        | No      | ONNX Runtime for Silero VAD          |
 | `indexer`  | ignore, regex | No   | Codebase-derived vocabulary (lexical scan) |
+| `treesitter` | tree-sitter + grammars | No | AST-accurate indexer extraction (needs a C compiler) |
 | `full`     | all above  | No      | Enables everything; needs native tools|
 
 ## Build Prerequisites
