@@ -120,8 +120,18 @@ fn parse_count(word: &str) -> Option<u32> {
 
 // ─── Filler Removal ──────────────────────────────────────────────────────────
 
-/// Single-word fillers (matched case-insensitively, whole-word only).
-const SINGLE_FILLERS: &[&str] = &["um", "uh", "uhh", "umm", "hmm", "er", "ah"];
+/// Canonical hesitation/filled-pause tokens, compared AFTER collapsing repeated
+/// letters ("ummm"→"um", "uhhh"→"uh", "hmm"→"hm", "mmm"→"m"). Matched
+/// whole-token only, so backchannel answers ("uh-huh", "mm-hm") — which are
+/// distinct tokens that don't reduce to one of these — survive.
+const HESITATIONS: &[&str] = &["um", "uh", "hm", "m", "er", "ah", "eh", "huh", "mhm"];
+
+/// Function words that, repeated back-to-back, are a stutter rather than
+/// meaning ("the the" → "the"). Excludes words that legitimately double
+/// ("had had", "that that", "no no", "very very").
+const STUTTER_WORDS: &[&str] = &[
+    "i", "the", "a", "an", "to", "and", "you", "it", "we", "of", "in", "on", "my", "is", "are",
+];
 
 /// Multi-word fillers removed unconditionally.
 const MULTI_FILLERS: &[&str] = &["you know", "i mean", "basically", "actually", "literally"];
@@ -139,11 +149,8 @@ fn remove_fillers(text: &str) -> String {
     // "like" only when preceded by comma or at sentence start
     result = remove_like_filler(&result);
 
-    for filler in SINGLE_FILLERS {
-        result = remove_word_ci(&result, filler);
-    }
-
-    result
+    result = remove_hesitations(&result);
+    collapse_stutters(&result)
 }
 
 /// Drop a leading "so" disfluency ("so, let's…" → "let's…"), only at the very
@@ -186,10 +193,68 @@ fn remove_disfluencies(text: &str) -> String {
     let mut result = remove_parenthetical_fillers(text, PROSE_MULTI_FILLERS);
     result = remove_leading_so(&result);
     result = remove_like_filler(&result);
-    for filler in SINGLE_FILLERS {
-        result = remove_word_ci(&result, filler);
+    result = remove_hesitations(&result);
+    collapse_stutters(&result)
+}
+
+/// Drop standalone hesitation/filled-pause tokens in one linear pass. Each
+/// whitespace token is normalized (surrounding punctuation stripped, repeated
+/// letters collapsed, lowercased) and dropped if it is a pure hesitation.
+/// Answers like "uh-huh" and words like "umbrella" are single tokens that don't
+/// reduce to a hesitation, so they are kept.
+fn remove_hesitations(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for token in text.split_whitespace() {
+        if is_hesitation(token) {
+            continue;
+        }
+        if !out.is_empty() {
+            out.push(' ');
+        }
+        out.push_str(token);
     }
-    result
+    out
+}
+
+fn is_hesitation(token: &str) -> bool {
+    let core = token.trim_matches(|c: char| !c.is_alphanumeric());
+    !core.is_empty() && HESITATIONS.contains(&collapse_repeats(core).to_ascii_lowercase().as_str())
+}
+
+/// Collapse runs of the same character to one ("uhhh"→"uh", "mmm"→"m"), so
+/// elongated hesitations match their canonical form.
+fn collapse_repeats(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut prev = None;
+    for c in s.chars() {
+        if Some(c) != prev {
+            out.push(c);
+            prev = Some(c);
+        }
+    }
+    out
+}
+
+/// Collapse a back-to-back stutter of the same function word ("I I I think" →
+/// "I think") in one linear pass. Only [`STUTTER_WORDS`] collapse, so emphatic
+/// repeats ("very very") are preserved.
+fn collapse_stutters(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut prev_key: Option<String> = None;
+    for token in text.split_whitespace() {
+        let key = token
+            .trim_matches(|c: char| !c.is_alphanumeric())
+            .to_ascii_lowercase();
+        if prev_key.as_deref() == Some(key.as_str()) && STUTTER_WORDS.contains(&key.as_str()) {
+            continue;
+        }
+        if !out.is_empty() {
+            out.push(' ');
+        }
+        out.push_str(token);
+        prev_key = Some(key);
+    }
+    out
 }
 
 /// Remove a multi-word filler only when it is a stand-alone, comma-bracketed
@@ -262,11 +327,6 @@ fn remove_phrase_ci(text: &str, phrase: &str) -> String {
     }
 
     result
-}
-
-/// Remove a single word (case-insensitive, whole-word boundaries).
-fn remove_word_ci(text: &str, word: &str) -> String {
-    remove_phrase_ci(text, word)
 }
 
 /// Remove "like" only when preceded by a comma or at the start of a sentence.
@@ -919,6 +979,39 @@ mod tests {
         assert_eq!(
             PostProcessor::process_prose("I mean it when I say that"),
             "I mean it when I say that"
+        );
+    }
+
+    #[test]
+    fn hesitation_variants_elongation_and_backchannels() {
+        // New variants + elongation are removed.
+        assert_eq!(
+            PostProcessor::process_prose("ummm I think uh it works"),
+            "I think it works"
+        );
+        assert_eq!(PostProcessor::process_prose("mm yeah eh okay"), "yeah okay");
+        // Real words that merely start with a hesitation are kept.
+        assert_eq!(
+            PostProcessor::process_prose("the umbrella is huge"),
+            "the umbrella is huge"
+        );
+        // Backchannel answers (yes/no) are kept, not split into a stray "uh".
+        assert_eq!(
+            PostProcessor::process_prose("uh-huh that works"),
+            "uh-huh that works"
+        );
+    }
+
+    #[test]
+    fn collapses_function_word_stutters_keeps_emphasis() {
+        assert_eq!(
+            PostProcessor::process_prose("I I I think the the answer"),
+            "I think the answer"
+        );
+        // Emphatic / legitimate repeats are preserved.
+        assert_eq!(
+            PostProcessor::process_prose("it is very very important"),
+            "it is very very important"
         );
     }
 
