@@ -181,16 +181,39 @@ const PROSE_MULTI_FILLERS: &[&str] = &["you know", "i mean"];
 /// Prose-safe filler removal: clear verbal disfluencies only, keeping words
 /// that are meaningful outside dictating code.
 fn remove_disfluencies(text: &str) -> String {
-    let mut result = text.to_string();
-    for filler in PROSE_MULTI_FILLERS {
-        result = remove_phrase_ci(&result, filler);
-    }
+    // "you know" / "i mean" are only dropped when they stand alone as a
+    // comma-bracketed aside, so a meaningful "do you know the answer" survives.
+    let mut result = remove_parenthetical_fillers(text, PROSE_MULTI_FILLERS);
     result = remove_leading_so(&result);
     result = remove_like_filler(&result);
     for filler in SINGLE_FILLERS {
         result = remove_word_ci(&result, filler);
     }
     result
+}
+
+/// Remove a multi-word filler only when it is a stand-alone, comma-bracketed
+/// aside ("I think, you know, it's fine" → "I think, it's fine"). A
+/// grammatically integrated use ("do you know the answer") is never a lone
+/// comma segment, so it is left untouched. Requires the model to have
+/// punctuated the aside, which it reliably does for a spoken pause.
+fn remove_parenthetical_fillers(text: &str, fillers: &[&str]) -> String {
+    if !text.contains(',') {
+        return text.to_string();
+    }
+    let segments: Vec<&str> = text.split(',').collect();
+    let kept: Vec<&str> = segments
+        .iter()
+        .copied()
+        .filter(|seg| {
+            let norm = seg.trim().to_ascii_lowercase();
+            !fillers.contains(&norm.as_str())
+        })
+        .collect();
+    if kept.len() == segments.len() {
+        return text.to_string();
+    }
+    kept.iter().map(|s| s.trim()).collect::<Vec<_>>().join(", ")
 }
 
 /// Push the UTF-8 character starting at byte `i` (a char boundary) onto
@@ -886,6 +909,16 @@ mod tests {
         assert!(
             kept.contains("actually") && kept.contains("literally"),
             "{kept:?}"
+        );
+        // "you know" used meaningfully (not a comma-bracketed aside) is kept.
+        assert_eq!(
+            PostProcessor::process_prose("do you know the answer"),
+            "do you know the answer"
+        );
+        // "i mean" as a real clause is kept; as a parenthetical it's dropped.
+        assert_eq!(
+            PostProcessor::process_prose("I mean it when I say that"),
+            "I mean it when I say that"
         );
     }
 
