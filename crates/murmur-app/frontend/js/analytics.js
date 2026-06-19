@@ -184,11 +184,48 @@ listen('transcription-diagnostic', (event) => {
   }
 });
 
+// All-time usage stats, derived on the backend from the local history log.
+async function renderUsageStats() {
+  let stats;
+  try {
+    stats = await invoke('get_usage_stats');
+  } catch (err) {
+    return; // history may be empty or unreadable; leave the zeros
+  }
+  const set = (id, val) => {
+    const el = document.getElementById(id);
+    if (el) el.textContent = val;
+  };
+  set('usage-total-words', formatNumber(stats.total_words || 0));
+  set('usage-week-words', formatNumber(stats.words_this_week || 0));
+  set('usage-streak', String(stats.day_streak || 0));
+  set('usage-phrases', formatNumber(stats.total_phrases || 0));
+
+  const list = document.getElementById('usage-top-apps');
+  if (!list) return;
+  list.innerHTML = '';
+  (stats.top_apps || []).forEach((a) => {
+    const li = document.createElement('li');
+    li.className = 'usage-apps__item';
+    const name = document.createElement('span');
+    name.className = 'usage-apps__name';
+    name.textContent = a.app;
+    const count = document.createElement('span');
+    count.className = 'usage-apps__count';
+    count.textContent = `${formatNumber(a.phrases)} phrase${a.phrases === 1 ? '' : 's'}`;
+    li.append(name, count);
+    list.appendChild(li);
+  });
+}
+
 analyticsToggle.addEventListener('click', () => {
   const expanded = analyticsToggle.getAttribute('aria-expanded') === 'true';
   analyticsToggle.setAttribute('aria-expanded', String(!expanded));
   analyticsPanel.hidden = expanded;
-  if (!expanded) renderAnalytics();
+  if (!expanded) {
+    renderAnalytics();
+    renderUsageStats();
+  }
 });
 
 diagnosticsToggle.addEventListener('click', () => {

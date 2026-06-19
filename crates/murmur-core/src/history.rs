@@ -3,12 +3,38 @@
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
+use std::collections::{BTreeSet, HashMap};
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Hard cap on stored entries. Older phrases are dropped past this; the log is
 /// a convenience, not an archive.
 const MAX_ENTRIES: usize = 500;
+
+const MS_PER_DAY: u64 = 86_400_000;
+
+/// Per-application usage tally.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct AppUsage {
+    pub app: String,
+    pub phrases: usize,
+    pub words: usize,
+}
+
+/// On-device usage stats derived entirely from the local history log.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct UsageStats {
+    pub total_phrases: usize,
+    pub total_words: usize,
+    pub words_this_week: usize,
+    /// Consecutive days with at least one phrase, ending today (or yesterday if
+    /// nothing yet today, so the streak isn't "lost" before the day is over).
+    pub day_streak: u32,
+    /// Top apps by phrase count (max 5).
+    pub top_apps: Vec<AppUsage>,
+    /// Phrases per weekday, index 0 = Sunday.
+    pub by_weekday: [usize; 7],
+}
 
 /// One delivered phrase.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -88,6 +114,72 @@ impl History {
         self.entries.clear();
     }
 
+    /// Aggregate the stored history into usage stats. `now_ms` is passed in so
+    /// the computation stays clock-free here. All UTC-day based, which can be
+    /// off by a day from local time near midnight — fine for a usage summary.
+    pub fn stats(&self, now_ms: u64) -> UsageStats {
+        let week_ago = now_ms.saturating_sub(7 * MS_PER_DAY);
+        let today = now_ms / MS_PER_DAY;
+
+        let mut total_words = 0usize;
+        let mut words_this_week = 0usize;
+        let mut by_weekday = [0usize; 7];
+        let mut active_days: BTreeSet<u64> = BTreeSet::new();
+        let mut per_app: HashMap<&str, (usize, usize)> = HashMap::new();
+
+        for e in &self.entries {
+            let words = e.text.split_whitespace().count();
+            total_words += words;
+            if e.timestamp_ms >= week_ago {
+                words_this_week += words;
+            }
+            let day = e.timestamp_ms / MS_PER_DAY;
+            active_days.insert(day);
+            // 1970-01-01 was a Thursday → index 4 with Sunday = 0.
+            by_weekday[(((day % 7) + 4) % 7) as usize] += 1;
+            if let Some(app) = e.app.as_deref() {
+                let slot = per_app.entry(app).or_default();
+                slot.0 += 1;
+                slot.1 += words;
+            }
+        }
+
+        // Streak: count back from today (or yesterday if today is still empty).
+        let mut day_streak = 0u32;
+        let mut d = if active_days.contains(&today) {
+            today
+        } else {
+            today.saturating_sub(1)
+        };
+        while active_days.contains(&d) {
+            day_streak += 1;
+            if d == 0 {
+                break;
+            }
+            d -= 1;
+        }
+
+        let mut top_apps: Vec<AppUsage> = per_app
+            .into_iter()
+            .map(|(app, (phrases, words))| AppUsage {
+                app: app.to_string(),
+                phrases,
+                words,
+            })
+            .collect();
+        top_apps.sort_by(|a, b| b.phrases.cmp(&a.phrases).then(b.words.cmp(&a.words)));
+        top_apps.truncate(5);
+
+        UsageStats {
+            total_phrases: self.entries.len(),
+            total_words,
+            words_this_week,
+            day_streak,
+            top_apps,
+            by_weekday,
+        }
+    }
+
     /// Atomic save: write to a sibling tempfile, then rename.
     pub fn save(&self, path: &PathBuf) -> Result<()> {
         if let Some(parent) = path.parent() {
@@ -133,5 +225,31 @@ mod tests {
         assert_eq!(hits[0].text, "Deploy the server");
         assert_eq!(h.search("", 10).len(), 2);
         assert_eq!(h.search("nonsense", 10).len(), 0);
+    }
+
+    #[test]
+    fn stats_aggregate_words_apps_and_streak() {
+        let day = MS_PER_DAY;
+        let now = 100 * day + 5_000;
+        let mut h = History::default();
+        let push = |h: &mut History, text: &str, ts: u64, app: Option<&str>| {
+            h.entries.push(HistoryEntry {
+                text: text.to_string(),
+                timestamp_ms: ts,
+                app: app.map(str::to_string),
+            });
+        };
+        push(&mut h, "hello world", now - 1_000, Some("warp.exe")); // today
+        push(&mut h, "three little words", now - 2_000, Some("warp.exe")); // today
+        push(&mut h, "one", now - day, Some("chrome.exe")); // yesterday
+        push(&mut h, "old phrase here", now - 10 * day, None); // outside the week
+
+        let s = h.stats(now);
+        assert_eq!(s.total_phrases, 4);
+        assert_eq!(s.total_words, 2 + 3 + 1 + 3);
+        assert_eq!(s.words_this_week, 2 + 3 + 1);
+        assert_eq!(s.day_streak, 2); // today + yesterday, broken before that
+        assert_eq!(s.top_apps[0].app, "warp.exe");
+        assert_eq!(s.top_apps[0].phrases, 2);
     }
 }

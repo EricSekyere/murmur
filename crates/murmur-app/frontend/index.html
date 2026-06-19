@@ -195,6 +195,28 @@
             </button>
             <div id="analytics-panel" class="analytics-panel" hidden>
               <div class="analytics-group">
+                <h3 class="analytics-group__title">Usage (all time)</h3>
+                <div class="analytics-grid">
+                  <div class="stat-card">
+                    <span class="stat-card__value" id="usage-total-words">0</span>
+                    <span class="stat-card__label">Words</span>
+                  </div>
+                  <div class="stat-card">
+                    <span class="stat-card__value" id="usage-week-words">0</span>
+                    <span class="stat-card__label">This week</span>
+                  </div>
+                  <div class="stat-card">
+                    <span class="stat-card__value" id="usage-streak">0</span>
+                    <span class="stat-card__label">Day streak</span>
+                  </div>
+                  <div class="stat-card">
+                    <span class="stat-card__value" id="usage-phrases">0</span>
+                    <span class="stat-card__label">Phrases</span>
+                  </div>
+                </div>
+                <ul class="usage-apps" id="usage-top-apps" aria-label="Top applications"></ul>
+              </div>
+              <div class="analytics-group">
                 <h3 class="analytics-group__title">Last Session</h3>
                 <div class="analytics-grid">
                   <div class="stat-card">

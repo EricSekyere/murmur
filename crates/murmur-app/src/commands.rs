@@ -694,3 +694,17 @@ pub(crate) fn set_widget_visible(
 pub(crate) fn mcp_install() -> Result<murmur_mcp::InstallReport, String> {
     murmur_mcp::install(None).map_err(|e| e.to_string())
 }
+
+/// On-device usage stats (words, top apps, streak) derived from local history.
+#[tauri::command]
+pub(crate) fn get_usage_stats(state: State<'_, AppState>) -> murmur_core::history::UsageStats {
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    state
+        .history
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .stats(now_ms)
+}

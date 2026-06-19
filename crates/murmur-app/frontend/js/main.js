@@ -25,6 +25,7 @@ if (findPillBtn) {
 async function init() {
   createVoiceBars();
   renderAnalytics();
+  renderUsageStats();
   renderDiagnostics();
   try {
     const status = await invoke('get_status');
