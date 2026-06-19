@@ -4,6 +4,7 @@
 //! nothing leaves the machine. The server never mutates the history log.
 
 use anyhow::Result;
+use murmur_core::config::Settings;
 use murmur_core::history::{History, HistoryEntry};
 use rmcp::{
     ErrorData as McpError, ServerHandler, ServiceExt,
@@ -103,6 +104,11 @@ impl ServerHandler for MurmurMcp {
 /// Load the history log and return up to `limit` (clamped) entries matching
 /// `query` as a pretty JSON array.
 fn history_json(query: &str, limit: Option<usize>) -> Result<CallToolResult, McpError> {
+    // Respect the history opt-out: expose nothing when the user has disabled
+    // saving history, even if a log file remains on disk from before.
+    if !history_enabled() {
+        return Ok(CallToolResult::success(vec![Content::text("[]")]));
+    }
     let limit = limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT);
     let path = History::default_path()
         .map_err(|e| McpError::internal_error(format!("history path: {e}"), None))?;
@@ -114,6 +120,16 @@ fn history_json(query: &str, limit: Option<usize>) -> Result<CallToolResult, Mcp
     let json = serde_json::to_string_pretty(&entries)
         .map_err(|e| McpError::internal_error(format!("serialize: {e}"), None))?;
     Ok(CallToolResult::success(vec![Content::text(json)]))
+}
+
+/// Whether the user currently allows storing transcription history. Defaults to
+/// enabled if settings can't be read, since the history file is the source of
+/// truth and the app purges it when the user opts out.
+fn history_enabled() -> bool {
+    Settings::default_path()
+        .and_then(|path| Settings::load(&path))
+        .map(|s| s.save_history)
+        .unwrap_or(true)
 }
 
 /// Serve the MCP protocol over stdio until the client disconnects. The protocol

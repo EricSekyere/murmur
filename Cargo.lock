@@ -3192,6 +3192,7 @@ dependencies = [
  "rmcp",
  "serde",
  "serde_json",
+ "tempfile",
  "tracing",
 ]
 

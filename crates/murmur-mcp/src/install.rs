@@ -122,8 +122,14 @@ fn detected(path: &Path) -> bool {
 /// file is an error so we never clobber something we can't safely merge.
 fn read_json(path: &Path) -> Result<Value> {
     match std::fs::read_to_string(path) {
-        Ok(s) if !s.trim().is_empty() => serde_json::from_str(&s)
-            .with_context(|| format!("{} is not valid JSON; leaving it untouched", path.display())),
+        // Strip a UTF-8 BOM (Windows Notepad writes one) so an otherwise-valid
+        // config doesn't fail to parse on an invisible leading byte sequence.
+        Ok(s) if !s.trim().is_empty() => {
+            let s = s.strip_prefix('\u{feff}').unwrap_or(&s);
+            serde_json::from_str(s).with_context(|| {
+                format!("{} is not valid JSON; leaving it untouched", path.display())
+            })
+        }
         Ok(_) => Ok(json!({})),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(json!({})),
         Err(e) => Err(e).with_context(|| format!("reading {}", path.display())),
@@ -197,5 +203,16 @@ mod tests {
     #[test]
     fn upsert_rejects_non_object_servers() {
         assert!(upsert_server(json!({ "mcpServers": "nope" }), "murmur", "x").is_err());
+    }
+
+    #[test]
+    fn read_json_tolerates_utf8_bom() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("mcp.json");
+        // A BOM-prefixed but otherwise valid config (Notepad's default) must
+        // parse, not be treated as corrupt and left untouched.
+        std::fs::write(&path, "\u{feff}{\"mcpServers\":{\"other\":{}}}").unwrap();
+        let value = read_json(&path).expect("BOM-prefixed JSON should parse");
+        assert!(value["mcpServers"]["other"].is_object());
     }
 }

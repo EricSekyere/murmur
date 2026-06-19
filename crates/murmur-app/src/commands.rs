@@ -473,6 +473,16 @@ pub(crate) fn update_settings(
         );
     }
     if let Some(sh) = save_history {
+        // Turning history off purges what is already stored, so nothing lingers
+        // on disk or stays readable through the MCP server. (settings → history
+        // lock order matches record_history.)
+        if !sh && settings.save_history {
+            let mut history = state.history.lock().unwrap_or_else(|e| e.into_inner());
+            history.clear();
+            if let Err(e) = history.save(&state.history_path) {
+                tracing::warn!("Failed to purge history on opt-out: {}", e);
+            }
+        }
         settings.save_history = sh;
     }
 

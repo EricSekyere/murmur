@@ -90,7 +90,14 @@ pub fn run() -> anyhow::Result<()> {
         // instance and exits, so two copies can never run at once. Multiple
         // instances would double-capture audio and race on the clipboard
         // during clipboard+paste output (corrupting what gets pasted).
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+        .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
+            // An `mcp` launch is an editor spawning the stdio server; the normal
+            // `main()` branch handles it before Tauri inits, but guard here too
+            // so a stale/downgraded config that reaches the GUI never yanks the
+            // window to the front on every editor connect.
+            if args.iter().any(|a| a == "mcp") {
+                return;
+            }
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.show();
                 let _ = window.unminimize();
@@ -112,6 +119,8 @@ pub fn run() -> anyhow::Result<()> {
             engine,
             engine_loaded: std::sync::atomic::AtomicBool::new(false),
             recording: Mutex::new(false),
+            session_generation: std::sync::atomic::AtomicU64::new(0),
+            streaming_worker: Mutex::new(None),
             settings: Mutex::new(settings),
             last_toggle: Mutex::new(Instant::now() - Duration::from_secs(10)),
             session_prev_text: Mutex::new(String::new()),
@@ -127,6 +136,8 @@ pub fn run() -> anyhow::Result<()> {
             suppress_output: std::sync::atomic::AtomicBool::new(false),
             project_vocab: Mutex::new(Vec::new()),
             codebase_watcher: Mutex::new(None),
+            indexing: std::sync::atomic::AtomicBool::new(false),
+            index_pending: std::sync::atomic::AtomicBool::new(false),
         })
         .on_window_event(|window, event| {
             // Hide the main window on close so the tray can re-show it.
@@ -250,6 +261,54 @@ fn setup_app(
 /// indexer is disabled or no project root is set. Safe to call again (e.g.
 /// after a settings change) — it overwrites the cached result.
 pub(crate) fn spawn_project_index(app: tauri::AppHandle) {
+    use std::sync::atomic::Ordering;
+
+    {
+        let state = app.state::<AppState>();
+        let settings = state.settings.lock().unwrap_or_else(|e| e.into_inner());
+        if !settings.indexer.enabled || settings.indexer.project_roots.is_empty() {
+            return;
+        }
+    }
+
+    // Coalesce: if a scan is already running, flag that another is needed and
+    // let the running one pick it up, instead of stacking concurrent full scans
+    // (a burst of file-watcher events over a large tree would otherwise spawn an
+    // unbounded number of indexing threads).
+    {
+        let state = app.state::<AppState>();
+        if state.indexing.swap(true, Ordering::AcqRel) {
+            state.index_pending.store(true, Ordering::Release);
+            return;
+        }
+    }
+
+    std::thread::spawn(move || {
+        loop {
+            run_one_index(&app);
+
+            // A change that arrived during the scan set `index_pending`; run once
+            // more for it. The re-check after releasing `indexing` re-claims a
+            // change that landed in the tiny window between the swap and store.
+            let state = app.state::<AppState>();
+            if state.index_pending.swap(false, Ordering::AcqRel) {
+                continue;
+            }
+            state.indexing.store(false, Ordering::Release);
+            if !state.index_pending.load(Ordering::Acquire) {
+                break;
+            }
+            if state.indexing.swap(true, Ordering::AcqRel) {
+                break; // another invocation re-claimed it
+            }
+        }
+    });
+}
+
+/// One project-index pass: read the current roots, scan, and publish the result.
+fn run_one_index(app: &tauri::AppHandle) {
+    use murmur_core::indexer::{IndexConfig, index_projects};
+
     let (enabled, roots, max_symbols, extensions) = {
         let state = app.state::<AppState>();
         let settings = state.settings.lock().unwrap_or_else(|e| e.into_inner());
@@ -265,40 +324,37 @@ pub(crate) fn spawn_project_index(app: tauri::AppHandle) {
         return;
     }
 
-    std::thread::spawn(move || {
-        use murmur_core::indexer::{IndexConfig, index_projects};
-        let cfg = IndexConfig {
-            max_symbols,
-            extensions,
-            ..IndexConfig::default()
-        };
-        match index_projects(&roots, &cfg) {
-            Ok(symbols) => {
-                let count = symbols.len();
-                tracing::info!(
-                    "Codebase index: {} symbols from {} folder(s)",
-                    count,
-                    roots.len()
-                );
-                let state = app.state::<AppState>();
-                *state
-                    .project_vocab
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner()) = symbols;
-                let _ = app.emit(
-                    "codebase-index",
-                    serde_json::json!({ "count": count, "enabled": true }),
-                );
-            }
-            Err(e) => {
-                tracing::warn!("Codebase index failed: {:#}", e);
-                let _ = app.emit(
-                    "codebase-index",
-                    serde_json::json!({ "count": 0, "enabled": true, "error": e.to_string() }),
-                );
-            }
+    let cfg = IndexConfig {
+        max_symbols,
+        extensions,
+        ..IndexConfig::default()
+    };
+    match index_projects(&roots, &cfg) {
+        Ok(symbols) => {
+            let count = symbols.len();
+            tracing::info!(
+                "Codebase index: {} symbols from {} folder(s)",
+                count,
+                roots.len()
+            );
+            let state = app.state::<AppState>();
+            *state
+                .project_vocab
+                .lock()
+                .unwrap_or_else(|e| e.into_inner()) = symbols;
+            let _ = app.emit(
+                "codebase-index",
+                serde_json::json!({ "count": count, "enabled": true }),
+            );
         }
-    });
+        Err(e) => {
+            tracing::warn!("Codebase index failed: {:#}", e);
+            let _ = app.emit(
+                "codebase-index",
+                serde_json::json!({ "count": 0, "enabled": true, "error": e.to_string() }),
+            );
+        }
+    }
 }
 
 fn build_tray(app: &mut tauri::App) -> tauri::Result<()> {

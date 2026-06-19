@@ -1,4 +1,7 @@
-use std::sync::{Arc, Mutex, OnceLock, atomic::AtomicBool};
+use std::sync::{
+    Arc, Mutex, OnceLock,
+    atomic::{AtomicBool, AtomicU64},
+};
 use std::time::Instant;
 
 use murmur_core::config::Settings;
@@ -15,6 +18,15 @@ pub(crate) struct AppState {
     /// mutex, which transcription holds for the duration of an inference.
     pub engine_loaded: AtomicBool,
     pub recording: Mutex<bool>,
+    /// Monotonic id bumped under the `recording` lock each time a session
+    /// starts. A streaming worker captures its id and only mutates the shared
+    /// recording/UI state while it still matches — so a worker whose session
+    /// has been superseded (rapid stop/start) can't stomp the live one.
+    pub session_generation: AtomicU64,
+    /// Join handle of the most recent streaming worker. A new worker joins it
+    /// before touching the audio result channel, so two workers never consume
+    /// that single channel at once (which would split or drop phrases).
+    pub streaming_worker: Mutex<Option<std::thread::JoinHandle<()>>>,
     pub settings: Mutex<Settings>,
     pub last_toggle: Mutex<Instant>,
     /// Trailing text of the running session transcript, fed to whisper as
@@ -55,6 +67,12 @@ pub(crate) struct AppState {
     /// watching.
     pub codebase_watcher:
         Mutex<Option<notify_debouncer_mini::Debouncer<notify::RecommendedWatcher>>>,
+    /// True while a background project index is running, so a burst of file
+    /// changes coalesces into one re-scan instead of stacking concurrent scans.
+    pub indexing: AtomicBool,
+    /// Set when a change arrives mid-scan; the running scan picks it up and
+    /// re-runs once instead of being lost.
+    pub index_pending: AtomicBool,
 }
 
 #[derive(serde::Serialize, Clone)]

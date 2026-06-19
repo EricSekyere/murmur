@@ -97,12 +97,12 @@ impl Handle {
     /// Queue a StartStreaming command. Non-blocking; called synchronously
     /// from the toggle handler so the command channel's FIFO ordering
     /// guarantees a later Stop toggle can never overtake the start.
+    ///
+    /// We do NOT drain the result channel here: a new streaming worker first
+    /// joins the prior one (see `spawn_streaming_worker`), so the prior session
+    /// has already consumed its own results — including its final `PhraseReady`.
+    /// Draining here would race that and discard the user's last phrase.
     pub fn send_start(&self, params: StartParams) -> Result<(), String> {
-        // Drain stale results so they cannot race the next handshake.
-        if let Ok(rx) = self.result_rx.lock() {
-            while rx.try_recv().is_ok() {}
-        }
-
         self.cmd_tx
             .send(Cmd::StartStreaming(params))
             .map_err(|e| format!("Audio worker channel closed: {}", e))
