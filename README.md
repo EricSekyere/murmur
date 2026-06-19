@@ -68,8 +68,8 @@ Capture, phrase detection, and inference run on dedicated threads connected by c
 
 ## Privacy
 
-Everything runs locally. The only network access is the one-time, checksum-verified download of model files. Audio and transcripts never leave your machine.
+Everything runs locally. The only network access is the one-time, checksum-verified download of model files, plus update checks against GitHub Releases. Audio and transcripts never leave your machine. See the full [Privacy Policy](PRIVACY.md).
 
-## License
+## License & terms
 
-[MIT](LICENSE)
+[MIT](LICENSE). Use of the app is also covered by the [Terms of Use](TERMS.md).
