@@ -33,6 +33,37 @@ use tauri_plugin_global_shortcut::GlobalShortcutExt;
 
 use state::AppState;
 
+/// Run as a stdio MCP server (`murmur-app mcp`), which is what Claude / Cursor
+/// spawn after the in-app "Connect to editor" button writes their config. Talks
+/// JSON-RPC over stdin/stdout and never starts the GUI; the protocol owns
+/// stdout, so the only diagnostics go to stderr. Returns a process exit code.
+pub fn run_mcp() -> i32 {
+    // A fresh stderr subscriber: file logging isn't set up in this mode, and
+    // stdout must stay pure JSON-RPC.
+    let _ = tracing_subscriber::fmt()
+        .with_writer(std::io::stderr)
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("warn")),
+        )
+        .try_init();
+
+    let runtime = match tokio::runtime::Runtime::new() {
+        Ok(rt) => rt,
+        Err(e) => {
+            tracing::error!("Failed to start MCP runtime: {e}");
+            return 1;
+        }
+    };
+    match runtime.block_on(murmur_mcp::serve()) {
+        Ok(()) => 0,
+        Err(e) => {
+            tracing::error!("MCP server error: {e}");
+            1
+        }
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() -> anyhow::Result<()> {
     // Migrate the legacy config directory before logging runs: init_logging
@@ -126,6 +157,7 @@ pub fn run() -> anyhow::Result<()> {
             commands::pick_project_folder,
             commands::set_codebase_vocabulary,
             commands::mark_whats_new_seen,
+            commands::mcp_install,
             updater::install_update,
         ])
         .setup(move |app| setup_app(app, engine_for_setup, model, &hotkey, show_widget_on_start))

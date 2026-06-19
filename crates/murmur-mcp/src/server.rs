@@ -1,10 +1,7 @@
-//! `murmur mcp`: a stdio Model Context Protocol server exposing Murmur's local
-//! transcription history to MCP clients (Claude Desktop, Cursor). The client
-//! spawns this process and speaks JSON-RPC over stdin/stdout, so nothing leaves
-//! the machine. The server is read-only: it never mutates the history log.
-//!
-//! Wire it up by adding to the client's MCP config, e.g. for Claude Desktop:
-//! `{ "mcpServers": { "murmur": { "command": "murmur", "args": ["mcp"] } } }`.
+//! Stdio MCP server exposing Murmur's local transcription history through two
+//! read-only tools: `get_recent_transcripts` and `search_transcripts`. The
+//! client spawns the host process and speaks JSON-RPC over stdin/stdout, so
+//! nothing leaves the machine. The server never mutates the history log.
 
 use anyhow::Result;
 use murmur_core::history::{History, HistoryEntry};
@@ -120,8 +117,8 @@ fn history_json(query: &str, limit: Option<usize>) -> Result<CallToolResult, Mcp
 }
 
 /// Serve the MCP protocol over stdio until the client disconnects. The protocol
-/// owns stdout, so diagnostics must go to stderr (set up by the caller).
-pub async fn run() -> Result<()> {
+/// owns stdout, so the host must keep diagnostics on stderr.
+pub async fn serve() -> Result<()> {
     let service = MurmurMcp::new()
         .serve(stdio())
         .await

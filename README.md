@@ -42,15 +42,17 @@ Each phrase is transcribed when you pause and typed into the active window; stop
 
 ## Editor integration (MCP)
 
-Murmur ships an MCP server so Claude and Cursor can read your recent dictation. One command wires it up:
+Let Claude and Cursor read your recent dictation through Murmur's built-in MCP server. Two read-only tools become available: `get_recent_transcripts` and `search_transcripts`. Everything stays local: the editor spawns Murmur and talks to it over stdin/stdout, no network.
+
+**Desktop app:** Settings → Connect to Cursor / Claude → Connect editors. It writes the server into every detected editor's config; restart the editor to finish.
+
+**CLI:**
 
 ```sh
-murmur mcp install          # configure every detected client (Cursor, Claude Desktop)
-murmur mcp install --client cursor
+murmur mcp install                    # configure every detected client (Cursor, Claude Desktop)
+murmur mcp install --client cursor    # just one
 claude mcp add murmur -- murmur mcp   # Claude Code
 ```
-
-It writes the server (pointing at your `murmur` binary) into the client's config, then restart the client. Two read-only tools become available: `get_recent_transcripts` and `search_transcripts`. Everything stays local — the client spawns `murmur mcp` and talks to it over stdin/stdout, no network.
 
 ## Building from source
 

@@ -671,3 +671,11 @@ pub(crate) fn set_widget_visible(
     save_settings(&settings);
     Ok(())
 }
+
+/// Wire Murmur into detected MCP clients (Cursor, Claude Desktop) so Claude and
+/// Cursor can read the transcription history. The written config points at this
+/// app binary, which serves MCP when relaunched as `murmur-app mcp`.
+#[tauri::command]
+pub(crate) fn mcp_install() -> Result<murmur_mcp::InstallReport, String> {
+    murmur_mcp::install(None).map_err(|e| e.to_string())
+}

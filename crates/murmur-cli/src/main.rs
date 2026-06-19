@@ -1,6 +1,3 @@
-mod mcp;
-mod mcp_install;
-
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use cpal::SampleFormat;
@@ -107,8 +104,25 @@ enum McpAction {
     Install {
         /// Configure only this client (default: every detected client).
         #[arg(long)]
-        client: Option<mcp_install::ClientKind>,
+        client: Option<ClientArg>,
     },
+}
+
+/// CLI surface for [`murmur_mcp::ClientKind`], kept here so the clap derive
+/// stays out of the shared crate.
+#[derive(Clone, Copy, clap::ValueEnum)]
+enum ClientArg {
+    Cursor,
+    ClaudeDesktop,
+}
+
+impl From<ClientArg> for murmur_mcp::ClientKind {
+    fn from(arg: ClientArg) -> Self {
+        match arg {
+            ClientArg::Cursor => murmur_mcp::ClientKind::Cursor,
+            ClientArg::ClaudeDesktop => murmur_mcp::ClientKind::ClaudeDesktop,
+        }
+    }
 }
 
 #[tokio::main]
@@ -145,11 +159,39 @@ async fn main() -> Result<()> {
         } => cmd_audio_test(device, all, seconds)?,
         Commands::Index { path, max } => cmd_index(path, max)?,
         Commands::Mcp { action } => match action {
-            None | Some(McpAction::Serve) => mcp::run().await?,
-            Some(McpAction::Install { client }) => mcp_install::install(client)?,
+            None | Some(McpAction::Serve) => murmur_mcp::serve().await?,
+            Some(McpAction::Install { client }) => cmd_mcp_install(client.map(Into::into))?,
         },
     }
 
+    Ok(())
+}
+
+/// Configure MCP clients and print a short, actionable report.
+fn cmd_mcp_install(client: Option<murmur_mcp::ClientKind>) -> Result<()> {
+    let report = murmur_mcp::install(client)?;
+
+    for c in &report.configured {
+        println!("- Configured {}: {}", c.client, c.path);
+    }
+    for label in &report.skipped {
+        println!("- {label} not detected, skipped (use `--client` to configure it anyway).");
+    }
+
+    if report.configured.is_empty() {
+        println!("No MCP clients were configured.");
+    } else {
+        println!();
+        println!("Restart the client (or toggle the server in its MCP settings) to load it.");
+        println!(
+            "Murmur then exposes your transcription history as the get_recent_transcripts and \
+             search_transcripts tools."
+        );
+    }
+
+    println!();
+    println!("For Claude Code, run:");
+    println!("  {}", report.claude_code_command);
     Ok(())
 }
 

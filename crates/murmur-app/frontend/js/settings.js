@@ -173,6 +173,34 @@ codebaseVocabFolder.addEventListener('click', async () => {
   }
 });
 
+mcpInstallBtn.addEventListener('click', async () => {
+  const previous = mcpInstallBtn.textContent;
+  mcpInstallBtn.disabled = true;
+  mcpInstallBtn.textContent = 'Connecting…';
+  try {
+    const report = await invoke('mcp_install');
+    const configured = report.configured || [];
+    const skipped = report.skipped || [];
+    if (configured.length === 0) {
+      mcpInstallStatus.textContent = skipped.length
+        ? `No editor detected (${skipped.join(', ')}). Open Cursor or Claude Desktop first, then try again.`
+        : 'No editor detected.';
+      showToast('No MCP editor detected', 'error');
+    } else {
+      const names = configured.map((c) => c.client).join(', ');
+      mcpInstallStatus.textContent =
+        `Connected ${names}. Restart ${configured.length === 1 ? 'it' : 'them'} to load Murmur's tools.`;
+      showToast(`Connected ${names}`, 'success');
+    }
+  } catch (err) {
+    mcpInstallStatus.textContent = `Failed: ${err}`;
+    showToast(`Failed: ${err}`, 'error');
+  } finally {
+    mcpInstallBtn.disabled = false;
+    mcpInstallBtn.textContent = previous;
+  }
+});
+
 // Backend reports the indexed symbol count when a scan finishes.
 listen('codebase-index', (event) => {
   updateCodebaseVocabStatus((event.payload || {}).count || 0);
