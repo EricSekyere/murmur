@@ -268,6 +268,9 @@
               </svg>
             </button>
             <div id="settings-panel" class="settings-panel" hidden>
+              <div class="settings-actions">
+                <button id="whats-new-btn" class="btn-small">What's New</button>
+              </div>
               <!-- Hotkey -->
               <div class="settings-group">
                 <div class="settings-row">
@@ -524,6 +527,37 @@
                 </div>
               </div>
 
+              <!-- Codebase Vocabulary -->
+              <div class="settings-group">
+                <div class="settings-row">
+                  <div class="settings-row__text">
+                    <label class="settings-label" for="codebase-vocab-toggle">Codebase Vocabulary</label>
+                    <span class="settings-hint">Scan your project folders and bias transcription toward their identifiers, so symbols like calculateTotalRevenue transcribe correctly. Re-indexes automatically when files change. Whisper models only.</span>
+                  </div>
+                  <label class="toggle-switch">
+                    <input type="checkbox" id="codebase-vocab-toggle">
+                    <span class="toggle-switch__slider"></span>
+                  </label>
+                </div>
+                <div id="codebase-vocab-list" class="folder-list"></div>
+                <div class="settings-actions">
+                  <button id="codebase-vocab-folder" class="btn-small">Add Folder…</button>
+                </div>
+                <span class="settings-hint" id="codebase-vocab-status">No project folders selected.</span>
+              </div>
+
+              <!-- Editor integration (MCP) -->
+              <div class="settings-group">
+                <div class="settings-row__text">
+                  <label class="settings-label">Connect to Cursor / Claude</label>
+                  <span class="settings-hint">Let Claude and Cursor read your recent dictation through Murmur's built-in MCP server. One click adds it to any installed editor; restart the editor afterward to finish. Everything stays on your machine.</span>
+                </div>
+                <div class="settings-actions">
+                  <button id="mcp-install-btn" class="btn-small">Connect editors</button>
+                </div>
+                <span class="settings-hint" id="mcp-install-status"></span>
+              </div>
+
               <!-- Text Snippets -->
               <div class="settings-group">
                 <div class="settings-row__text">
@@ -711,6 +745,19 @@
       </div>
     </div>
 
+    <!-- What's New overlay -->
+    <div id="whats-new" class="whatsnew" hidden>
+      <div class="whatsnew__card">
+        <button class="whatsnew__close" id="whats-new-close" aria-label="Close">×</button>
+        <h2 class="whatsnew__title">What's New</h2>
+        <p class="whatsnew__sub" id="whats-new-version"></p>
+        <div class="whatsnew__body" id="whats-new-body"></div>
+        <div class="whatsnew__actions">
+          <button class="model-card__btn" id="whats-new-ok">Got it</button>
+        </div>
+      </div>
+    </div>
+
   </div>
   <script src="js/dom.js"></script>
   <script src="js/ui.js"></script>
@@ -719,6 +766,7 @@
   <script src="js/settings.js"></script>
   <script src="js/analytics.js"></script>
   <script src="js/updater.js"></script>
+  <script src="js/whatsnew.js"></script>
   <script src="js/main.js"></script>
   <script src="js/dashboard.js"></script>
   <script src="js/onboarding.js"></script>

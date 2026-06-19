@@ -1,6 +1,8 @@
 //! Phrase transcription: preprocessing, quality gates, and hallucination
 //! filtering between the audio worker and the STT engine.
 
+use std::collections::HashSet;
+
 use murmur_core::config::TranscriptionProfile;
 use murmur_core::stt::engine::{Segment, TranscriptionResult};
 use murmur_core::stt::postprocess::PostProcessor;
@@ -44,6 +46,21 @@ const SHORT_CLIP_SECS: f32 = 1.5;
 pub(crate) fn is_non_english_language(language: &str) -> bool {
     let l = language.trim().to_lowercase();
     !l.is_empty() && l != "en" && l != "auto" && l != "english"
+}
+
+/// Append indexed codebase symbols to the user's glossary, keeping the user's
+/// entries first (they win the prompt budget) and deduping case-insensitively.
+fn merge_vocabulary(mut user_vocab: Vec<String>, project: &[String]) -> Vec<String> {
+    if project.is_empty() {
+        return user_vocab;
+    }
+    let mut seen: HashSet<String> = user_vocab.iter().map(|w| w.to_lowercase()).collect();
+    for sym in project {
+        if seen.insert(sym.to_lowercase()) {
+            user_vocab.push(sym.clone());
+        }
+    }
+    user_vocab
 }
 
 /// Per-profile rejection thresholds.
@@ -105,7 +122,7 @@ pub(crate) fn transcribe_chunk(
         .session_dev_mode
         .lock()
         .unwrap_or_else(|e| e.into_inner());
-    let (developer_mode, profile, vocabulary, language, translate) = {
+    let (developer_mode, profile, user_vocab, language, translate) = {
         let settings = state.settings.lock().unwrap_or_else(|e| e.into_inner());
         (
             dev_override.unwrap_or(settings.developer_mode),
@@ -114,6 +131,15 @@ pub(crate) fn transcribe_chunk(
             settings.language.clone(),
             settings.translate_to_english,
         )
+    };
+    // User glossary first (it keeps priority on the prompt budget), then the
+    // indexed codebase symbols, deduped case-insensitively.
+    let vocabulary = {
+        let project = state
+            .project_vocab
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        merge_vocabulary(user_vocab, project.as_slice())
     };
     let limits = ProfileLimits::for_profile(profile);
     // English-tuned gates over-reject accented non-English speech; relax them.
@@ -589,6 +615,24 @@ fn trim_silence(samples: &[f32], trim_threshold: f32) -> &[f32] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn merge_vocabulary_keeps_user_first_and_dedups() {
+        let user = vec!["FooBar".to_string(), "alpha".to_string()];
+        let project = vec![
+            "alpha".to_string(), // dup of user (case-sensitive same)
+            "ALPHA".to_string(), // case-insensitive dup
+            "renderWidget".to_string(),
+        ];
+        let merged = merge_vocabulary(user, &project);
+        assert_eq!(merged, vec!["FooBar", "alpha", "renderWidget"]);
+    }
+
+    #[test]
+    fn merge_vocabulary_empty_project_returns_user() {
+        let user = vec!["FooBar".to_string()];
+        assert_eq!(merge_vocabulary(user.clone(), &[]), user);
+    }
 
     #[test]
     fn interjections_rejected_only_as_whole_phrase() {

@@ -80,8 +80,11 @@ fn push_char_at(result: &mut String, text: &str, i: usize) -> usize {
 
 /// Remove a phrase (case-insensitive, whole-word boundaries) from text.
 fn remove_phrase_ci(text: &str, phrase: &str) -> String {
-    let lower = text.to_lowercase();
-    let phrase_lower = phrase.to_lowercase();
+    // ASCII-lowercase is length-preserving, so `lower` stays byte-aligned with
+    // `text` (a Unicode to_lowercase can change byte length, e.g. İ → i̇, which
+    // would desync the offset-indexed match below). Fillers are ASCII words.
+    let lower = text.to_ascii_lowercase();
+    let phrase_lower = phrase.to_ascii_lowercase();
     let mut result = String::with_capacity(text.len());
     let mut i = 0;
     let bytes = text.as_bytes();
@@ -116,7 +119,8 @@ fn remove_word_ci(text: &str, word: &str) -> String {
 
 /// Remove "like" only when preceded by a comma or at the start of a sentence.
 fn remove_like_filler(text: &str) -> String {
-    let lower = text.to_lowercase();
+    // ASCII-lowercase keeps `lower` byte-aligned with `text` (see remove_phrase_ci).
+    let lower = text.to_ascii_lowercase();
     let bytes = text.as_bytes();
     let mut result = String::with_capacity(text.len());
     let mut i = 0;
@@ -258,7 +262,10 @@ static SYMBOL_MAP: LazyLock<Vec<(&str, &str)>> = LazyLock::new(|| {
 });
 
 fn expand_symbols(text: &str) -> String {
-    let lower = text.to_lowercase();
+    // ASCII-lowercase keeps `lower` byte-aligned with `text` (see remove_phrase_ci);
+    // spoken-symbol keys are ASCII, so a length-changing char no longer desyncs
+    // the offset-indexed match and silently drops the expansion.
+    let lower = text.to_ascii_lowercase();
     let bytes = text.as_bytes();
     let mut result = String::with_capacity(text.len());
     let mut i = 0;
@@ -721,6 +728,19 @@ fn cleanup_whitespace(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn expand_symbols_stays_aligned_after_length_changing_lowercase() {
+        // İ (U+0130) lowercases to a longer byte string; the offset-indexed
+        // matcher must stay aligned and still expand "equals" rather than
+        // silently skip it (the to_ascii_lowercase fix).
+        let out = expand_symbols("İ equals x");
+        assert!(out.contains('='), "expected expansion, got {out:?}");
+        assert!(
+            !out.contains("equals"),
+            "'equals' should have been expanded: {out:?}"
+        );
+    }
 
     // ── Filler removal ───────────────────────────────────────────────────
 

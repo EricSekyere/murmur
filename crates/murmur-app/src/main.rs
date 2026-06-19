@@ -2,6 +2,14 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
+    // Hidden CLI mode: when an MCP client (Claude/Cursor) spawns this binary as
+    // `murmur-app mcp`, act as a stdio MCP server and never start the GUI. This
+    // runs before the panic hook and Tauri init so no error dialog or
+    // single-instance handoff can interfere with the JSON-RPC stream on stdout.
+    if std::env::args().nth(1).as_deref() == Some("mcp") {
+        std::process::exit(murmur_app_lib::run_mcp());
+    }
+
     // Install a global panic hook BEFORE anything else: this catches panics on
     // ANY thread (audio worker, streaming, rdev, etc.) and writes them to
     // crash.log + shows a dialog in release mode.

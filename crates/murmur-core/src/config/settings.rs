@@ -31,6 +31,46 @@ pub enum TranscriptionProfile {
     Strict,
 }
 
+/// Upper bounds for the codebase indexer, enforced on load.
+const MAX_INDEX_SYMBOLS: usize = 128;
+const MAX_INDEX_EXTENSIONS: usize = 32;
+const MAX_INDEX_ROOTS: usize = 16;
+
+/// Codebase-derived vocabulary: scan `project_root` for distinctive identifiers
+/// and inject them into the STT vocabulary so project symbols transcribe
+/// correctly. Disabled by default; only helps Whisper (Parakeet has no biasing).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IndexerSettings {
+    /// Whether to index the projects and inject their symbols.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Project roots to scan. Indexing only runs when at least one is set;
+    /// symbols from all roots share one ranked budget.
+    #[serde(default)]
+    pub project_roots: Vec<PathBuf>,
+    /// Maximum symbols to inject (clamped to 1..=128 on load).
+    #[serde(default = "default_index_max_symbols")]
+    pub max_symbols: usize,
+    /// Source extensions to scan; empty means the built-in defaults.
+    #[serde(default)]
+    pub extensions: Vec<String>,
+}
+
+impl Default for IndexerSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            project_roots: Vec::new(),
+            max_symbols: default_index_max_symbols(),
+            extensions: Vec::new(),
+        }
+    }
+}
+
+fn default_index_max_symbols() -> usize {
+    64
+}
+
 /// Application settings, loaded from TOML config file.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Settings {
@@ -155,6 +195,15 @@ pub struct Settings {
     /// now; falls back to the raw mic elsewhere or if it can't be opened.
     #[serde(default = "default_true")]
     pub echo_cancellation: bool,
+
+    /// Codebase-derived vocabulary settings (off by default).
+    #[serde(default)]
+    pub indexer: IndexerSettings,
+
+    /// Last app version whose "What's New" highlights the user dismissed, so the
+    /// panel only auto-opens once per update.
+    #[serde(default)]
+    pub whats_new_seen_version: Option<String>,
 }
 
 impl AppProfile {
@@ -347,6 +396,8 @@ impl Default for Settings {
             caption_position: default_caption_position(),
             save_history: true,
             echo_cancellation: true,
+            indexer: IndexerSettings::default(),
+            whats_new_seen_version: None,
         }
     }
 }
@@ -370,21 +421,56 @@ impl Settings {
         };
         let old_dir = config_base.join("voitex");
         let new_dir = config_base.join("murmur");
-        if old_dir.exists() && !new_dir.exists() {
-            match std::fs::rename(&old_dir, &new_dir) {
-                Ok(()) => tracing::info!(
-                    "Migrated config directory from {} to {}",
+        if !old_dir.exists() || new_dir.exists() {
+            return;
+        }
+
+        if std::fs::rename(&old_dir, &new_dir).is_ok() {
+            tracing::info!(
+                "Migrated config directory from {} to {}",
+                old_dir.display(),
+                new_dir.display()
+            );
+            return;
+        }
+
+        // rename fails across volumes (EXDEV) — e.g. a legacy config on a
+        // different drive than the new config dir. Fall back to a recursive
+        // copy so settings still carry over; remove a partial copy on failure
+        // so a later run can retry from the intact old directory.
+        match Self::copy_dir_recursive(&old_dir, &new_dir) {
+            Ok(()) => {
+                let _ = std::fs::remove_dir_all(&old_dir);
+                tracing::info!(
+                    "Migrated config directory (copied) from {} to {}",
                     old_dir.display(),
                     new_dir.display()
-                ),
-                Err(e) => tracing::warn!(
+                );
+            }
+            Err(e) => {
+                let _ = std::fs::remove_dir_all(&new_dir);
+                tracing::warn!(
                     "Failed to migrate config directory from {} to {}: {}",
                     old_dir.display(),
                     new_dir.display(),
                     e
-                ),
+                );
             }
         }
+    }
+
+    fn copy_dir_recursive(from: &std::path::Path, to: &std::path::Path) -> std::io::Result<()> {
+        std::fs::create_dir_all(to)?;
+        for entry in std::fs::read_dir(from)? {
+            let entry = entry?;
+            let dst = to.join(entry.file_name());
+            if entry.file_type()?.is_dir() {
+                Self::copy_dir_recursive(&entry.path(), &dst)?;
+            } else {
+                std::fs::copy(entry.path(), &dst)?;
+            }
+        }
+        Ok(())
     }
 
     /// Load settings from a TOML file, falling back to defaults.
@@ -468,6 +554,9 @@ impl Settings {
         for p in &mut self.app_profiles {
             truncate_chars(&mut p.app, MAX_APP_PATTERN_CHARS);
         }
+        self.indexer.max_symbols = self.indexer.max_symbols.clamp(1, MAX_INDEX_SYMBOLS);
+        self.indexer.extensions.truncate(MAX_INDEX_EXTENSIONS);
+        self.indexer.project_roots.truncate(MAX_INDEX_ROOTS);
     }
 
     /// Validate settings values.

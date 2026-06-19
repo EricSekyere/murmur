@@ -22,7 +22,10 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-murmur-core.workspace = true
+murmur-core = { workspace = true, features = ["indexer"] }
+# MCP server + client setup, shared with the CLI. Lets `murmur-app mcp` act as
+# a stdio MCP server and the Settings button wire up Cursor / Claude.
+murmur-mcp.workspace = true
 tauri = { version = "2", features = ["tray-icon"] }
 serde.workspace = true
 serde_json = "1"
@@ -35,6 +38,18 @@ tauri-plugin-global-shortcut = "2"
 tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
 tauri-plugin-single-instance = "2"
+tauri-plugin-dialog = "2"
 rdev = "0.5"
 cpal = "0.15"
 unicode-segmentation = "1"
+notify = "6"
+notify-debouncer-mini = "0.4"
+
+# UI Automation: locate the focused input so the live caption anchors by the
+# text field, not the window bottom. Used by caption::focused_input_rect.
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.58", features = [
+    "Win32_Foundation",
+    "Win32_System_Com",
+    "Win32_UI_Accessibility",
+] }

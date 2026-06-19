@@ -9,7 +9,7 @@ description = "Core library for Murmur voice-to-text tool"
 [features]
 default = ["audio", "keyboard"]
 # Enable all features (requires cmake + libclang for whisper.cpp, ONNX Runtime for VAD + Parakeet)
-full = ["audio", "stt", "vad", "keyboard", "parakeet"]
+full = ["audio", "stt", "vad", "keyboard", "parakeet", "indexer", "treesitter"]
 # Audio capture via CPAL
 audio = ["dep:cpal"]
 # Speech-to-text via whisper.cpp (requires cmake + libclang)
@@ -24,6 +24,20 @@ vad = ["audio", "dep:ort", "dep:zip", "dep:flate2", "dep:tar"]
 parakeet = ["dep:parakeet-rs", "dep:ort", "dep:zip", "dep:flate2", "dep:tar"]
 # Keystroke simulation
 keyboard = ["dep:enigo"]
+# Codebase-derived vocabulary: lexical project indexer (gitignore-aware walk + regex)
+indexer = ["dep:ignore", "dep:regex"]
+# Tree-sitter symbol extraction for the indexer (AST-accurate; needs a C compiler
+# to build the bundled grammars). Falls back to the lexical scan when off.
+treesitter = [
+    "indexer",
+    "dep:tree-sitter",
+    "dep:tree-sitter-rust",
+    "dep:tree-sitter-python",
+    "dep:tree-sitter-javascript",
+    "dep:tree-sitter-typescript",
+    "dep:tree-sitter-go",
+    "dep:tree-sitter-java",
+]
 
 [dependencies]
 # Audio (optional — needs system audio libs)
@@ -73,6 +87,23 @@ sha2 = "0.10"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream"] }
 futures-util = "0.3"
 indicatif = "0.17"
+
+# Codebase indexer (optional — gitignore-aware walk + identifier extraction)
+ignore = { version = "0.4", optional = true }
+regex = { version = "1", optional = true }
+
+# Tree-sitter AST extraction (optional — grammars compile C, decoupled from the
+# core version via the tree-sitter-language ABI)
+tree-sitter = { version = "0.24", optional = true }
+tree-sitter-rust = { version = "0.23", optional = true }
+tree-sitter-python = { version = "0.23", optional = true }
+tree-sitter-javascript = { version = "0.23", optional = true }
+tree-sitter-typescript = { version = "0.23", optional = true }
+tree-sitter-go = { version = "0.23", optional = true }
+tree-sitter-java = { version = "0.23", optional = true }
+
+[dev-dependencies]
+tempfile = "3"
 
 # DirectML GPU execution provider for Parakeet — Windows only.
 [target.'cfg(windows)'.dependencies]
