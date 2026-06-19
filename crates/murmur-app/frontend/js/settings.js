@@ -511,6 +511,31 @@ vocabularySave.addEventListener('click', async () => {
   }
 });
 
+vocabularyLearn.addEventListener('click', async () => {
+  const previous = vocabularyLearn.textContent;
+  vocabularyLearn.disabled = true;
+  vocabularyLearn.textContent = 'Scanning…';
+  try {
+    const added = await invoke('learn_vocabulary');
+    if (added > 0) {
+      // Reflect the merged dictionary back into the textarea.
+      const status = await invoke('get_status');
+      if (Array.isArray(status.custom_vocabulary)) {
+        vocabularyInput.value = status.custom_vocabulary.join('\n');
+        vocabularySave.disabled = true;
+      }
+      showToast(`Learned ${added} ${added === 1 ? 'term' : 'terms'} from history`, 'success');
+    } else {
+      showToast('No new terms found in history', 'success');
+    }
+  } catch (err) {
+    showToast(`Failed: ${err}`, 'error');
+  } finally {
+    vocabularyLearn.disabled = false;
+    vocabularyLearn.textContent = previous;
+  }
+});
+
 // Parse "trigger = expansion" lines into snippet objects. Only the first '='
 // splits, so an expansion can itself contain '='.
 function parseSnippets(text) {

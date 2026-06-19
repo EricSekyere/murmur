@@ -114,6 +114,40 @@ impl History {
         self.entries.clear();
     }
 
+    /// Mine the history for distinctive technical terms the user has dictated
+    /// more than once (camelCase, snake_case, or digit-bearing identifiers) that
+    /// aren't already in `existing`, newest-weighted, capped at `max`. These can
+    /// be added to the custom vocabulary so the decoder biases toward them.
+    /// Plain capitalized words are skipped: without a stoplist they're mostly
+    /// sentence-initial noise rather than proper nouns.
+    pub fn learn_terms(&self, existing: &[String], max: usize) -> Vec<String> {
+        if max == 0 {
+            return Vec::new();
+        }
+        let have: std::collections::HashSet<String> =
+            existing.iter().map(|w| w.to_lowercase()).collect();
+        let mut counts: HashMap<&str, usize> = HashMap::new();
+        for entry in &self.entries {
+            for tok in entry
+                .text
+                .split(|c: char| !(c.is_alphanumeric() || c == '_'))
+            {
+                if is_distinctive_term(tok) && !have.contains(&tok.to_lowercase()) {
+                    *counts.entry(tok).or_default() += 1;
+                }
+            }
+        }
+        let mut candidates: Vec<(&str, usize)> =
+            counts.into_iter().filter(|(_, n)| *n >= 2).collect();
+        // Most-repeated first, then alphabetical for a stable order.
+        candidates.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(b.0)));
+        candidates
+            .into_iter()
+            .take(max)
+            .map(|(t, _)| t.to_string())
+            .collect()
+    }
+
     /// Aggregate the stored history into usage stats. `now_ms` is passed in so
     /// the computation stays clock-free here. All UTC-day based, which can be
     /// off by a day from local time near midnight — fine for a usage summary.
@@ -200,6 +234,27 @@ fn now_ms() -> u64 {
         .unwrap_or(0)
 }
 
+/// Whether a token looks like a technical identifier worth learning: 3–40 chars,
+/// starting with a letter or `_`, and carrying an interior capital, a digit, or
+/// an underscore (camelCase / PascalCase / snake_case / `oauth2`). Plain words
+/// and lone capitalized words are excluded.
+fn is_distinctive_term(tok: &str) -> bool {
+    let len = tok.chars().count();
+    if !(3..=40).contains(&len) {
+        return false;
+    }
+    if !tok
+        .chars()
+        .next()
+        .is_some_and(|c| c.is_alphabetic() || c == '_')
+    {
+        return false;
+    }
+    let interior_upper = tok.chars().skip(1).any(|c| c.is_uppercase());
+    let has_digit = tok.chars().any(|c| c.is_ascii_digit());
+    interior_upper || has_digit || tok.contains('_')
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -251,5 +306,21 @@ mod tests {
         assert_eq!(s.day_streak, 2); // today + yesterday, broken before that
         assert_eq!(s.top_apps[0].app, "warp.exe");
         assert_eq!(s.top_apps[0].phrases, 2);
+    }
+
+    #[test]
+    fn learn_terms_picks_repeated_identifiers_only() {
+        let mut h = History::default();
+        h.add("call useEffect and then useEffect again", None);
+        h.add("the useEffect hook with oauth2 and oauth2", None);
+        h.add("just some ordinary words here words", None); // plain words ignored
+        let learned = h.learn_terms(&[], 10);
+        assert!(learned.contains(&"useEffect".to_string()), "{learned:?}");
+        assert!(learned.contains(&"oauth2".to_string()), "{learned:?}");
+        // Plain repeated words ("words") are not learned.
+        assert!(!learned.iter().any(|t| t == "words"), "{learned:?}");
+        // Already-known terms are skipped.
+        let none = h.learn_terms(&["useEffect".to_string(), "oauth2".to_string()], 10);
+        assert!(none.is_empty(), "{none:?}");
     }
 }

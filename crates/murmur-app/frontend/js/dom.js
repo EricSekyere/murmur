@@ -66,6 +66,7 @@ const activationModeSelect = document.getElementById('activation-mode-select');
 const doubleTapKeySelect = document.getElementById('double-tap-key-select');
 const vocabularyInput    = document.getElementById('vocabulary-input');
 const vocabularySave     = document.getElementById('vocabulary-save');
+const vocabularyLearn    = document.getElementById('vocabulary-learn');
 const snippetsInput      = document.getElementById('snippets-input');
 const snippetsSave       = document.getElementById('snippets-save');
 const appProfilesInput   = document.getElementById('app-profiles-input');
