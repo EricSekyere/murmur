@@ -199,6 +199,11 @@ pub struct Settings {
     /// Codebase-derived vocabulary settings (off by default).
     #[serde(default)]
     pub indexer: IndexerSettings,
+
+    /// Last app version whose "What's New" highlights the user dismissed, so the
+    /// panel only auto-opens once per update.
+    #[serde(default)]
+    pub whats_new_seen_version: Option<String>,
 }
 
 impl AppProfile {
@@ -392,6 +397,7 @@ impl Default for Settings {
             save_history: true,
             echo_cancellation: true,
             indexer: IndexerSettings::default(),
+            whats_new_seen_version: None,
         }
     }
 }

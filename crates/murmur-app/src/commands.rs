@@ -90,7 +90,22 @@ pub(crate) fn get_status(state: State<'_, AppState>) -> serde_json::Value {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .len(),
+        "app_version": env!("CARGO_PKG_VERSION"),
+        "whats_new_seen": settings.whats_new_seen_version,
     })
+}
+
+/// Record that the user has seen this version's "What's New" highlights, so the
+/// panel doesn't auto-open again until the next update.
+#[tauri::command]
+pub(crate) fn mark_whats_new_seen(state: State<'_, AppState>) -> Result<(), String> {
+    let mut settings = state.settings.lock().unwrap_or_else(|e| e.into_inner());
+    settings.whats_new_seen_version = Some(env!("CARGO_PKG_VERSION").to_string());
+    let path = Settings::default_path().map_err(|e| e.to_string())?;
+    settings
+        .save(&path)
+        .map_err(|e| format!("Failed to save settings: {e}"))?;
+    Ok(())
 }
 
 /// Open a native folder picker and return the chosen path, or None if cancelled.

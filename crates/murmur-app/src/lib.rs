@@ -125,6 +125,7 @@ pub fn run() -> anyhow::Result<()> {
             commands::locate_widget,
             commands::pick_project_folder,
             commands::set_codebase_vocabulary,
+            commands::mark_whats_new_seen,
             updater::install_update,
         ])
         .setup(move |app| setup_app(app, engine_for_setup, model, &hotkey, show_widget_on_start))

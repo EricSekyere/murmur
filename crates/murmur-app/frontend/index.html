@@ -268,6 +268,9 @@
               </svg>
             </button>
             <div id="settings-panel" class="settings-panel" hidden>
+              <div class="settings-actions">
+                <button id="whats-new-btn" class="btn-small">What's New</button>
+              </div>
               <!-- Hotkey -->
               <div class="settings-group">
                 <div class="settings-row">
@@ -730,6 +733,19 @@
       </div>
     </div>
 
+    <!-- What's New overlay -->
+    <div id="whats-new" class="whatsnew" hidden>
+      <div class="whatsnew__card">
+        <button class="whatsnew__close" id="whats-new-close" aria-label="Close">×</button>
+        <h2 class="whatsnew__title">What's New</h2>
+        <p class="whatsnew__sub" id="whats-new-version"></p>
+        <div class="whatsnew__body" id="whats-new-body"></div>
+        <div class="whatsnew__actions">
+          <button class="model-card__btn" id="whats-new-ok">Got it</button>
+        </div>
+      </div>
+    </div>
+
   </div>
   <script src="js/dom.js"></script>
   <script src="js/ui.js"></script>
@@ -738,6 +754,7 @@
   <script src="js/settings.js"></script>
   <script src="js/analytics.js"></script>
   <script src="js/updater.js"></script>
+  <script src="js/whatsnew.js"></script>
   <script src="js/main.js"></script>
   <script src="js/dashboard.js"></script>
   <script src="js/onboarding.js"></script>
