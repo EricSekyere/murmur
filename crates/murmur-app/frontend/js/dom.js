@@ -73,6 +73,7 @@ const appProfilesSave    = document.getElementById('app-profiles-save');
 const soundFeedbackToggle = document.getElementById('sound-feedback-toggle');
 const livePreviewToggle   = document.getElementById('live-preview-toggle');
 const saveHistoryToggle   = document.getElementById('save-history-toggle');
+const cleanSpeechToggle   = document.getElementById('clean-speech-toggle');
 const captionPositionSelect = document.getElementById('caption-position-select');
 const codebaseVocabToggle = document.getElementById('codebase-vocab-toggle');
 const codebaseVocabFolder = document.getElementById('codebase-vocab-folder');

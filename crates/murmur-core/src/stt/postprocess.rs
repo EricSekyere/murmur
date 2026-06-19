@@ -14,6 +14,108 @@ impl PostProcessor {
         let text = apply_casing_formatters(&text);
         cleanup_whitespace(&text)
     }
+
+    /// Prose cleanup for ordinary (non-developer) dictation: strip clear
+    /// disfluencies and format spoken enumerations, but leave code transforms
+    /// (symbol expansion, tech-term correction, casing commands) alone.
+    pub fn process_prose(text: &str) -> String {
+        let text = remove_disfluencies(text);
+        // List formatting runs last: it introduces newlines that
+        // cleanup_whitespace would otherwise collapse back into spaces.
+        let text = cleanup_whitespace(&text);
+        format_spoken_lists(&text)
+    }
+}
+
+// ─── Spoken list formatting ──────────────────────────────────────────────────
+
+/// Number words 0–10, index = value ("one" → 1).
+const NUMBER_WORDS: &[&str] = &[
+    "zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten",
+];
+
+/// Turn a dictated "number one … number two …" enumeration into a numbered
+/// list. Deliberately conservative: it only fires on the explicit "number N"
+/// form (rare in flowing prose) with at least two markers whose values run
+/// 1, 2, 3, … so ordinary sentences are never reshaped.
+fn format_spoken_lists(text: &str) -> String {
+    let markers = number_markers(text);
+    if markers.len() < 2 || !markers.iter().enumerate().all(|(i, m)| m.2 == i as u32 + 1) {
+        return text.to_string();
+    }
+
+    let mut out = String::new();
+    let lead = text[..markers[0].0].trim();
+    if !lead.is_empty() {
+        out.push_str(lead);
+        out.push('\n');
+    }
+    for (i, m) in markers.iter().enumerate() {
+        let seg_end = markers.get(i + 1).map_or(text.len(), |next| next.0);
+        let item = text[m.1..seg_end]
+            .trim()
+            .trim_start_matches([',', '.', ':'])
+            .trim();
+        out.push_str(&format!("{}. {}", m.2, item));
+        if i + 1 < markers.len() {
+            out.push('\n');
+        }
+    }
+    out
+}
+
+/// Byte ranges and values of "number N" markers: (start of "number", end of the
+/// count word, value).
+fn number_markers(text: &str) -> Vec<(usize, usize, u32)> {
+    let words = word_positions(text);
+    let mut markers = Vec::new();
+    let mut i = 0;
+    while i + 1 < words.len() {
+        if words[i].1.eq_ignore_ascii_case("number")
+            && let Some(val) = parse_count(words[i + 1].1)
+        {
+            let end = words[i + 1].0 + words[i + 1].1.len();
+            markers.push((words[i].0, end, val));
+            i += 2;
+            continue;
+        }
+        i += 1;
+    }
+    markers
+}
+
+/// (byte offset, word) for each whitespace-separated token.
+fn word_positions(text: &str) -> Vec<(usize, &str)> {
+    let bytes = text.as_bytes();
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < text.len() {
+        if bytes[i].is_ascii_whitespace() {
+            i += 1;
+            continue;
+        }
+        let start = i;
+        while i < text.len() && !bytes[i].is_ascii_whitespace() {
+            i += 1;
+        }
+        out.push((start, &text[start..i]));
+    }
+    out
+}
+
+/// A count word ("one"…"ten") or a small digit, ignoring trailing punctuation.
+fn parse_count(word: &str) -> Option<u32> {
+    let w = word
+        .trim_matches(|c: char| !c.is_alphanumeric())
+        .to_ascii_lowercase();
+    if let Ok(n) = w.parse::<u32>() {
+        return (1..=99).contains(&n).then_some(n);
+    }
+    NUMBER_WORDS
+        .iter()
+        .position(|n| *n == w)
+        .map(|p| p as u32)
+        .filter(|&v| v >= 1)
 }
 
 // ─── Filler Removal ──────────────────────────────────────────────────────────
@@ -32,27 +134,7 @@ fn remove_fillers(text: &str) -> String {
         result = remove_phrase_ci(&result, filler);
     }
 
-    // "so" only at start of text
-    let trimmed = result.trim_start();
-    if starts_with_word_ci(trimmed, "so") {
-        let after = &trimmed[2..];
-        // Only remove if followed by whitespace or comma
-        if after.is_empty() || after.starts_with(' ') || after.starts_with(',') {
-            let prefix_ws = result.len() - trimmed.len();
-            let skip = if after.starts_with(", ") {
-                4 // "so, "
-            } else if after.starts_with(',') || after.starts_with(' ') {
-                3 // "so," or "so "
-            } else {
-                2 // just "so"
-            };
-            result = format!(
-                "{}{}",
-                &result[..prefix_ws],
-                &trimmed[skip.min(trimmed.len())..]
-            );
-        }
-    }
+    result = remove_leading_so(&result);
 
     // "like" only when preceded by comma or at sentence start
     result = remove_like_filler(&result);
@@ -61,6 +143,53 @@ fn remove_fillers(text: &str) -> String {
         result = remove_word_ci(&result, filler);
     }
 
+    result
+}
+
+/// Drop a leading "so" disfluency ("so, let's…" → "let's…"), only at the very
+/// start and only when followed by whitespace/comma so real words ("solo") are
+/// untouched.
+fn remove_leading_so(text: &str) -> String {
+    let trimmed = text.trim_start();
+    if !starts_with_word_ci(trimmed, "so") {
+        return text.to_string();
+    }
+    let after = &trimmed[2..];
+    if !(after.is_empty() || after.starts_with(' ') || after.starts_with(',')) {
+        return text.to_string();
+    }
+    let prefix_ws = text.len() - trimmed.len();
+    let skip = if after.starts_with(", ") {
+        4
+    } else if after.starts_with(',') || after.starts_with(' ') {
+        3
+    } else {
+        2
+    };
+    format!(
+        "{}{}",
+        &text[..prefix_ws],
+        &trimmed[skip.min(trimmed.len())..]
+    )
+}
+
+/// Multi-word disfluencies safe to drop from prose. Unlike the developer-mode
+/// MULTI_FILLERS, this omits "actually" / "literally" / "basically", which
+/// carry meaning in ordinary writing.
+const PROSE_MULTI_FILLERS: &[&str] = &["you know", "i mean"];
+
+/// Prose-safe filler removal: clear verbal disfluencies only, keeping words
+/// that are meaningful outside dictating code.
+fn remove_disfluencies(text: &str) -> String {
+    let mut result = text.to_string();
+    for filler in PROSE_MULTI_FILLERS {
+        result = remove_phrase_ci(&result, filler);
+    }
+    result = remove_leading_so(&result);
+    result = remove_like_filler(&result);
+    for filler in SINGLE_FILLERS {
+        result = remove_word_ci(&result, filler);
+    }
     result
 }
 
@@ -740,6 +869,37 @@ mod tests {
             !out.contains("equals"),
             "'equals' should have been expanded: {out:?}"
         );
+    }
+
+    #[test]
+    fn prose_strips_disfluencies_but_keeps_meaningful_words() {
+        let out = PostProcessor::process_prose("um I think, you know, it works");
+        let lower = out.to_lowercase();
+        assert!(!lower.contains("um"), "{out:?}");
+        assert!(!lower.contains("you know"), "{out:?}");
+        assert!(
+            out.contains("I think") && out.contains("it works"),
+            "{out:?}"
+        );
+        // "actually"/"literally" are meaningful in prose (kept, unlike dev mode).
+        let kept = PostProcessor::process_prose("I actually literally finished");
+        assert!(
+            kept.contains("actually") && kept.contains("literally"),
+            "{kept:?}"
+        );
+    }
+
+    #[test]
+    fn spoken_number_list_only_fires_on_explicit_sequential_markers() {
+        assert_eq!(
+            PostProcessor::process_prose("my plan number one buy milk number two walk the dog"),
+            "my plan\n1. buy milk\n2. walk the dog"
+        );
+        // Mentioning a number in prose is left alone.
+        let prose = "the number one priority is shipping";
+        assert_eq!(format_spoken_lists(prose), prose);
+        // A single marker is not a list.
+        assert_eq!(format_spoken_lists("number one thing"), "number one thing");
     }
 
     // ── Filler removal ───────────────────────────────────────────────────

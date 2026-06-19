@@ -74,6 +74,9 @@ settingsToggle.addEventListener('click', async () => {
     if (status.save_history != null) {
       saveHistoryToggle.checked = status.save_history;
     }
+    if (status.clean_speech != null) {
+      cleanSpeechToggle.checked = status.clean_speech;
+    }
     codebaseVocabToggle.checked = !!status.codebase_vocab_enabled;
     codebaseRoots = Array.isArray(status.codebase_vocab_roots)
       ? status.codebase_vocab_roots.slice()
@@ -464,6 +467,17 @@ saveHistoryToggle.addEventListener('change', async () => {
     showToast(enabled ? 'History on' : 'History off — nothing stored', 'success');
   } catch (err) {
     saveHistoryToggle.checked = !enabled;
+    showToast(`Failed: ${err}`, 'error');
+  }
+});
+
+cleanSpeechToggle.addEventListener('change', async () => {
+  const enabled = cleanSpeechToggle.checked;
+  try {
+    await invoke('update_settings', { clean_speech: enabled });
+    showToast(enabled ? 'Speech cleanup on' : 'Verbatim — no cleanup', 'success');
+  } catch (err) {
+    cleanSpeechToggle.checked = !enabled;
     showToast(`Failed: ${err}`, 'error');
   }
 });

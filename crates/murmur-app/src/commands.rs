@@ -78,6 +78,7 @@ pub(crate) fn get_status(state: State<'_, AppState>) -> serde_json::Value {
         "app_profiles": settings.app_profiles,
         "caption_position": settings.caption_position,
         "save_history": settings.save_history,
+        "clean_speech": settings.clean_speech,
         "codebase_vocab_enabled": settings.indexer.enabled,
         "codebase_vocab_roots": settings
             .indexer
@@ -346,6 +347,7 @@ pub(crate) fn update_settings(
     app_profiles: Option<Vec<AppProfile>>,
     caption_position: Option<String>,
     save_history: Option<bool>,
+    clean_speech: Option<bool>,
 ) -> Result<(), String> {
     let mut settings = state.settings.lock().unwrap_or_else(|e| e.into_inner());
     // Only warn about a model/language mismatch if those fields were touched.
@@ -484,6 +486,9 @@ pub(crate) fn update_settings(
             }
         }
         settings.save_history = sh;
+    }
+    if let Some(cs) = clean_speech {
+        settings.clean_speech = cs;
     }
 
     // Same gate the loader uses, so the UI can't persist a config it would reject.

@@ -122,10 +122,11 @@ pub(crate) fn transcribe_chunk(
         .session_dev_mode
         .lock()
         .unwrap_or_else(|e| e.into_inner());
-    let (developer_mode, profile, user_vocab, language, translate) = {
+    let (developer_mode, clean_speech, profile, user_vocab, language, translate) = {
         let settings = state.settings.lock().unwrap_or_else(|e| e.into_inner());
         (
             dev_override.unwrap_or(settings.developer_mode),
+            settings.clean_speech,
             settings.transcription_profile,
             settings.custom_vocabulary.clone(),
             settings.language.clone(),
@@ -154,7 +155,7 @@ pub(crate) fn transcribe_chunk(
         return reject(app, &state, reason, &prepared, Some(&result.text));
     }
 
-    let text = postprocess_text(&result, developer_mode);
+    let text = postprocess_text(&result, developer_mode, clean_speech);
     if text.is_empty() {
         emit_diag(app, "rejected", "empty_after_postprocess", &prepared);
         return None;
@@ -383,9 +384,17 @@ fn quality_reject_reason(
     None
 }
 
-fn postprocess_text(result: &TranscriptionResult, developer_mode: bool) -> String {
+fn postprocess_text(
+    result: &TranscriptionResult,
+    developer_mode: bool,
+    clean_speech: bool,
+) -> String {
     if developer_mode {
+        // Developer mode runs the full pipeline (symbols, tech terms, casing).
         PostProcessor::process(&result.text)
+    } else if clean_speech {
+        // Ordinary dictation gets prose-safe cleanup only.
+        PostProcessor::process_prose(&result.text)
     } else {
         result.text.clone()
     }
