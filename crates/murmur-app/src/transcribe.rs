@@ -389,15 +389,26 @@ fn postprocess_text(
     developer_mode: bool,
     clean_speech: bool,
 ) -> String {
-    if developer_mode {
-        // Developer mode runs the full pipeline (symbols, tech terms, casing).
-        PostProcessor::process(&result.text)
-    } else if clean_speech {
-        // Ordinary dictation gets prose-safe cleanup only.
-        PostProcessor::process_prose(&result.text)
-    } else {
-        result.text.clone()
-    }
+    let raw = &result.text;
+    // Contain any post-processing panic (e.g. a Unicode-slicing bug on a model's
+    // native punctuation like "…") so a single phrase falls back to the raw
+    // transcript instead of taking down the recording. The user's words land
+    // either way.
+    let processed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        if developer_mode {
+            // Developer mode runs the full pipeline (symbols, tech terms, casing).
+            PostProcessor::process(raw)
+        } else if clean_speech {
+            // Ordinary dictation gets prose-safe cleanup only.
+            PostProcessor::process_prose(raw)
+        } else {
+            raw.clone()
+        }
+    }));
+    processed.unwrap_or_else(|_| {
+        tracing::error!("Post-processing panicked; delivering the raw transcript");
+        raw.clone()
+    })
 }
 
 /// Classify text-level hallucination patterns, or None for genuine speech. The
