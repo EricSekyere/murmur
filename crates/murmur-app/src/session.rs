@@ -296,9 +296,22 @@ fn streaming_worker(app: &tauri::AppHandle, generation: u64) {
     #[cfg(not(windows))]
     let caption_target: Option<crate::caption::CaptionAnchor> = None;
 
+    // Live preview re-decodes the growing phrase every ~0.7s, so it's only
+    // viable on a backend fast enough to keep up. A CPU Whisper decode pays the
+    // fixed ~30s mel-encoder cost per call and would run 6-7x per phrase,
+    // starving the final decode (the root cause of slow Whisper dictation), so
+    // skip preview for it. Parakeet and GPU-accelerated Whisper stay previewed.
+    let engine_can_preview = state
+        .engine
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .as_ref()
+        .is_some_and(|e| e.supports_realtime_preview());
     // Live preview runs on its own thread so interim decodes never stall the
-    // delivery of finished phrases. `None` when the feature is off.
-    let mut preview = live_preview.then(|| crate::preview::spawn(app.clone(), caption_target));
+    // delivery of finished phrases. `None` when the feature is off or the
+    // backend is too slow to preview without delaying delivery.
+    let mut preview = (live_preview && engine_can_preview)
+        .then(|| crate::preview::spawn(app.clone(), caption_target));
 
     let mut stats = SessionStats::default();
     loop {
