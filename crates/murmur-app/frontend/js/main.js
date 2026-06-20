@@ -44,7 +44,7 @@ async function init() {
     maybeShowWhatsNew(status);
   } catch (err) {
     console.error('Failed to get status:', err);
-    updateModelBanner({ model_ready: false, model: 'small.en', recording: false, mode: 'idle' });
+    updateModelBanner({ model_ready: false, model: 'Parakeet TDT 0.6B v2', recording: false, mode: 'idle' });
   }
 
   // Surface a one-shot startup warning (e.g. the hotkey failed to register).
