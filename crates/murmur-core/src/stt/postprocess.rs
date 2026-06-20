@@ -983,6 +983,21 @@ mod tests {
     }
 
     #[test]
+    fn handles_ellipsis_and_unicode_punctuation_without_panic() {
+        // Parakeet emits native punctuation incl. '…' (3-byte char). Postprocess
+        // must not slice mid-codepoint.
+        for s in [
+            "alright, let's just try to find a good way to…",
+            "well… I mean, you know…",
+            "number one buy milk… number two walk…",
+            "café — résumé… naïve",
+        ] {
+            let _ = PostProcessor::process(s);
+            let _ = PostProcessor::process_prose(s);
+        }
+    }
+
+    #[test]
     fn hesitation_variants_elongation_and_backchannels() {
         // New variants + elongation are removed.
         assert_eq!(

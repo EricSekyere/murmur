@@ -312,7 +312,10 @@ fn default_hotkey() -> String {
 }
 
 fn default_model() -> SttModel {
-    SttModel::WhisperSmallEn
+    // Parakeet is the fast, accurate CPU default: ~0.1s/phrase with native
+    // punctuation. Whisper stays available, but medium/large are only practical
+    // with a GPU and small.en is slower than Parakeet on CPU.
+    SttModel::ParakeetTdt06bV2
 }
 
 fn default_vad_threshold() -> f32 {
