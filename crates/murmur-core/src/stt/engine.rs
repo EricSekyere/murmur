@@ -170,14 +170,11 @@ impl SttEngine {
             // Ensure ONNX Runtime DLL is loaded before creating any sessions
             super::runtime::init_ort().context("Failed to initialize ONNX Runtime for Parakeet")?;
 
-            // DirectML (GPU) on Windows for ~5-10x faster inference; the default
-            // CPU provider elsewhere (DirectML is Windows-only).
-            #[cfg(windows)]
-            let config = Some(
-                parakeet_rs::ExecutionConfig::new()
-                    .with_execution_provider(parakeet_rs::ExecutionProvider::DirectML),
-            );
-            #[cfg(not(windows))]
+            // Parakeet is a small int8 model on short dictation clips, so the
+            // default CPU provider is the fast path: it warms up in ~90ms. A GPU
+            // provider (DirectML) is a net loss here — its first inference spends
+            // ~40s compiling shaders every launch, and the TDT/LSTM decoder
+            // ping-pongs tensors host<->device. Use CPU on every platform.
             let config: Option<parakeet_rs::ExecutionConfig> = None;
 
             tracing::info!("Loading Parakeet model from {}...", model_dir);
@@ -239,6 +236,23 @@ impl SttEngine {
     /// The model this engine was loaded with, if set.
     pub fn model(&self) -> Option<SttModel> {
         self.model
+    }
+
+    /// Whether this backend decodes fast enough to drive the live-preview loop,
+    /// which re-transcribes the growing in-progress phrase every ~0.7s. A CPU
+    /// Whisper decode pays the fixed ~30s mel-encoder cost per call (seconds per
+    /// phrase), so previewing would run it 6-7x per phrase and starve the final
+    /// decode — disable preview there. Parakeet (and a GPU-accelerated Whisper
+    /// build) are fast enough to preview.
+    pub fn supports_realtime_preview(&self) -> bool {
+        match &self.inner {
+            #[cfg(feature = "parakeet")]
+            EngineInner::Parakeet { .. } => true,
+            #[cfg(feature = "stt")]
+            EngineInner::Whisper { .. } => cfg!(feature = "cuda"),
+            #[allow(unreachable_patterns)]
+            _ => false,
+        }
     }
 
     /// Set the running session transcript used as decoder context for the
@@ -413,6 +427,16 @@ impl SttEngine {
             })
         };
         params.set_n_threads(n_threads);
+        // Whisper always pads a clip's mel to a fixed 30s (1500 encoder frames),
+        // so a 2-5s dictation phrase otherwise pays the full-30s encoder cost.
+        // Size the audio context to the actual clip length (50 ctx frames/sec)
+        // plus ~2.5s of headroom, clamped, so short phrases decode ~3x faster
+        // with no accuracy loss. Clips near/over 30s keep the full context.
+        let clip_secs = samples.len() as f32 / 16_000.0;
+        if clip_secs < 28.0 {
+            let audio_ctx = ((clip_secs * 50.0).ceil() as i32 + 128).clamp(256, 1500);
+            params.set_audio_ctx(audio_ctx);
+        }
         // Language/translation only apply to multilingual checkpoints; the
         // `.en` models can't do either, so force English and no translation.
         let multilingual = model.map(|m| m.is_multilingual()).unwrap_or(false);

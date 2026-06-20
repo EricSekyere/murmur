@@ -100,6 +100,12 @@ jobs:
           releaseBody: |
             Fast, private, on-device dictation for Windows and Linux.
 
+            ## New in 0.4.1
+
+            - **Faster dictation by default.** New installs now use Parakeet, which transcribes a phrase in about a tenth of a second on CPU, with native punctuation and high accuracy. Whisper (small/medium/large) stays available in the model picker for vocabulary biasing or multilingual use.
+            - **Whisper dictation is fast again.** Fixed a regression where the live-preview loop re-ran Whisper several times per phrase, and Whisper now sizes its encoder to the actual clip length instead of a fixed 30 seconds. Short phrases on small.en dropped from tens of seconds to well under a second.
+            - **No more post-processing crashes.** A Unicode edge case in speech cleanup (on punctuation such as the ellipsis) could take down a recording; it now falls back to the raw transcript instead.
+
             ## New in 0.4.0
 
             - **Codebase-aware vocabulary.** Point Murmur at your project folders and it learns your identifiers (functions, types, symbols) with tree-sitter, so terms like `calculateTotalRevenue` transcribe correctly. Re-indexes automatically as files change. Settings → Codebase Vocabulary.

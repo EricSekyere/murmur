@@ -2,7 +2,7 @@
 
 let uiState = 'idle';
 let modelReady = false;
-let modelName = 'small.en';
+let modelName = 'Parakeet TDT 0.6B v2';
 let recordingStartTime = null;
 let durationTimerHandle = null;
 let lastTranscription = '';
@@ -104,7 +104,7 @@ function applyState(newState) {
 
 function updateModelBanner(status) {
   modelReady = !!status.model_ready;
-  modelName  = status.model || 'small.en';
+  modelName  = status.model || 'Parakeet TDT 0.6B v2';
 
   modelBanner.hidden = modelReady;
   if (!modelReady) {
