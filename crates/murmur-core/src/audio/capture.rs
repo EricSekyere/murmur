@@ -14,6 +14,9 @@ pub struct AudioCapture {
     /// Active Windows voice-capture session (echo cancellation), when used.
     #[cfg(windows)]
     voice: Option<super::wasapi::WasapiVoiceCapture>,
+    /// Active Linux voice-capture session (echo cancellation), when used.
+    #[cfg(target_os = "linux")]
+    pulse: Option<super::pulse::PulseVoiceCapture>,
     native_rate: u32,
     native_channels: u16,
 }
@@ -26,6 +29,8 @@ impl AudioCapture {
             stream: None,
             #[cfg(windows)]
             voice: None,
+            #[cfg(target_os = "linux")]
+            pulse: None,
             native_rate: AudioBuffer::SAMPLE_RATE,
             native_channels: 1,
         })
@@ -40,6 +45,10 @@ impl AudioCapture {
         {
             self.voice = None;
         }
+        #[cfg(target_os = "linux")]
+        {
+            self.pulse = None;
+        }
 
         let on_default = preferred_device
             .map(str::trim)
@@ -53,42 +62,69 @@ impl AudioCapture {
     }
 
     /// Try the OS echo-cancelling capture path. Returns `Some(())` on success.
-    /// Linux and macOS have no implementation yet (they return `None`, so the
-    /// caller falls back to the raw mic). Plan: PipeWire/Pulse echo-cancel on
-    /// Linux, the VoiceProcessingIO AudioUnit on macOS.
+    /// Windows uses WASAPI communications mode; Linux uses the PulseAudio /
+    /// PipeWire echo-cancel module. macOS has no implementation yet (returns
+    /// `None`, so the caller falls back to the raw mic). Plan: the
+    /// VoiceProcessingIO AudioUnit on macOS.
     fn try_start_voice_capture(&mut self) -> Option<()> {
         #[cfg(windows)]
         {
-            const MAX_SAMPLES: usize = 60 * 48_000 * 2;
-            if let Ok(mut buf) = self.buffer.lock() {
-                buf.clear();
-                let want = 30 * 48_000 * 2;
-                let cap = buf.capacity();
-                if cap < want {
-                    buf.reserve(want - cap);
-                }
-            }
-            match super::wasapi::open_voice_capture(Arc::clone(&self.buffer), MAX_SAMPLES) {
-                Ok((cap, rate, channels)) => {
-                    self.native_rate = rate;
-                    self.native_channels = channels;
-                    self.voice = Some(cap);
-                    tracing::info!(
-                        "Voice capture (echo cancellation) active: {}Hz, {} channel(s)",
-                        rate,
-                        channels
-                    );
-                    Some(())
-                }
-                Err(e) => {
-                    tracing::warn!("Voice capture unavailable ({e}); using raw microphone");
-                    None
-                }
-            }
+            let max_samples = self.prepare_voice_buffer();
+            let result = super::wasapi::open_voice_capture(Arc::clone(&self.buffer), max_samples);
+            let cap = self.voice_started(result)?;
+            self.voice = Some(cap);
+            Some(())
         }
-        #[cfg(not(windows))]
+        #[cfg(target_os = "linux")]
+        {
+            let max_samples = self.prepare_voice_buffer();
+            let result = super::pulse::open_voice_capture(Arc::clone(&self.buffer), max_samples);
+            let cap = self.voice_started(result)?;
+            self.pulse = Some(cap);
+            Some(())
+        }
+        #[cfg(not(any(windows, target_os = "linux")))]
         {
             None
+        }
+    }
+
+    /// Clear and pre-size the shared buffer for ~30s of 48kHz stereo voice
+    /// audio so the capture thread never reallocates mid-session, and return
+    /// the 60s hard cap. Shared by every echo-cancelling capture backend.
+    #[cfg(any(windows, target_os = "linux"))]
+    fn prepare_voice_buffer(&self) -> usize {
+        const MAX_SAMPLES: usize = 60 * 48_000 * 2;
+        if let Ok(mut buf) = self.buffer.lock() {
+            buf.clear();
+            let want = 30 * 48_000 * 2;
+            let cap = buf.capacity();
+            if cap < want {
+                buf.reserve(want - cap);
+            }
+        }
+        MAX_SAMPLES
+    }
+
+    /// Record the negotiated format and log on success, or warn and fall back
+    /// on failure. Returns the backend handle for the caller to store.
+    #[cfg(any(windows, target_os = "linux"))]
+    fn voice_started<T>(&mut self, result: Result<(T, u32, u16)>) -> Option<T> {
+        match result {
+            Ok((cap, rate, channels)) => {
+                self.native_rate = rate;
+                self.native_channels = channels;
+                tracing::info!(
+                    "Voice capture (echo cancellation) active: {}Hz, {} channel(s)",
+                    rate,
+                    channels
+                );
+                Some(cap)
+            }
+            Err(e) => {
+                tracing::warn!("Voice capture unavailable ({e}); using raw microphone");
+                None
+            }
         }
     }
 
@@ -158,6 +194,10 @@ impl AudioCapture {
         {
             self.voice = None;
         }
+        #[cfg(target_os = "linux")]
+        {
+            self.pulse = None;
+        }
         let mut samples = self.buffer.lock().map_err(|e| anyhow::anyhow!("{}", e))?;
         let raw = std::mem::take(&mut *samples);
 
@@ -219,19 +259,27 @@ impl AudioCapture {
         if self.voice.is_some() {
             return true;
         }
+        #[cfg(target_os = "linux")]
+        if self.pulse.is_some() {
+            return true;
+        }
         self.stream.is_some()
     }
 
     /// Whether the OS echo-cancelling capture path is the active source (as
     /// opposed to the raw CPAL mic it falls back to). Calibration uses this to
     /// skip the gain boost the raw mic needs: the voice stream is already
-    /// AGC-leveled by the OS, so boosting it just re-amplifies idle noise.
+    /// echo-cancelled and leveled, so boosting it just re-amplifies idle noise.
     pub fn echo_cancellation_active(&self) -> bool {
         #[cfg(windows)]
         {
             self.voice.is_some()
         }
-        #[cfg(not(windows))]
+        #[cfg(target_os = "linux")]
+        {
+            self.pulse.is_some()
+        }
+        #[cfg(not(any(windows, target_os = "linux")))]
         {
             false
         }
