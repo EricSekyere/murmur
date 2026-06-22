@@ -70,9 +70,13 @@ fn transcribe_preview(state: &AppState, audio: &AudioBuffer) -> Option<String> {
             settings.transcription_profile,
         )
     };
-    let non_english = crate::transcribe::is_non_english_language(&language);
     let mut guard = state.engine.try_lock().ok()?;
     let engine = guard.as_mut()?;
+    // Match the final-phrase path: relax the English gates only when the model
+    // can actually decode the non-English language. English-only models are
+    // forced to "en", so their output stays English and keeps the English gates.
+    let non_english = crate::transcribe::is_non_english_language(&language)
+        && engine.model().is_some_and(|model| model.is_multilingual());
     // No decoder prompt: a preview must not pollute the running session
     // context that the final-phrase path feeds back as `initial_prompt`.
     engine.set_initial_prompt(None);

@@ -481,8 +481,15 @@ pub(crate) fn update_settings(
         if !sh && settings.save_history {
             let mut history = state.history.lock().unwrap_or_else(|e| e.into_inner());
             history.clear();
-            if let Err(e) = history.save(&state.history_path) {
-                tracing::warn!("Failed to purge history on opt-out: {}", e);
+            // The UI promises "store nothing on disk", so delete the file (and any
+            // parse-error .bak) rather than rewriting an empty one that lingers.
+            let bak = state.history_path.with_extension("json.bak");
+            for path in [&state.history_path, &bak] {
+                if let Err(e) = std::fs::remove_file(path)
+                    && e.kind() != std::io::ErrorKind::NotFound
+                {
+                    tracing::warn!(?path, "Failed to remove history file on opt-out: {}", e);
+                }
             }
         }
         settings.save_history = sh;

@@ -507,16 +507,25 @@ fn lowpass_antialias(samples: &[f32], from_rate: u32, to_rate: u32) -> Vec<f32> 
     let dt = 1.0 / from_rate as f32;
     let alpha = dt / (rc + dt);
 
+    // An empty input has no signal to filter; bail before any indexing.
+    let Some(&first) = samples.first() else {
+        return Vec::new();
+    };
+
     // Forward pass
     let mut filtered = Vec::with_capacity(samples.len());
-    let mut prev = samples[0];
+    let mut prev = first;
     for &s in samples {
         prev += alpha * (s - prev);
         filtered.push(prev);
     }
 
-    // Backward pass (zero-phase: eliminates phase distortion from forward pass)
-    prev = *filtered.last().unwrap();
+    // Backward pass (zero-phase: eliminates phase distortion from forward pass).
+    // `filtered` matches `samples`' non-zero length, so `last()` is always Some.
+    let Some(&last) = filtered.last() else {
+        return filtered;
+    };
+    prev = last;
     for s in filtered.iter_mut().rev() {
         prev += alpha * (*s - prev);
         *s = prev;
