@@ -201,21 +201,52 @@ async function renderUsageStats() {
   set('usage-streak', String(stats.day_streak || 0));
   set('usage-phrases', formatNumber(stats.total_phrases || 0));
 
+  // Top apps → horizontal bars scaled to the busiest app (--usage-w drives the
+  // fill width in CSS).
   const list = document.getElementById('usage-top-apps');
-  if (!list) return;
-  list.innerHTML = '';
-  (stats.top_apps || []).forEach((a) => {
-    const li = document.createElement('li');
-    li.className = 'usage-apps__item';
-    const name = document.createElement('span');
-    name.className = 'usage-apps__name';
-    name.textContent = a.app;
-    const count = document.createElement('span');
-    count.className = 'usage-apps__count';
-    count.textContent = `${formatNumber(a.phrases)} phrase${a.phrases === 1 ? '' : 's'}`;
-    li.append(name, count);
-    list.appendChild(li);
-  });
+  if (list) {
+    list.innerHTML = '';
+    const apps = stats.top_apps || [];
+    const maxPhrases = apps.reduce((m, a) => Math.max(m, a.phrases), 0) || 1;
+    apps.forEach((a) => {
+      const li = document.createElement('li');
+      li.className = 'usage-apps__item';
+      li.style.setProperty('--usage-w', `${Math.round((a.phrases / maxPhrases) * 100)}%`);
+      const name = document.createElement('span');
+      name.className = 'usage-apps__name';
+      name.textContent = a.app;
+      const count = document.createElement('span');
+      count.className = 'usage-apps__count';
+      count.textContent = `${formatNumber(a.phrases)} phrase${a.phrases === 1 ? '' : 's'}`;
+      li.append(name, count);
+      list.appendChild(li);
+    });
+  }
+
+  // Per-day activity (last ~3 weeks) → sparkline bar heights + streak cells.
+  const daily = Array.isArray(stats.daily_words) ? stats.daily_words : [];
+  const maxDay = daily.reduce((m, w) => Math.max(m, w), 0);
+
+  const spark = document.querySelector('#analytics-panel .usage-spark');
+  if (spark) {
+    spark.replaceChildren();
+    daily.forEach((w) => {
+      const bar = document.createElement('i');
+      bar.style.height = maxDay > 0 ? `${Math.max(6, Math.round((w / maxDay) * 100))}%` : '3px';
+      spark.appendChild(bar);
+    });
+  }
+
+  const streak = document.querySelector('#analytics-panel .usage-streak');
+  if (streak) {
+    streak.replaceChildren();
+    daily.forEach((w) => {
+      const cell = document.createElement('i');
+      // Loud days glow, quiet-but-active days fill, silent days stay empty.
+      if (w > 0) cell.className = maxDay > 0 && w >= maxDay * 0.66 ? 'hi' : 'on';
+      streak.appendChild(cell);
+    });
+  }
 }
 
 analyticsToggle.addEventListener('click', () => {
