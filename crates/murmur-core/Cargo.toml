@@ -24,10 +24,9 @@ vad = ["audio", "dep:ort", "dep:zip", "dep:flate2", "dep:tar"]
 parakeet = ["dep:parakeet-rs", "dep:ort", "dep:zip", "dep:flate2", "dep:tar"]
 # Keystroke simulation
 keyboard = ["dep:enigo"]
-# Local Help retrieval (semantic search over bundled help articles). The ONNX
-# embedder lands later; this scaffold (markdown chunking + cosine search) is
-# dependency-free.
-help = []
+# Local Help retrieval: semantic search over bundled help articles via a small
+# ONNX sentence embedder (reuses the ORT runtime the STT path already loads).
+help = ["dep:ort", "dep:tokenizers", "dep:zip", "dep:flate2", "dep:tar"]
 # Codebase-derived vocabulary: lexical project indexer (gitignore-aware walk + regex)
 indexer = ["dep:ignore", "dep:regex"]
 # Tree-sitter symbol extraction for the indexer (AST-accurate; needs a C compiler
@@ -52,6 +51,9 @@ whisper-rs = { version = "0.15", optional = true }
 
 # VAD (optional — needs ONNX Runtime, load-dynamic avoids MSVC STL version issues)
 ort = { version = "2.0.0-rc.11", optional = true, features = ["load-dynamic"] }
+
+# Help embedder tokenizer (optional — bge-small WordPiece, loaded from bundled JSON)
+tokenizers = { version = "0.22", optional = true }
 
 # Parakeet STT (optional — ONNX Runtime). DirectML is Windows-only and added
 # via the target table below; other platforms use the default CPU provider.

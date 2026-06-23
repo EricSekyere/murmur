@@ -12,6 +12,9 @@
 
 use anyhow::Result;
 
+mod embed;
+pub use embed::{OnnxEmbedder, download, is_downloaded, model_path};
+
 /// Produces an L2-normalized embedding vector for a piece of text.
 pub trait Embedder {
     /// Embed `text`; the returned vector should be unit length so callers can
