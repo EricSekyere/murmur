@@ -9,7 +9,7 @@ description = "Core library for Murmur voice-to-text tool"
 [features]
 default = ["audio", "keyboard"]
 # Enable all features (requires cmake + libclang for whisper.cpp, ONNX Runtime for VAD + Parakeet)
-full = ["audio", "stt", "vad", "keyboard", "parakeet", "indexer", "treesitter"]
+full = ["audio", "stt", "vad", "keyboard", "parakeet", "indexer", "treesitter", "help"]
 # Audio capture via CPAL
 audio = ["dep:cpal"]
 # Speech-to-text via whisper.cpp (requires cmake + libclang)
@@ -24,6 +24,10 @@ vad = ["audio", "dep:ort", "dep:zip", "dep:flate2", "dep:tar"]
 parakeet = ["dep:parakeet-rs", "dep:ort", "dep:zip", "dep:flate2", "dep:tar"]
 # Keystroke simulation
 keyboard = ["dep:enigo"]
+# Local Help retrieval (semantic search over bundled help articles). The ONNX
+# embedder lands later; this scaffold (markdown chunking + cosine search) is
+# dependency-free.
+help = []
 # Codebase-derived vocabulary: lexical project indexer (gitignore-aware walk + regex)
 indexer = ["dep:ignore", "dep:regex"]
 # Tree-sitter symbol extraction for the indexer (AST-accurate; needs a C compiler
