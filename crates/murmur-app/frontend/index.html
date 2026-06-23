@@ -85,6 +85,14 @@
             </svg>
             <span>Diagnostics</span>
           </button>
+          <button class="nav__item" data-view="help">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <circle cx="12" cy="12" r="10"/>
+              <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/>
+              <line x1="12" y1="17" x2="12.01" y2="17"/>
+            </svg>
+            <span>Help</span>
+          </button>
         </nav>
 
         <!-- Footer chips -->
@@ -766,6 +774,21 @@
           </section>
         </div>
 
+        <!-- ── Help View ── -->
+        <div class="view" id="view-help">
+          <div class="view-header"><h2>Help</h2></div>
+          <section class="help-search">
+            <span class="help-search-field">
+              <span class="help-search-field__icon" aria-hidden="true"></span>
+              <input id="help-search" class="help-search-input" type="search" placeholder="Ask a question about Murmur…" aria-label="Search help" autocomplete="off">
+            </span>
+            <p class="help-hint" id="help-hint">Tip: you can dictate into this box too — start recording and ask out loud.</p>
+            <p class="help-preparing" id="help-preparing" hidden>Preparing help search…</p>
+            <ul id="help-results" class="help-results" aria-live="polite"></ul>
+            <p class="help-empty" id="help-empty">Ask a question about configuring or using Murmur, like "how do I change the hotkey" or "is my voice sent to the cloud".</p>
+          </section>
+        </div>
+
       </main>
     </div>
 
@@ -860,6 +883,7 @@
   <script src="js/transcription.js"></script>
   <script src="js/settings.js"></script>
   <script src="js/analytics.js"></script>
+  <script src="js/help.js"></script>
   <script src="js/updater.js"></script>
   <script src="js/whatsnew.js"></script>
   <script src="js/main.js"></script>

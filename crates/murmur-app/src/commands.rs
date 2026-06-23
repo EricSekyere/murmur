@@ -729,6 +729,47 @@ pub(crate) fn learn_vocabulary(state: State<'_, AppState>) -> Result<usize, Stri
     Ok(added)
 }
 
+/// Search the bundled Help articles for `query` and return the best-matching
+/// sections, newest-relevant first. Returns an empty list (not an error) when
+/// the Help engine is still preparing or unavailable, so the UI degrades
+/// gracefully. Runs locally; nothing leaves the machine.
+#[cfg(feature = "full")]
+#[tauri::command]
+pub(crate) fn help_search(
+    state: State<'_, AppState>,
+    query: String,
+) -> Result<Vec<crate::state::HelpResultDto>, String> {
+    let trimmed = query.trim();
+    if trimmed.is_empty() {
+        return Ok(Vec::new());
+    }
+    let guard = state.help.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(engine) = guard.as_ref() else {
+        return Ok(Vec::new());
+    };
+    let hits = engine.search(trimmed, 6).map_err(|e| e.to_string())?;
+    Ok(hits
+        .into_iter()
+        .map(|h| crate::state::HelpResultDto {
+            article: h.article,
+            heading: h.heading,
+            body: h.body,
+            score: h.score,
+        })
+        .collect())
+}
+
+/// Whether the local Help search engine has finished preparing.
+#[cfg(feature = "full")]
+#[tauri::command]
+pub(crate) fn help_ready(state: State<'_, AppState>) -> bool {
+    state
+        .help
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .is_some()
+}
+
 /// On-device usage stats (words, top apps, streak) derived from local history.
 #[tauri::command]
 pub(crate) fn get_usage_stats(state: State<'_, AppState>) -> murmur_core::history::UsageStats {

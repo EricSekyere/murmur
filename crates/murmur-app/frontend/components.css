@@ -1669,3 +1669,119 @@ footer {
   #view-home .hero__level i { animation: none; height: 9px; }
 }
 
+/* ─── Help ──────────────────────────────────────────────────────────────────
+   Local semantic search over the bundled help articles. Reuses the history
+   search field's pill + magnifier glyph; results read as stacked cards with an
+   article tag, section heading, matched passage, and a quiet match score.
+   ──────────────────────────────────────────────────────────────────────────── */
+.help-search {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.help-search-field {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+.help-search-field__icon {
+  position: absolute;
+  left: 13px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 1.6px solid var(--color-text-muted);
+  pointer-events: none;
+}
+.help-search-field__icon::after {
+  content: "";
+  position: absolute;
+  right: -3px;
+  bottom: 0;
+  width: 5px;
+  height: 1.6px;
+  background: var(--color-text-muted);
+  transform: rotate(45deg);
+}
+.help-search-input {
+  flex: 1;
+  padding: 11px 14px 11px 32px;
+  font-size: 0.9rem;
+  color: var(--color-text);
+  background: var(--color-surface-solid);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-full);
+  outline: none;
+  transition: border-color var(--transition-fast);
+}
+.help-search-input::placeholder { color: var(--color-text-muted); }
+.help-search-input:focus { border-color: var(--color-accent); }
+
+.help-hint {
+  font-size: 0.72rem;
+  line-height: 1.5;
+  color: var(--color-text-muted);
+}
+
+.help-preparing {
+  font-size: 0.78rem;
+  color: var(--color-accent-light);
+}
+.help-preparing[hidden] { display: none; }
+
+.help-empty {
+  font-size: 0.82rem;
+  line-height: 1.55;
+  color: var(--color-text-muted);
+  padding: 8px 2px;
+}
+.help-empty[hidden] { display: none; }
+
+.help-results {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.help-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 14px 16px;
+  background: var(--color-surface-solid);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  transition: border-color var(--transition-fast);
+}
+.help-card:hover { border-color: var(--color-border-hover); }
+
+.help-card__article {
+  font-size: 0.66rem;
+  font-family: var(--font-mono);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--color-accent-light);
+}
+
+.help-card__heading {
+  font-size: 0.92rem;
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.help-card__body {
+  font-size: 0.82rem;
+  line-height: 1.55;
+  color: var(--color-text-secondary);
+  white-space: pre-wrap;
+}
+
+.help-card__score {
+  align-self: flex-start;
+  font-size: 0.66rem;
+  font-family: var(--font-mono);
+  color: var(--color-text-muted);
+}
+
