@@ -4,6 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Murmur</title>
+  <link rel="stylesheet" href="fonts.css">
   <link rel="stylesheet" href="style.css">
   <link rel="stylesheet" href="components.css">
   <link rel="stylesheet" href="dashboard.css">
@@ -45,6 +46,9 @@
       <!-- Sidebar -->
       <aside class="sidebar">
         <div class="header__brand">
+          <span class="brandmark" aria-hidden="true">
+            <span class="bm-ring"></span><span class="bm-ring"></span><span class="bm-core"></span>
+          </span>
           <h1 class="logo">murmur</h1>
           <span id="dev-mode-badge" class="badge badge--dev" hidden>DEV</span>
         </div>
@@ -117,6 +121,16 @@
               </button>
             </div>
 
+            <!-- Design v2 hub copy (decorative/static; no JS binds to these) -->
+            <h2 class="hero__heading">Hold to speak</h2>
+            <p class="hero__status" aria-hidden="true">
+              Idle · ready when you are
+              <span class="hero__level"><i></i><i></i><i></i><i></i><i></i></span>
+            </p>
+            <span class="hero__chip" aria-hidden="true">
+              <span class="hero__chip-dot"></span> on-device · private · 99 languages
+            </span>
+
             <!-- Voice Bars Visualization -->
             <div id="visualization" hidden>
               <div class="voice-bars" id="voice-bars"></div>
@@ -176,7 +190,10 @@
               <h2>History</h2>
             </div>
             <div class="history-controls">
-              <input id="history-search" class="history-search" type="search" placeholder="Search history…" aria-label="Search history" autocomplete="off">
+              <span class="history-search-field">
+                <span class="history-search-field__icon" aria-hidden="true"></span>
+                <input id="history-search" class="history-search" type="search" placeholder="Search transcripts, apps…" aria-label="Search history" autocomplete="off">
+              </span>
               <button id="history-clear" class="btn-small" aria-label="Clear all history">Clear</button>
             </div>
             <ul id="history-list" class="history-list"></ul>
@@ -215,6 +232,14 @@
                   </div>
                 </div>
                 <ul class="usage-apps" id="usage-top-apps" aria-label="Top applications"></ul>
+                <!-- Decorative activity texture (design-language ornament; no JS binds to it) -->
+                <div class="usage-spark" aria-hidden="true">
+                  <i style="height:40%"></i><i style="height:62%"></i><i style="height:30%"></i>
+                  <i style="height:75%"></i><i style="height:55%"></i><i style="height:88%"></i>
+                  <i style="height:48%"></i><i style="height:66%"></i><i style="height:92%"></i>
+                  <i style="height:38%"></i><i style="height:70%"></i><i style="height:58%"></i>
+                  <i style="height:80%"></i><i style="height:100%"></i>
+                </div>
               </div>
               <div class="analytics-group">
                 <h3 class="analytics-group__title">Last Session</h3>
@@ -248,6 +273,12 @@
                     <span class="stat-card__value" id="stat-today-sessions">0</span>
                     <span class="stat-card__label">Sessions</span>
                   </div>
+                </div>
+                <!-- Decorative streak grid (design-language ornament; no JS binds to it) -->
+                <div class="usage-streak" aria-hidden="true">
+                  <i class="on"></i><i class="on"></i><i></i><i class="on"></i><i class="hi"></i><i class="on"></i><i class="on"></i>
+                  <i class="on"></i><i class="hi"></i><i class="on"></i><i class="on"></i><i class="on"></i><i></i><i class="on"></i>
+                  <i class="hi"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="hi"></i><i class="on"></i>
                 </div>
               </div>
               <div class="analytics-group">
@@ -665,6 +696,26 @@
                     <span class="stat-card__label">Peak RMS</span>
                   </div>
                 </div>
+                <!-- Decorative input-level meter + gauges (design-language ornament; no JS binds to it) -->
+                <div class="diag-meter" aria-hidden="true">
+                  <i style="animation-delay:0s"></i><i style="animation-delay:.1s"></i><i style="animation-delay:.05s"></i>
+                  <i style="animation-delay:.2s"></i><i style="animation-delay:.12s"></i><i style="animation-delay:.28s"></i>
+                  <i style="animation-delay:.07s"></i><i style="animation-delay:.18s"></i><i style="animation-delay:.24s"></i>
+                  <i style="animation-delay:.04s"></i><i style="animation-delay:.16s"></i><i style="animation-delay:.3s"></i>
+                  <i style="animation-delay:.09s"></i><i style="animation-delay:.21s"></i><i style="animation-delay:.13s"></i>
+                  <i style="animation-delay:.26s"></i><i style="animation-delay:.02s"></i><i style="animation-delay:.19s"></i>
+                  <i style="animation-delay:.11s"></i><i style="animation-delay:.27s"></i>
+                </div>
+                <div class="diag-gauges" aria-hidden="true">
+                  <div class="diag-gauge">
+                    <div class="diag-gauge__label"><span>signal-to-noise</span><span class="diag-gauge__ok">good · 32 dB</span></div>
+                    <div class="diag-gauge__track"><i class="diag-gauge__fill--ok" style="width:78%"></i></div>
+                  </div>
+                  <div class="diag-gauge">
+                    <div class="diag-gauge__label"><span>model latency</span><span class="diag-gauge__warn">340 ms</span></div>
+                    <div class="diag-gauge__track"><i class="diag-gauge__fill--warn" style="width:52%"></i></div>
+                  </div>
+                </div>
               </div>
               <div class="analytics-group">
                 <h3 class="analytics-group__title">Transcription</h3>
@@ -724,6 +775,13 @@
     <!-- First-run onboarding overlay -->
     <div id="onboarding" class="onboarding" hidden>
       <div class="onboarding__card">
+        <!-- Decorative ripple brand mark (purely visual; no JS binds to it) -->
+        <div class="onboarding__mark" aria-hidden="true">
+          <span class="onboarding__mark-ring"></span>
+          <span class="onboarding__mark-ring"></span>
+          <span class="onboarding__mark-ring"></span>
+          <span class="onboarding__mark-core"></span>
+        </div>
         <div class="onboarding__steps">
           <span class="onboarding__dot onboarding__dot--active" data-step="0"></span>
           <span class="onboarding__dot" data-step="1"></span>
