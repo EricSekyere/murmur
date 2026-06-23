@@ -15,7 +15,7 @@
     <div class="ambient" aria-hidden="true"></div>
 
     <!-- Model Banner: shown when model not ready -->
-    <div id="model-banner" class="banner banner--warn" hidden>
+    <div id="model-banner" class="banner banner--warn" role="status" aria-live="polite" hidden>
       <span class="banner__text" id="model-banner-text">
         Downloading model...
       </span>
@@ -27,7 +27,7 @@
     </div>
 
     <!-- Error Banner: shown on start/stop failures -->
-    <div id="error-banner" class="banner banner--error" hidden>
+    <div id="error-banner" class="banner banner--error" role="alert" hidden>
       <span class="banner__text" id="error-message"></span>
       <button class="banner__dismiss" id="dismiss-error" aria-label="Dismiss error">&#215;</button>
     </div>

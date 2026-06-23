@@ -81,6 +81,12 @@
 
   listen('model-download-progress', (event) => {
     if (overlay.hidden) return;
+    if (event.payload?.error) {
+      // Surface the failure in the overlay instead of leaving a dead, silent
+      // "Waiting for the model..." mic button on the user's very first run.
+      result.textContent = 'Model download failed. Check your connection, then retry from the banner above.';
+      return;
+    }
     if (event.payload?.done) enableMicTest('Ready. Click the mic and speak.');
   });
 
