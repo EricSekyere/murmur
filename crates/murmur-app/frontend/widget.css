@@ -1,391 +1,197 @@
-/* ─── Variables ─────────────────────────────────────────────────────────── */
+/* ─── Murmur pill · the "ripple" ─────────────────────────────────────────────
+   One signature motion (a ripple from the orb) runs through every state, but
+   states are told apart by SHAPE + MOTION, never colour alone:
+     idle      breathe          listening  rings expand + calm wave
+     recording fast rings + wave processing rotor (solid)
+     loading   rotor (dashed)   error      collapse to a blinking glyph
+     locate    triple beacon
+   The OS window (176x50, grows to 320x128 for the caption) hugs the top-left,
+   so the pill never shifts on screen when the caption opens. The ripple stays
+   contained in the orb so nothing clips at the small window edges. */
 :root {
-  --accent: #a78bfa;
-  --accent-deep: #8b5cf6;
-  --record: #f87171;
-  --record-deep: #ef4444;
-  --processing: #fbbf24;
-  --text: #f0f0f5;
-  --text-dim: rgba(255, 255, 255, 0.45);
-  --border: rgba(255, 255, 255, 0.08);
-  --ease: cubic-bezier(0.16, 1, 0.3, 1);
-  --spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+  --void:#0A0B0F; --ink:#14161F; --ink-2:#1C1F2B; --ink-3:#262A3A;
+  --line:rgba(255,255,255,.08); --line-2:rgba(255,255,255,.15);
+  --bone:#E8EAF2; --dim:#8A90A6; --faint:#565C72;
+  --signal:#8B5CF6; --signal-1:#A78BFA; --signal-2:#C4B5FD;
+  --rec:#FB6E72; --rec-core:#F2555A;
+  --amber:#FBBF24; --err:#FB7185;
+  --eo:cubic-bezier(.16,1,.3,1); --sp:cubic-bezier(.34,1.56,.64,1);
+  --ui:'Space Grotesk', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --mono:'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
 }
 
-/* ─── Reset ─────────────────────────────────────────────────────────────── */
-*, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+*, *::before, *::after { margin:0; padding:0; box-sizing:border-box; }
 
 html, body {
-  width: 100vw;
-  height: 100vh;
-  background: transparent;
-  overflow: hidden;
-  user-select: none;
-  font-family: "Instrument Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  -webkit-font-smoothing: antialiased;
-  /* Anchor top-left so the pill keeps its place when the window grows to make
-     room for the live caption below it. */
-  display: flex;
-  align-items: flex-start;
-  justify-content: flex-start;
+  width:100vw; height:100vh; background:transparent; overflow:hidden;
+  user-select:none; font-family:var(--ui); -webkit-font-smoothing:antialiased;
 }
+/* Anchor top-left: the window grows right+down for the caption, so a fixed
+   offset keeps the pill visually still. */
+body { display:flex; align-items:flex-start; justify-content:flex-start; padding:7px; }
 
-/* ─── Stack (pill + caption) ────────────────────────────────────────────── */
-.stack {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 6px;
-  padding: 7px;
-}
+.stack { display:flex; flex-direction:column; align-items:flex-start; gap:6px; }
 
-/* ─── Live Caption ──────────────────────────────────────────────────────── */
-.caption {
-  max-width: 300px;
-  padding: 7px 11px;
-  border-radius: 13px;
-  border: 1px solid var(--border);
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0) 42%),
-    linear-gradient(180deg, rgba(24, 24, 36, 0.97), rgba(13, 13, 22, 0.97));
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
-  animation: caption-in 0.28s var(--ease);
-}
-
-.caption[hidden] { display: none; }
-
-.caption__text {
-  display: -webkit-box;
-  -webkit-line-clamp: 3;
-  line-clamp: 3;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-  font-size: 0.72rem;
-  line-height: 1.45;
-  color: var(--text);
-  word-break: break-word;
-}
-
-.caption__text:empty::before {
-  content: "listening…";
-  color: var(--text-dim);
-}
-
-@keyframes caption-in {
-  from { opacity: 0; transform: translateY(-4px); }
-  to   { opacity: 1; transform: translateY(0); }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .caption { animation: none; }
-}
-
-/* ─── Pill ──────────────────────────────────────────────────────────────── */
+/* ─── Pill body (glass) ──────────────────────────────────────────────────── */
 .pill {
-  position: relative;
-  display: flex;
-  align-items: center;
-  height: 36px;
-  border-radius: 18px;
-  /* Layered glass: a top sheen over a deep, slightly blue-black body. */
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.07), rgba(255, 255, 255, 0) 42%),
-    linear-gradient(180deg, rgba(24, 24, 36, 0.97), rgba(13, 13, 22, 0.97));
-  border: 1px solid var(--border);
-  padding: 3px 10px 3px 3px;
-  gap: 0;
-  cursor: grab;
-  transition: width 0.45s var(--ease),
-              border-color 0.35s ease,
-              box-shadow 0.4s ease;
-  overflow: hidden;
-  /* No outer drop shadow: the widget window is barely larger than the
-     pill, so blurred shadows clip at the window edge and read as a faint
-     rectangular "glass box" on the desktop. Depth comes from the border
-     and inner highlight instead. */
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  position:relative; display:flex; align-items:center; gap:9px;
+  height:36px; min-width:0; padding:0 14px 0 8px;
+  border-radius:999px;
+  background:linear-gradient(180deg, rgba(40,43,58,.92), rgba(18,20,28,.94));
+  border:1px solid var(--line-2);
+  box-shadow:0 1px 0 rgba(255,255,255,.07) inset,
+             0 -6px 14px rgba(0,0,0,.35) inset,
+             0 0 0 .5px rgba(0,0,0,.5);
+  backdrop-filter:blur(14px); -webkit-backdrop-filter:blur(14px);
+  cursor:grab;
+  transition:transform .18s var(--sp), box-shadow .18s var(--eo), border-color .25s ease;
+}
+.pill:active { cursor:grabbing; }
+
+/* ─── Orb (the ripple origin) — also the click target ────────────────────── */
+.orb {
+  position:relative; width:24px; height:24px; flex:0 0 auto;
+  display:grid; place-items:center; border:none; background:none; padding:0;
+  cursor:pointer;
+}
+.core {
+  width:9px; height:9px; border-radius:50%; background:var(--signal); position:relative; z-index:3;
+  box-shadow:0 0 8px 1px color-mix(in oklch, var(--signal), transparent 35%);
+  transition:width .2s var(--eo), height .2s var(--eo), background .2s ease, transform .2s var(--sp);
+}
+.ring {
+  position:absolute; inset:0; margin:auto; width:14px; height:14px; border-radius:50%;
+  border:1.5px solid var(--signal-1); opacity:0; z-index:2; pointer-events:none;
+}
+.arc {
+  position:absolute; inset:-1px; border-radius:50%; border:2px solid transparent;
+  border-top-color:var(--amber); border-right-color:color-mix(in oklch, var(--amber), transparent 55%);
+  opacity:0; z-index:2; pointer-events:none;
+}
+.glyph {
+  position:absolute; inset:0; display:grid; place-items:center; opacity:0; z-index:4;
+  font-family:var(--mono); font-size:13px; font-weight:700; color:var(--err); pointer-events:none;
 }
 
-.pill:active { cursor: grabbing; }
+/* ─── Label + wave ───────────────────────────────────────────────────────── */
+.label {
+  font-size:13px; letter-spacing:-.01em; color:var(--bone); white-space:nowrap;
+  font-weight:450; transition:color .2s ease;
+}
+.label.mono { font-family:var(--mono); font-size:12.5px; letter-spacing:0; font-variant-numeric:tabular-nums; }
+.ellip i { opacity:.25; animation:ellip 1.2s infinite; }
+.ellip i:nth-child(2) { animation-delay:.18s; }
+.ellip i:nth-child(3) { animation-delay:.36s; }
 
-/* ─── Ambient Ring ──────────────────────────────────────────────────────── */
-.pill__ring {
-  position: absolute;
-  inset: -1px;
-  border-radius: 19px;
-  pointer-events: none;
-  z-index: 0;
-  opacity: 0;
-  transition: opacity 0.4s ease, box-shadow 0.4s ease;
+.wave { display:none; align-items:center; gap:2.5px; height:16px; margin-left:1px;
+  transform-origin:center; transition:transform .08s linear; }
+.wave i { width:2.5px; height:5px; border-radius:2px; background:var(--signal-1); transform-origin:center; }
+.spacer { flex:1; align-self:stretch; }
+
+/* ═══ States (set as s-* on #widget by widget.js) ═══════════════════════════ */
+.s-idle .core { background:var(--signal); }
+.s-idle .ring.r1 { animation:breathe 3.4s var(--eo) infinite; }
+
+.s-listening .core { background:var(--signal-1); box-shadow:0 0 10px color-mix(in oklch, var(--signal-1), transparent 30%); }
+.s-listening .ring.r1 { animation:breathe 2.6s var(--eo) infinite; }
+.s-listening .ring.r2 { animation:breathe 2.6s var(--eo) infinite; animation-delay:1.3s; }
+.s-listening .wave { display:flex; opacity:.7; transform:scaleY(calc(.5 + min(var(--amp,0),1) * .5)); }
+.s-listening .wave i { animation:waveCalm 1.8s ease-in-out infinite; }
+.s-listening .wave i:nth-child(odd) { animation-delay:.3s; }
+
+.s-recording .core { background:var(--rec-core); animation:corePulse 1s ease-in-out infinite;
+  box-shadow:0 0 12px 2px color-mix(in oklch, var(--rec), transparent 25%); }
+.s-recording .ring { border-color:var(--rec); }
+.s-recording .ring.r1 { animation:breathe 1.5s var(--eo) infinite; }
+.s-recording .ring.r2 { animation:breathe 1.5s var(--eo) infinite; animation-delay:.75s; }
+.s-recording .wave { display:flex; transform:scaleY(calc(.55 + min(var(--amp,0),1) * .9)); }
+.s-recording .wave i { background:var(--rec); animation:wave .9s ease-in-out infinite; }
+.s-recording .wave i:nth-child(1) { animation-delay:0s; }
+.s-recording .wave i:nth-child(2) { animation-delay:.12s; }
+.s-recording .wave i:nth-child(3) { animation-delay:.05s; }
+.s-recording .wave i:nth-child(4) { animation-delay:.22s; }
+.s-recording .wave i:nth-child(5) { animation-delay:.1s; }
+.s-recording .wave i:nth-child(6) { animation-delay:.18s; }
+.s-recording .wave i:nth-child(7) { animation-delay:.04s; }
+
+.s-processing .core { width:6px; height:6px; background:var(--amber); }
+.s-processing .arc { opacity:1; animation:spin .85s linear infinite; }
+.s-processing .label { color:var(--amber); }
+
+.s-loading .core { width:6px; height:6px; background:var(--amber); }
+.s-loading .arc { opacity:1; border-style:dashed; animation:spin 1.15s linear infinite; }
+.s-loading .label { color:var(--amber); }
+
+/* Animated trailing ellipsis while thinking / loading. */
+.s-processing .label::after, .s-loading .label::after {
+  content:""; display:inline-block; width:1.1em; text-align:left;
+  animation:dots 1.4s steps(4,end) infinite;
 }
 
-/* ─── Orb ───────────────────────────────────────────────────────────────── */
-.pill__orb {
-  position: relative;
-  width: 30px;
-  height: 30px;
-  border-radius: 50%;
-  border: none;
-  background: rgba(255, 255, 255, 0.05);
-  color: var(--text-dim);
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-  z-index: 2;
-  transition: background 0.3s ease, color 0.3s ease,
-              box-shadow 0.3s ease, transform 0.3s var(--spring);
+.s-error .core { opacity:0; }
+.s-error .glyph { opacity:1; animation:errBlink 1.6s steps(1,end) infinite; }
+.s-error .label { color:var(--err); }
+.s-error.pill, .s-error .pill { border-color:color-mix(in oklch, var(--err), transparent 55%); }
+
+/* Locate beacon — a transient overlay on top of whatever state. */
+.is-locating .core { background:var(--signal-1); }
+.is-locating .ring { border-color:var(--signal-2); border-width:2px; animation:locate 1.3s var(--eo) infinite; }
+.is-locating .ring.r2 { animation-delay:.32s; }
+.is-locating .ring.r3 { animation-delay:.64s; }
+.is-locating { animation:locateGlow 1.3s ease-in-out infinite; }
+
+/* ─── Micro-states (real pseudo-classes) ─────────────────────────────────── */
+.pill:hover { transform:translateY(-1px);
+  box-shadow:0 1px 0 rgba(255,255,255,.1) inset, 0 -6px 14px rgba(0,0,0,.35) inset,
+             0 0 0 .5px rgba(0,0,0,.5), 0 0 18px -4px color-mix(in oklch, var(--signal), transparent 55%); }
+.orb:hover .core { transform:scale(1.12); }
+.orb:active .core { transform:scale(.9); }
+.orb:focus-visible { outline:2px solid var(--signal-1); outline-offset:3px; border-radius:50%; }
+
+/* ─── Live caption (attached bubble below the pill) ──────────────────────── */
+.caption {
+  max-width:280px; padding:11px 15px; border-radius:14px;
+  border:1px solid var(--line-2);
+  background:linear-gradient(180deg, rgba(28,31,43,.96), rgba(16,18,26,.97));
+  box-shadow:0 1px 0 rgba(255,255,255,.05) inset, 0 10px 24px -12px rgba(0,0,0,.6);
+  backdrop-filter:blur(14px); -webkit-backdrop-filter:blur(14px);
+  animation:caption-in .26s var(--eo);
 }
-
-.pill__orb:hover {
-  background: rgba(255, 255, 255, 0.1);
-  color: var(--text);
-  transform: scale(1.06);
+.caption[hidden] { display:none; }
+.caption__text {
+  display:-webkit-box; -webkit-line-clamp:3; line-clamp:3; -webkit-box-orient:vertical;
+  overflow:hidden; font-size:13.5px; line-height:1.5; color:var(--bone); word-break:break-word;
 }
+.caption__text:empty::before { content:"listening…"; color:var(--faint); }
 
-.pill__orb:active {
-  transform: scale(0.93);
+/* ─── Keyframes ──────────────────────────────────────────────────────────── */
+@keyframes breathe { 0%{transform:scale(.6);opacity:.7} 70%{opacity:0} 100%{transform:scale(1.7);opacity:0} }
+@keyframes halo { 0%{transform:scale(.6);opacity:.65} 80%{opacity:0} 100%{transform:scale(3.2);opacity:0} }
+@keyframes locate { 0%{transform:scale(.5);opacity:.85} 100%{transform:scale(2.4);opacity:0} }
+@keyframes locateGlow {
+  0%,100% { box-shadow:0 1px 0 rgba(255,255,255,.07) inset, 0 0 0 .5px rgba(0,0,0,.5), 0 0 0 0 color-mix(in oklch, var(--signal-1), transparent 70%); }
+  50% { box-shadow:0 1px 0 rgba(255,255,255,.12) inset, 0 0 0 .5px rgba(0,0,0,.5), 0 0 22px 1px color-mix(in oklch, var(--signal-1), transparent 50%); }
 }
+@keyframes corePulse { 0%,100%{transform:scale(1)} 50%{transform:scale(1.22)} }
+@keyframes wave { 0%,100%{height:4px} 50%{height:15px} }
+@keyframes waveCalm { 0%,100%{height:4px} 50%{height:8px} }
+@keyframes spin { to { transform:rotate(360deg); } }
+@keyframes ellip { 0%,100%{opacity:.22} 50%{opacity:1} }
+@keyframes errBlink { 0%,49%{opacity:1} 50%,74%{opacity:.2} 75%,100%{opacity:1} }
+@keyframes caption-in { from{opacity:0;transform:translateY(-4px)} to{opacity:1;transform:none} }
+@keyframes dots { 0%{content:""} 25%{content:"."} 50%{content:".."} 75%{content:"..."} 100%{content:""} }
 
-.pill__orb:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
-}
-
-/* Sonar ping ring, only animated while recording. */
-.pill__orb::after {
-  content: "";
-  position: absolute;
-  inset: -2px;
-  border-radius: 50%;
-  border: 1.5px solid transparent;
-  opacity: 0;
-  pointer-events: none;
-}
-
-/* ─── Icons ─────────────────────────────────────────────────────────────── */
-.pill__icon {
-  position: absolute;
-  width: 14px;
-  height: 14px;
-  transition: opacity 0.2s ease, transform 0.3s var(--spring);
-}
-
-.pill__icon--mic   { opacity: 1; transform: scale(1); }
-.pill__icon--stop  { opacity: 0; transform: scale(0.4); }
-.pill__icon--spin  { opacity: 0; transform: scale(0.4); }
-
-/* ─── Waveform ──────────────────────────────────────────────────────────── */
-.pill__wave {
-  display: none;
-  width: 68px;
-  height: 26px;
-  flex-shrink: 0;
-  margin-left: 4px;
-  z-index: 1;
-}
-
-/* ─── Label ─────────────────────────────────────────────────────────────── */
-.pill__label {
-  font-size: 0.68rem;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: lowercase;
-  font-variant-numeric: tabular-nums;
-  color: var(--text-dim);
-  white-space: nowrap;
-  padding: 0 2px 0 6px;
-  z-index: 1;
-  transition: color 0.3s ease, opacity 0.25s ease;
-}
-
-/* ═══════════════════════════════════════════════════════════════════════════
-   IDLE
-   ═══════════════════════════════════════════════════════════════════════════ */
-.pill--idle {
-  width: 108px;
-}
-
-.pill--idle .pill__orb {
-  background: linear-gradient(180deg, rgba(167, 139, 250, 0.18), rgba(139, 92, 246, 0.1));
-  color: var(--accent);
-  animation: orb-breathe 4.5s ease-in-out infinite;
-}
-
-.pill--idle:hover .pill__orb {
-  background: linear-gradient(180deg, rgba(167, 139, 250, 0.26), rgba(139, 92, 246, 0.16));
-}
-
-/* ═══════════════════════════════════════════════════════════════════════════
-   RECORDING
-   ═══════════════════════════════════════════════════════════════════════════ */
-.pill--recording {
-  width: 158px;
-  border-color: rgba(248, 113, 113, 0.35);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
-}
-
-.pill--recording .pill__ring {
-  opacity: 1;
-  box-shadow: inset 0 0 0 1px rgba(248, 113, 113, 0.14),
-              inset 0 0 18px rgba(239, 68, 68, 0.07);
-}
-
-.pill--recording .pill__orb {
-  background: linear-gradient(180deg, #f87171, #dc2626);
-  color: white;
-  box-shadow: 0 0 14px rgba(239, 68, 68, 0.45);
-  animation: orb-pulse 2s infinite ease-in-out;
-}
-
-.pill--recording .pill__orb::after {
-  border-color: rgba(248, 113, 113, 0.55);
-  animation: sonar 1.7s ease-out infinite;
-}
-
-.pill--recording .pill__icon--mic  { opacity: 0; transform: scale(0.4); }
-.pill--recording .pill__icon--stop { opacity: 1; transform: scale(1); }
-
-.pill--recording .pill__wave  { display: block; }
-
-.pill--recording .pill__label {
-  color: rgba(248, 113, 113, 0.9);
-  font-weight: 600;
-  min-width: 30px;
-  text-align: right;
-}
-
-/* ═══════════════════════════════════════════════════════════════════════════
-   PROCESSING
-   ═══════════════════════════════════════════════════════════════════════════ */
-.pill--processing {
-  width: 124px;
-  border-color: rgba(251, 191, 36, 0.3);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
-}
-
-.pill--processing .pill__ring {
-  opacity: 0.6;
-  box-shadow: inset 0 0 0 1px rgba(251, 191, 36, 0.14);
-}
-
-.pill--processing .pill__orb {
-  background: linear-gradient(180deg, rgba(251, 191, 36, 0.18), rgba(245, 158, 11, 0.1));
-  color: var(--processing);
-}
-
-.pill--processing .pill__icon--mic  { opacity: 0; transform: scale(0.4); }
-.pill--processing .pill__icon--spin { opacity: 1; transform: scale(1); animation: spin 0.8s linear infinite; }
-
-.pill--processing .pill__label {
-  color: var(--processing);
-}
-
-/* Animated ellipsis while thinking. */
-.pill--processing .pill__label::after {
-  content: "";
-  display: inline-block;
-  width: 1.1em;
-  text-align: left;
-  animation: dots 1.4s steps(4, end) infinite;
-}
-
-/* ═══════════════════════════════════════════════════════════════════════════
-   ERROR
-   ═══════════════════════════════════════════════════════════════════════════ */
-.pill--error {
-  width: 124px;
-  border-color: rgba(248, 113, 113, 0.4);
-  animation: shake 0.35s var(--spring);
-}
-
-.pill--error .pill__orb {
-  background: linear-gradient(180deg, #f87171, #dc2626);
-  color: white;
-}
-
-.pill--error .pill__label { color: var(--record); }
-
-/* ═══════════════════════════════════════════════════════════════════════════
-   LOCATE ("Find pill")
-   ═══════════════════════════════════════════════════════════════════════════ */
-/* A few bold accent flashes so a pill dragged into a corner or hidden behind a
-   window is easy to spot. The window hugs the pill, so the effect stays within
-   bounds (a small scale + a glow that fills the margins) rather than a wide
-   halo that would clip at the window edge. */
-.pill.locating {
-  animation: locate-flash 0.55s ease-in-out 4;
-}
-
-@keyframes locate-flash {
-  0%, 100% {
-    transform: scale(1);
-    border-color: var(--border);
-  }
-  50% {
-    transform: scale(1.07);
-    border-color: var(--accent);
-    box-shadow: inset 0 0 0 1.5px var(--accent),
-                inset 0 0 16px rgba(167, 139, 250, 0.55),
-                0 0 12px rgba(167, 139, 250, 0.85);
-  }
-}
-
+/* ─── Reduced motion: every state stays readable as a static shape ───────── */
 @media (prefers-reduced-motion: reduce) {
-  /* Keep the color beacon but drop the scale/motion. */
-  @keyframes locate-flash {
-    0%, 100% { border-color: var(--border); }
-    50% {
-      border-color: var(--accent);
-      box-shadow: inset 0 0 0 1.5px var(--accent), 0 0 12px rgba(167, 139, 250, 0.85);
-    }
-  }
-}
-
-/* ─── Animations ────────────────────────────────────────────────────────── */
-@keyframes orb-breathe {
-  0%, 100% { box-shadow: 0 0 0 0 rgba(139, 92, 246, 0); }
-  50%      { box-shadow: 0 0 14px 1px rgba(139, 92, 246, 0.22); }
-}
-
-@keyframes orb-pulse {
-  0%, 100% { box-shadow: 0 0 14px rgba(239, 68, 68, 0.4); }
-  50%      { box-shadow: 0 0 24px rgba(239, 68, 68, 0.65); }
-}
-
-@keyframes sonar {
-  0%   { transform: scale(1);    opacity: 0.8; }
-  70%  { transform: scale(1.45); opacity: 0; }
-  100% { transform: scale(1.45); opacity: 0; }
-}
-
-@keyframes spin {
-  to { transform: rotate(360deg); }
-}
-
-@keyframes dots {
-  0%   { content: ""; }
-  25%  { content: "."; }
-  50%  { content: ".."; }
-  75%  { content: "..."; }
-  100% { content: ""; }
-}
-
-@keyframes shake {
-  0%, 100% { transform: translateX(0); }
-  20% { transform: translateX(-3px); }
-  40% { transform: translateX(3px); }
-  60% { transform: translateX(-2px); }
-  80% { transform: translateX(2px); }
-}
-
-/* ─── Reduced Motion ────────────────────────────────────────────────────── */
-@media (prefers-reduced-motion: reduce) {
-  .pill { transition: none; }
-  .pill--idle .pill__orb,
-  .pill--recording .pill__orb,
-  .pill--error { animation: none; }
-  .pill--recording .pill__orb::after { animation: none; opacity: 0; }
-  .pill--processing .pill__label::after { animation: none; content: "..."; }
+  .ring, .arc, .core, .wave i, .ellip i, .glyph, .pill, .is-locating, .caption { animation:none !important; transition:none !important; }
+  .ring.r1 { opacity:.5; transform:scale(1.4); }
+  .ring.r2 { opacity:.28; transform:scale(2); }
+  .ring.r3 { opacity:.15; transform:scale(2.6); }
+  .s-processing .arc, .s-loading .arc { opacity:1; transform:rotate(135deg); }
+  .s-processing .label::after, .s-loading .label::after { animation:none; content:"…"; }
+  .s-error .glyph { opacity:1; }
+  .s-recording .wave i:nth-child(1) { height:7px; } .s-recording .wave i:nth-child(2) { height:13px; }
+  .s-recording .wave i:nth-child(3) { height:5px; } .s-recording .wave i:nth-child(4) { height:15px; }
+  .s-recording .wave i:nth-child(5) { height:9px; } .s-recording .wave i:nth-child(6) { height:11px; }
+  .s-recording .wave i:nth-child(7) { height:6px; }
 }

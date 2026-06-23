@@ -17,7 +17,7 @@ use windows::Win32::Foundation::{CloseHandle, FALSE, WAIT_OBJECT_0};
 use windows::Win32::Media::Audio::{
     AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_EVENTCALLBACK, AUDCLNT_STREAMOPTIONS_NONE,
     AudioCategory_Communications, AudioClientProperties, IAudioCaptureClient, IAudioClient2,
-    IMMDeviceEnumerator, MMDeviceEnumerator, eCapture, eCommunications,
+    IAudioRenderClient, IMMDeviceEnumerator, MMDeviceEnumerator, eCapture, eConsole, eRender,
 };
 use windows::Win32::System::Com::{
     CLSCTX_ALL, COINIT_MULTITHREADED, CoCreateInstance, CoInitializeEx, CoTaskMemFree,
@@ -110,9 +110,14 @@ fn capture_loop(
         let enumerator: IMMDeviceEnumerator =
             CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL)
                 .context("Create MMDeviceEnumerator failed")?;
+        // AEC comes from the Communications *category* (SetClientProperties below),
+        // not the endpoint role. Use the same default endpoint the raw CPAL path
+        // uses (eConsole) so AEC processes the mic the user actually dictates into.
+        // The Communications default can be a different, silent device (a muted
+        // headset, a webcam mic), which is a classic cause of digital silence.
         let device = enumerator
-            .GetDefaultAudioEndpoint(eCapture, eCommunications)
-            .context("No default communications capture device")?;
+            .GetDefaultAudioEndpoint(eCapture, eConsole)
+            .context("No default capture device")?;
         let client: IAudioClient2 = device
             .Activate(CLSCTX_ALL, None)
             .context("Activate IAudioClient2 failed")?;
@@ -165,8 +170,34 @@ fn capture_loop(
         // Initialized: hand the negotiated format back so the caller can return.
         let _ = init_tx.send(Ok((rate, channels)));
 
+        // AEC echo reference: the Windows Communications AEC gates its capture to
+        // digital silence unless a render stream is also active in the same comms
+        // session to serve as the echo reference. Open a silent render keep-alive
+        // so the AEC passes the mic through. Best-effort; capture runs without it.
+        let render = match setup_silence_render(&enumerator, &props) {
+            Ok(r) => Some(r),
+            Err(e) => {
+                tracing::warn!("AEC render reference unavailable: {e:#}");
+                None
+            }
+        };
+
         let ch = channels.max(1) as usize;
+        // Diagnostics: how much audio the AEC pipeline actually delivered, and how
+        // much of it the engine flagged as silence. Reveals on a real repro whether
+        // the comms/AEC path is the source of the digital-silence sessions.
+        let mut captured_frames: u64 = 0;
+        let mut silent_frames: u64 = 0;
         while !stop.load(Ordering::Acquire) {
+            // Keep the AEC reference fed with silence so it never underruns.
+            if let Some((rclient, rrender, bufsize)) = render.as_ref()
+                && let Ok(padding) = rclient.GetCurrentPadding()
+            {
+                let avail = bufsize.saturating_sub(padding);
+                if avail > 0 && rrender.GetBuffer(avail).is_ok() {
+                    let _ = rrender.ReleaseBuffer(avail, AUDCLNT_BUFFERFLAGS_SILENT);
+                }
+            }
             if WaitForSingleObject(event, 200) != WAIT_OBJECT_0 {
                 continue;
             }
@@ -184,12 +215,17 @@ fn capture_loop(
                 {
                     break;
                 }
+                let silent = flags & AUDCLNT_BUFFERFLAGS_SILENT != 0;
+                captured_frames += frames as u64;
+                if silent {
+                    silent_frames += frames as u64;
+                }
                 let total = frames as usize * ch;
                 if total > 0
                     && let Ok(mut buf) = buffer.lock()
                     && buf.len() < max_samples
                 {
-                    if flags & AUDCLNT_BUFFERFLAGS_SILENT != 0 {
+                    if silent {
                         buf.extend(std::iter::repeat_n(0.0, total));
                     } else {
                         push_samples(&mut buf, data, total, bits, is_float);
@@ -199,10 +235,55 @@ fn capture_loop(
             }
         }
 
+        let silent_pct = if captured_frames > 0 {
+            silent_frames * 100 / captured_frames
+        } else {
+            0
+        };
+        tracing::info!(
+            "Voice capture ended: {captured_frames} frames ({silent_pct}% flagged silent by the AEC)"
+        );
+
+        if let Some((rclient, _, _)) = render.as_ref() {
+            let _ = rclient.Stop();
+        }
         let _ = client.Stop();
         let _ = CloseHandle(event);
     }
     Ok(())
+}
+
+/// Open a silent shared-mode render stream on the default endpoint in the
+/// Communications category. Its only job is to give the capture-side AEC its
+/// echo reference so the AEC passes the mic through instead of zeroing it.
+fn setup_silence_render(
+    enumerator: &IMMDeviceEnumerator,
+    props: &AudioClientProperties,
+) -> Result<(IAudioClient2, IAudioRenderClient, u32)> {
+    unsafe {
+        let device = enumerator
+            .GetDefaultAudioEndpoint(eRender, eConsole)
+            .context("No default render endpoint")?;
+        let client: IAudioClient2 = device
+            .Activate(CLSCTX_ALL, None)
+            .context("Activate render")?;
+        client
+            .SetClientProperties(props)
+            .context("render SetClientProperties")?;
+        let fmt = client.GetMixFormat().context("render GetMixFormat")?;
+        let init = client.Initialize(AUDCLNT_SHAREMODE_SHARED, 0, 0, 0, fmt, None);
+        CoTaskMemFree(Some(fmt as *const _));
+        init.context("render Initialize")?;
+        let render: IAudioRenderClient = client.GetService().context("render GetService")?;
+        let bufsize = client.GetBufferSize().context("render GetBufferSize")?;
+        // Pre-roll the whole buffer with silence so it starts cleanly.
+        let _ = render.GetBuffer(bufsize).context("render GetBuffer")?;
+        render
+            .ReleaseBuffer(bufsize, AUDCLNT_BUFFERFLAGS_SILENT)
+            .context("render ReleaseBuffer")?;
+        client.Start().context("render Start")?;
+        Ok((client, render, bufsize))
+    }
 }
 
 /// Convert `count` interleaved native samples at `data` to f32 and append them.
