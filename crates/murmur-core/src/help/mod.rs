@@ -52,10 +52,59 @@ pub fn articles() -> Vec<(&'static str, &'static str)> {
             "Getting started",
             include_str!("articles/getting-started.md"),
         ),
-        ("Models", include_str!("articles/models.md")),
+        (
+            "The floating pill",
+            include_str!("articles/floating-pill.md"),
+        ),
+        (
+            "Models, languages and translation",
+            include_str!("articles/models.md"),
+        ),
+        (
+            "Output and delivery",
+            include_str!("articles/output-delivery.md"),
+        ),
+        (
+            "Voice commands and editing",
+            include_str!("articles/voice-commands.md"),
+        ),
+        (
+            "Snippets and personal dictionary",
+            include_str!("articles/snippets-dictionary.md"),
+        ),
+        (
+            "Developer mode and code dictation",
+            include_str!("articles/developer-mode.md"),
+        ),
+        (
+            "Codebase vocabulary",
+            include_str!("articles/codebase-vocabulary.md"),
+        ),
+        ("Per-app profiles", include_str!("articles/app-profiles.md")),
+        (
+            "Microphone and audio",
+            include_str!("articles/microphone-audio.md"),
+        ),
+        (
+            "Privacy and your data",
+            include_str!("articles/privacy-data.md"),
+        ),
+        (
+            "History and analytics",
+            include_str!("articles/history-analytics.md"),
+        ),
+        ("Diagnostics", include_str!("articles/diagnostics.md")),
+        (
+            "Integrations and updates",
+            include_str!("articles/integrations-updates.md"),
+        ),
         (
             "Troubleshooting",
             include_str!("articles/troubleshooting.md"),
+        ),
+        (
+            "Shortcuts and commands reference",
+            include_str!("articles/shortcuts-reference.md"),
         ),
     ]
 }
