@@ -218,6 +218,29 @@ impl HelpIndex {
     }
 }
 
+/// The ready-to-query Help engine: the embedder plus an index over the bundled
+/// corpus. `load()` does the one-time corpus embedding; `search()` embeds the
+/// query and returns the best sections.
+pub struct HelpEngine {
+    embedder: OnnxEmbedder,
+    index: HelpIndex,
+}
+
+impl HelpEngine {
+    /// Load the embedder (model must be downloaded) and embed the corpus.
+    pub fn load() -> Result<Self> {
+        let embedder = OnnxEmbedder::load()?;
+        let index = HelpIndex::build(&embedder, &articles())?;
+        Ok(Self { embedder, index })
+    }
+
+    /// Top `k` help sections for a natural-language question.
+    pub fn search(&self, query: &str, k: usize) -> Result<Vec<HelpHit>> {
+        let embedding = self.embedder.embed_query(query)?;
+        Ok(self.index.search(&embedding, k))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
