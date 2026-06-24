@@ -73,6 +73,11 @@ pub(crate) struct AppState {
     /// Set when a change arrives mid-scan; the running scan picks it up and
     /// re-runs once instead of being lost.
     pub index_pending: AtomicBool,
+    /// Local Help retrieval engine, built in the background at startup once the
+    /// embedder model is downloaded. `None` until ready (or if the build fails);
+    /// `help_search` then returns no hits rather than erroring.
+    #[cfg(feature = "full")]
+    pub help: Arc<Mutex<Option<murmur_core::help::HelpEngine>>>,
 }
 
 #[derive(serde::Serialize, Clone)]
@@ -106,6 +111,17 @@ pub(crate) struct ModelChangedEvent {
     pub model_id: String,
     pub model_name: String,
     pub ready: bool,
+}
+
+/// One Help search result sent to the frontend: the matched section plus its
+/// cosine score. Mirrors `murmur_core::help::HelpHit`.
+#[cfg(feature = "full")]
+#[derive(serde::Serialize, Clone)]
+pub(crate) struct HelpResultDto {
+    pub article: String,
+    pub heading: String,
+    pub body: String,
+    pub score: f32,
 }
 
 /// Emit a `recording-state` event to all windows (main + widget).

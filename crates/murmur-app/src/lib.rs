@@ -138,6 +138,8 @@ pub fn run() -> anyhow::Result<()> {
             codebase_watcher: Mutex::new(None),
             indexing: std::sync::atomic::AtomicBool::new(false),
             index_pending: std::sync::atomic::AtomicBool::new(false),
+            #[cfg(feature = "full")]
+            help: Arc::new(Mutex::new(None)),
         })
         .on_window_event(|window, event| {
             // Hide the main window on close so the tray can re-show it.
@@ -171,6 +173,10 @@ pub fn run() -> anyhow::Result<()> {
             commands::mcp_install,
             commands::get_usage_stats,
             commands::learn_vocabulary,
+            #[cfg(feature = "full")]
+            commands::help_search,
+            #[cfg(feature = "full")]
+            commands::help_ready,
             updater::install_update,
         ])
         .setup(move |app| setup_app(app, engine_for_setup, model, &hotkey, show_widget_on_start))
@@ -252,6 +258,8 @@ fn setup_app(
     input::spawn_global_input_listener(app.handle().clone());
     updater::spawn_startup_check(app.handle().clone());
     spawn_project_index(app.handle().clone());
+    #[cfg(feature = "full")]
+    spawn_help_index(app.handle().clone());
     watcher::rewatch(app.handle());
 
     tracing::info!("Murmur app started");
@@ -357,6 +365,46 @@ fn run_one_index(app: &tauri::AppHandle) {
             );
         }
     }
+}
+
+/// Prepare the local Help search engine in the background: download the small
+/// embedder model if missing, then embed the bundled corpus off the async
+/// reactor and store the ready engine in `AppState::help`. Emits `help-ready`
+/// so the Help view can drop its "preparing" note. Non-fatal: on any failure
+/// Help simply stays unavailable (the command returns no hits).
+#[cfg(feature = "full")]
+pub(crate) fn spawn_help_index(app: tauri::AppHandle) {
+    use murmur_core::help::{self, HelpEngine};
+
+    tauri::async_runtime::spawn(async move {
+        if let Err(e) = help::download().await {
+            tracing::warn!(
+                "Help embedder download failed; Help search unavailable: {:#}",
+                e
+            );
+            return;
+        }
+
+        // Corpus embedding is CPU-heavy: build off the reactor.
+        let engine = match tokio::task::spawn_blocking(HelpEngine::load).await {
+            Ok(Ok(engine)) => engine,
+            Ok(Err(e)) => {
+                tracing::warn!("Help engine load failed; Help search unavailable: {:#}", e);
+                return;
+            }
+            Err(e) => {
+                tracing::warn!("Help engine load task panicked; Help search unavailable: {e}");
+                return;
+            }
+        };
+
+        let Some(state) = app.try_state::<AppState>() else {
+            return;
+        };
+        *state.help.lock().unwrap_or_else(|e| e.into_inner()) = Some(engine);
+        let _ = app.emit("help-ready", serde_json::json!({ "ready": true }));
+        tracing::info!("Help search ready");
+    });
 }
 
 fn build_tray(app: &mut tauri::App) -> tauri::Result<()> {
