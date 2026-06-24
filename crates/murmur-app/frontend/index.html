@@ -4,6 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Murmur</title>
+  <link rel="stylesheet" href="fonts.css">
   <link rel="stylesheet" href="style.css">
   <link rel="stylesheet" href="components.css">
   <link rel="stylesheet" href="dashboard.css">
@@ -15,7 +16,7 @@
     <div class="ambient" aria-hidden="true"></div>
 
     <!-- Model Banner: shown when model not ready -->
-    <div id="model-banner" class="banner banner--warn" hidden>
+    <div id="model-banner" class="banner banner--warn" role="status" aria-live="polite" hidden>
       <span class="banner__text" id="model-banner-text">
         Downloading model...
       </span>
@@ -27,7 +28,7 @@
     </div>
 
     <!-- Error Banner: shown on start/stop failures -->
-    <div id="error-banner" class="banner banner--error" hidden>
+    <div id="error-banner" class="banner banner--error" role="alert" hidden>
       <span class="banner__text" id="error-message"></span>
       <button class="banner__dismiss" id="dismiss-error" aria-label="Dismiss error">&#215;</button>
     </div>
@@ -45,6 +46,9 @@
       <!-- Sidebar -->
       <aside class="sidebar">
         <div class="header__brand">
+          <span class="brandmark" aria-hidden="true">
+            <span class="bm-ring"></span><span class="bm-ring"></span><span class="bm-core"></span>
+          </span>
           <h1 class="logo">murmur</h1>
           <span id="dev-mode-badge" class="badge badge--dev" hidden>DEV</span>
         </div>
@@ -81,6 +85,14 @@
             </svg>
             <span>Diagnostics</span>
           </button>
+          <button class="nav__item" data-view="help">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <circle cx="12" cy="12" r="10"/>
+              <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/>
+              <line x1="12" y1="17" x2="12.01" y2="17"/>
+            </svg>
+            <span>Help</span>
+          </button>
         </nav>
 
         <!-- Footer chips -->
@@ -116,6 +128,16 @@
                 </svg>
               </button>
             </div>
+
+            <!-- Design v2 hub copy (decorative/static; no JS binds to these) -->
+            <h2 class="hero__heading">Hold to speak</h2>
+            <p class="hero__status" aria-hidden="true">
+              Idle · ready when you are
+              <span class="hero__level"><i></i><i></i><i></i><i></i><i></i></span>
+            </p>
+            <span class="hero__chip" aria-hidden="true">
+              <span class="hero__chip-dot"></span> on-device · private · 99 languages
+            </span>
 
             <!-- Voice Bars Visualization -->
             <div id="visualization" hidden>
@@ -176,7 +198,10 @@
               <h2>History</h2>
             </div>
             <div class="history-controls">
-              <input id="history-search" class="history-search" type="search" placeholder="Search history…" aria-label="Search history" autocomplete="off">
+              <span class="history-search-field">
+                <span class="history-search-field__icon" aria-hidden="true"></span>
+                <input id="history-search" class="history-search" type="search" placeholder="Search transcripts, apps…" aria-label="Search history" autocomplete="off">
+              </span>
               <button id="history-clear" class="btn-small" aria-label="Clear all history">Clear</button>
             </div>
             <ul id="history-list" class="history-list"></ul>
@@ -215,6 +240,14 @@
                   </div>
                 </div>
                 <ul class="usage-apps" id="usage-top-apps" aria-label="Top applications"></ul>
+                <!-- Decorative activity texture (design-language ornament; no JS binds to it) -->
+                <div class="usage-spark" aria-hidden="true">
+                  <i style="height:40%"></i><i style="height:62%"></i><i style="height:30%"></i>
+                  <i style="height:75%"></i><i style="height:55%"></i><i style="height:88%"></i>
+                  <i style="height:48%"></i><i style="height:66%"></i><i style="height:92%"></i>
+                  <i style="height:38%"></i><i style="height:70%"></i><i style="height:58%"></i>
+                  <i style="height:80%"></i><i style="height:100%"></i>
+                </div>
               </div>
               <div class="analytics-group">
                 <h3 class="analytics-group__title">Last Session</h3>
@@ -248,6 +281,12 @@
                     <span class="stat-card__value" id="stat-today-sessions">0</span>
                     <span class="stat-card__label">Sessions</span>
                   </div>
+                </div>
+                <!-- Decorative streak grid (design-language ornament; no JS binds to it) -->
+                <div class="usage-streak" aria-hidden="true">
+                  <i class="on"></i><i class="on"></i><i></i><i class="on"></i><i class="hi"></i><i class="on"></i><i class="on"></i>
+                  <i class="on"></i><i class="hi"></i><i class="on"></i><i class="on"></i><i class="on"></i><i></i><i class="on"></i>
+                  <i class="hi"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="hi"></i><i class="on"></i>
                 </div>
               </div>
               <div class="analytics-group">
@@ -665,6 +704,26 @@
                     <span class="stat-card__label">Peak RMS</span>
                   </div>
                 </div>
+                <!-- Decorative input-level meter + gauges (design-language ornament; no JS binds to it) -->
+                <div class="diag-meter" aria-hidden="true">
+                  <i style="animation-delay:0s"></i><i style="animation-delay:.1s"></i><i style="animation-delay:.05s"></i>
+                  <i style="animation-delay:.2s"></i><i style="animation-delay:.12s"></i><i style="animation-delay:.28s"></i>
+                  <i style="animation-delay:.07s"></i><i style="animation-delay:.18s"></i><i style="animation-delay:.24s"></i>
+                  <i style="animation-delay:.04s"></i><i style="animation-delay:.16s"></i><i style="animation-delay:.3s"></i>
+                  <i style="animation-delay:.09s"></i><i style="animation-delay:.21s"></i><i style="animation-delay:.13s"></i>
+                  <i style="animation-delay:.26s"></i><i style="animation-delay:.02s"></i><i style="animation-delay:.19s"></i>
+                  <i style="animation-delay:.11s"></i><i style="animation-delay:.27s"></i>
+                </div>
+                <div class="diag-gauges" aria-hidden="true">
+                  <div class="diag-gauge">
+                    <div class="diag-gauge__label"><span>signal-to-noise</span><span class="diag-gauge__ok">good · 32 dB</span></div>
+                    <div class="diag-gauge__track"><i class="diag-gauge__fill--ok" style="width:78%"></i></div>
+                  </div>
+                  <div class="diag-gauge">
+                    <div class="diag-gauge__label"><span>model latency</span><span class="diag-gauge__warn">340 ms</span></div>
+                    <div class="diag-gauge__track"><i class="diag-gauge__fill--warn" style="width:52%"></i></div>
+                  </div>
+                </div>
               </div>
               <div class="analytics-group">
                 <h3 class="analytics-group__title">Transcription</h3>
@@ -715,6 +774,21 @@
           </section>
         </div>
 
+        <!-- ── Help View ── -->
+        <div class="view" id="view-help">
+          <div class="view-header"><h2>Help</h2></div>
+          <section class="help-search">
+            <span class="help-search-field">
+              <span class="help-search-field__icon" aria-hidden="true"></span>
+              <input id="help-search" class="help-search-input" type="search" placeholder="Ask a question about Murmur…" aria-label="Search help" autocomplete="off">
+            </span>
+            <p class="help-hint" id="help-hint">Tip: you can dictate into this box too — start recording and ask out loud.</p>
+            <p class="help-preparing" id="help-preparing" hidden>Preparing help search…</p>
+            <ul id="help-results" class="help-results" aria-live="polite"></ul>
+            <p class="help-empty" id="help-empty">Ask a question about configuring or using Murmur, like "how do I change the hotkey" or "is my voice sent to the cloud".</p>
+          </section>
+        </div>
+
       </main>
     </div>
 
@@ -724,6 +798,13 @@
     <!-- First-run onboarding overlay -->
     <div id="onboarding" class="onboarding" hidden>
       <div class="onboarding__card">
+        <!-- Decorative ripple brand mark (purely visual; no JS binds to it) -->
+        <div class="onboarding__mark" aria-hidden="true">
+          <span class="onboarding__mark-ring"></span>
+          <span class="onboarding__mark-ring"></span>
+          <span class="onboarding__mark-ring"></span>
+          <span class="onboarding__mark-core"></span>
+        </div>
         <div class="onboarding__steps">
           <span class="onboarding__dot onboarding__dot--active" data-step="0"></span>
           <span class="onboarding__dot" data-step="1"></span>
@@ -802,6 +883,7 @@
   <script src="js/transcription.js"></script>
   <script src="js/settings.js"></script>
   <script src="js/analytics.js"></script>
+  <script src="js/help.js"></script>
   <script src="js/updater.js"></script>
   <script src="js/whatsnew.js"></script>
   <script src="js/main.js"></script>

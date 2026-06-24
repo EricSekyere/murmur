@@ -34,6 +34,9 @@ pub struct UsageStats {
     pub top_apps: Vec<AppUsage>,
     /// Phrases per weekday, index 0 = Sunday.
     pub by_weekday: [usize; 7],
+    /// Words per calendar day for the last 21 days, oldest first (last entry =
+    /// today). Drives the analytics sparkline and streak grid.
+    pub daily_words: Vec<usize>,
 }
 
 /// One delivered phrase.
@@ -159,6 +162,7 @@ impl History {
         let mut words_this_week = 0usize;
         let mut by_weekday = [0usize; 7];
         let mut active_days: BTreeSet<u64> = BTreeSet::new();
+        let mut words_by_day: HashMap<u64, usize> = HashMap::new();
         let mut per_app: HashMap<&str, (usize, usize)> = HashMap::new();
 
         for e in &self.entries {
@@ -169,6 +173,7 @@ impl History {
             }
             let day = e.timestamp_ms / MS_PER_DAY;
             active_days.insert(day);
+            *words_by_day.entry(day).or_default() += words;
             // 1970-01-01 was a Thursday → index 4 with Sunday = 0.
             by_weekday[(((day % 7) + 4) % 7) as usize] += 1;
             if let Some(app) = e.app.as_deref() {
@@ -204,6 +209,14 @@ impl History {
         top_apps.sort_by(|a, b| b.phrases.cmp(&a.phrases).then(b.words.cmp(&a.words)));
         top_apps.truncate(5);
 
+        const DAILY_WINDOW: u64 = 21;
+        let daily_words: Vec<usize> = (0..DAILY_WINDOW)
+            .map(|i| {
+                let day = today.saturating_sub(DAILY_WINDOW - 1 - i);
+                words_by_day.get(&day).copied().unwrap_or(0)
+            })
+            .collect();
+
         UsageStats {
             total_phrases: self.entries.len(),
             total_words,
@@ -211,6 +224,7 @@ impl History {
             day_streak,
             top_apps,
             by_weekday,
+            daily_words,
         }
     }
 

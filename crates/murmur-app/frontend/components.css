@@ -1121,3 +1121,667 @@ footer {
   #level-fill { transition: none; }
 }
 
+/* ────────────────────────────────────────────────────────────────────────────
+   Design v2 polish
+   Per-view component treatments mapped onto the app's real markup so each
+   main-window view matches the imported mockup. Additive overrides only; uses
+   existing :root tokens. View-id prefixes give specificity without !important.
+   The signature stays the ripple (see style.css) — motion here is minimal and
+   every animation has a reduced-motion fallback at the end of this block.
+   ──────────────────────────────────────────────────────────────────────────── */
+
+/* ── Analytics ──────────────────────────────────────────────────────────────
+   Stat cards: big mono number + label, left-aligned like the mockup's .stat-c.
+   Top-apps list reads as a bar-chart row (name · track · mono count). */
+#view-analytics .stat-card {
+  align-items: flex-start;
+  justify-content: flex-start;
+  gap: 5px;
+  padding: 16px 18px;
+  background: var(--color-surface-solid);
+  border-color: var(--color-border);
+}
+#view-analytics .stat-card:hover {
+  background: var(--color-surface-solid);
+  border-color: var(--color-border-hover);
+}
+#view-analytics .stat-card__value {
+  font-size: 1.7rem;
+  font-weight: 600;
+  letter-spacing: -0.03em;
+  color: var(--color-text);
+}
+#view-analytics .stat-card__label {
+  font-size: 0.68rem;
+  letter-spacing: 0.06em;
+  text-transform: none;
+  color: var(--color-text-secondary);
+}
+
+/* Top apps as horizontal bars. The track is a violet fill scaled by a
+   --usage-rank fallback width when no per-item value is supplied by the JS. */
+#view-analytics .usage-apps__item {
+  align-items: center;
+  border-top: none;
+  padding: 9px 0;
+}
+#view-analytics .usage-apps__item + .usage-apps__item {
+  border-top: 1px solid var(--color-border);
+}
+#view-analytics .usage-apps__name {
+  flex: 0 0 38%;
+  font-size: 0.82rem;
+  color: var(--color-text);
+}
+#view-analytics .usage-apps__item::after {
+  content: "";
+  flex: 1;
+  height: 8px;
+  border-radius: var(--radius-full);
+  background:
+    linear-gradient(90deg, var(--color-accent), var(--color-accent-light)) left center / var(--usage-w, 55%) 100% no-repeat,
+    var(--color-surface-raised);
+  order: 1;
+}
+#view-analytics .usage-apps__count {
+  order: 2;
+  flex: 0 0 auto;
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  color: var(--color-text-secondary);
+}
+
+/* Words-per-day sparkline (decorative ornament, gradient bars). */
+.usage-spark {
+  display: flex;
+  align-items: flex-end;
+  gap: 3px;
+  height: 40px;
+  margin-top: 14px;
+}
+.usage-spark i {
+  flex: 1;
+  min-height: 3px;
+  border-radius: 2px;
+  background: linear-gradient(180deg, var(--color-accent-light), var(--color-accent-dim));
+}
+
+/* Streak grid: off / on / glowing-high cells. */
+.usage-streak {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 12px;
+}
+.usage-streak i {
+  width: 15px;
+  height: 15px;
+  border-radius: 4px;
+  background: var(--color-surface-raised);
+  border: 1px solid var(--color-border);
+}
+.usage-streak i.on {
+  background: var(--color-accent-glow);
+  border-color: var(--color-accent);
+}
+.usage-streak i.hi {
+  background: var(--color-accent);
+  border-color: var(--color-accent-light);
+  box-shadow: 0 0 8px -2px var(--color-accent);
+}
+
+/* ── Settings ───────────────────────────────────────────────────────────────
+   Model cards in a responsive grid with a metrics row and a selected violet
+   ring; grouped section labels stay mono/uppercase/tracked. */
+#view-settings .model-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  max-height: none;
+}
+@media (max-width: 640px) {
+  #view-settings .model-list { grid-template-columns: 1fr; }
+}
+#view-settings .model-card {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 10px;
+  padding: 14px 16px;
+  background: var(--color-surface-solid);
+  border-radius: var(--radius-md);
+  position: relative;
+}
+#view-settings .model-card--active {
+  border-color: var(--color-accent);
+  background: var(--color-accent-dim);
+}
+#view-settings .model-card--active::after {
+  content: "";
+  position: absolute;
+  inset: -1px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--color-accent);
+  box-shadow: 0 0 0 3px var(--color-accent-dim);
+  pointer-events: none;
+}
+#view-settings .model-card__name {
+  font-size: 0.9rem;
+  letter-spacing: -0.01em;
+}
+#view-settings .model-card__meta {
+  font-family: var(--font-mono);
+  gap: 8px;
+}
+#view-settings .model-card__action {
+  flex-direction: row;
+  align-items: stretch;
+  width: 100%;
+}
+#view-settings .model-card__btn { width: 100%; }
+#view-settings .model-card__progress { min-width: 0; }
+
+/* Grouped section labels: keep the mono/uppercase/tracked treatment. */
+#view-settings .settings-label {
+  font-family: var(--font-mono);
+  letter-spacing: 0.16em;
+}
+
+/* Download banner: shimmering progress fill (maps mockup .banner.dl .prog i).
+   The download banner is the warn banner; its fill gets a moving sheen. */
+.banner--warn .progress-bar__fill {
+  position: relative;
+  background: linear-gradient(90deg, var(--color-accent), var(--color-accent-light));
+  overflow: hidden;
+}
+.banner--warn .progress-bar__fill::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.35), transparent);
+  background-size: 50% 100%;
+  background-repeat: no-repeat;
+  animation: dl-shimmer 1.6s linear infinite;
+}
+@keyframes dl-shimmer {
+  0% { background-position: -60% 0; }
+  100% { background-position: 160% 0; }
+}
+
+/* ── Diagnostics ────────────────────────────────────────────────────────────
+   Live input-level meter (animated green bars), SNR + latency gauges. */
+.diag-meter {
+  display: flex;
+  align-items: flex-end;
+  gap: 3px;
+  height: 80px;
+  margin-top: 12px;
+  padding: 16px;
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+}
+.diag-meter i {
+  flex: 1;
+  border-radius: 2px;
+  background: linear-gradient(180deg, var(--color-done), var(--color-done-dim));
+  animation: diag-meter 1.1s ease-in-out infinite;
+}
+@keyframes diag-meter {
+  0%, 100% { height: 30%; }
+  50% { height: 90%; }
+}
+
+.diag-gauges {
+  display: flex;
+  gap: 16px;
+  margin-top: 14px;
+}
+.diag-gauge { flex: 1; min-width: 0; }
+.diag-gauge__label {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  color: var(--color-text-secondary);
+}
+.diag-gauge__ok { color: var(--color-done); }
+.diag-gauge__warn { color: var(--color-processing); }
+.diag-gauge__track {
+  height: 7px;
+  border-radius: var(--radius-full);
+  background: var(--color-surface-raised);
+  overflow: hidden;
+}
+.diag-gauge__track i { display: block; height: 100%; border-radius: var(--radius-full); }
+.diag-gauge__fill--ok { background: var(--color-done); }
+.diag-gauge__fill--warn { background: var(--color-processing); }
+
+/* ── Onboarding ─────────────────────────────────────────────────────────────
+   Ripple brand mark (concentric rings from a violet core), numbered step chips,
+   two-button footer. Reuses the shared hub-ripple keyframe from style.css. */
+.onboarding__mark {
+  position: relative;
+  width: 72px;
+  height: 72px;
+  margin: 0 auto 22px;
+  display: grid;
+  place-items: center;
+}
+.onboarding__mark-core {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--color-accent);
+  box-shadow: 0 0 16px var(--color-accent);
+  z-index: 2;
+}
+.onboarding__mark-ring {
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 1.5px solid var(--color-accent-light);
+  opacity: 0;
+  animation: hub-ripple 3s var(--ease-out) infinite;
+}
+.onboarding__mark-ring:nth-child(2) { animation-delay: 1s; }
+.onboarding__mark-ring:nth-child(3) { animation-delay: 2s; }
+
+/* Numbered step chips: turn the list bullets into mono numbered tiles. */
+.onboarding__list {
+  counter-reset: onb-step;
+}
+.onboarding__list li {
+  counter-increment: onb-step;
+  padding-left: 38px;
+}
+.onboarding__list li::before {
+  content: counter(onb-step);
+  display: grid;
+  place-items: center;
+  left: 0;
+  top: 0;
+  width: 26px;
+  height: 26px;
+  border-radius: var(--radius-sm);
+  background: var(--color-accent-dim);
+  border: 1px solid var(--color-accent-glow);
+  color: var(--color-accent-light);
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  font-weight: 600;
+}
+
+/* Two-button footer reads as a clear ghost / primary pair. */
+.onboarding__actions .onboarding__next {
+  background: var(--color-accent);
+  border-color: var(--color-accent);
+  color: #0c0814;
+}
+.onboarding__actions .onboarding__next:hover:not(:disabled) {
+  background: var(--color-accent-light);
+  border-color: var(--color-accent-light);
+}
+
+/* ── Reduced-motion fallbacks for the v2 ornaments ──────────────────────────
+   (The global block above already halts animations; these give a static read
+   of the live state so nothing relies on motion alone.) */
+@media (prefers-reduced-motion: reduce) {
+  .diag-meter i { height: 55%; animation: none; }
+  .banner--warn .progress-bar__fill::after { animation: none; opacity: 0; }
+  .onboarding__mark-ring { animation: none; }
+  .onboarding__mark-ring:nth-child(1) { opacity: 0.4; transform: scale(1.4); }
+  .onboarding__mark-ring:nth-child(2) { opacity: 0.22; transform: scale(1.8); }
+  .onboarding__mark-ring:nth-child(3) { opacity: 0.1; transform: scale(2.1); }
+}
+
+/* ── Design v2: Dictate ──────────────────────────────────────────────────────
+   Maps the mockup's Home hub onto the real #view-home markup: a centered column
+   around the existing violet ripple mic disc (.mic-wrapper, styled in style.css),
+   a "Hold to speak" display heading, a status/level line, and a model chip — all
+   purely-decorative siblings inside .hero. The Transcription panel is demoted to
+   a quiet, intentional surface so it does not compete with the hub, and the
+   History block reads as the mockup's search + rows (time · text · app · count).
+   View-id prefixes win over base rules without !important. Animations have a
+   reduced-motion fallback at the foot of this block.
+   ──────────────────────────────────────────────────────────────────────────── */
+
+/* Hub column: tighten the hero into a centered, generously-spaced stack. */
+#view-home .hero {
+  gap: 0;
+  padding: 14px 0 18px;
+}
+
+/* Display heading — the mockup's "Hold to speak". */
+#view-home .hero__heading {
+  margin-top: 20px;
+  font-size: 1.3rem;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  color: var(--color-text);
+  text-align: center;
+}
+
+/* Status line: muted copy + small animated level bars (speech-only feel). */
+#view-home .hero__status {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  margin-top: 7px;
+  font-size: 0.82rem;
+  color: var(--color-text-secondary);
+}
+#view-home .hero__level {
+  display: inline-flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 13px;
+}
+#view-home .hero__level i {
+  width: 2.5px;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--color-accent-light);
+  animation: hero-wave 1s ease-in-out infinite;
+}
+#view-home .hero__level i:nth-child(2) { animation-delay: 0.12s; }
+#view-home .hero__level i:nth-child(3) { animation-delay: 0.05s; }
+#view-home .hero__level i:nth-child(4) { animation-delay: 0.2s; }
+#view-home .hero__level i:nth-child(5) { animation-delay: 0.09s; }
+@keyframes hero-wave {
+  0%, 100% { height: 4px; }
+  50% { height: 13px; }
+}
+
+/* Model chip — mono pill echoing the mockup's "active model …". */
+#view-home .hero__chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  margin-top: 18px;
+  padding: 7px 14px;
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--color-text-secondary);
+  background: var(--color-surface-solid);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-full);
+  white-space: nowrap;
+}
+#view-home .hero__chip-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--color-done);
+  box-shadow: 0 0 8px var(--color-done);
+  flex-shrink: 0;
+}
+
+/* Find-pill button sits a touch lower so the chip + button breathe. */
+#view-home .find-pill-btn { margin-top: 18px; }
+
+/* Quiet, intentional transcription surface: section header steps back and the
+   output reads as a calm panel rather than a second focal point. */
+#view-home #transcription { gap: 10px; }
+#view-home .transcription-output {
+  background: var(--color-surface-solid);
+  box-shadow: inset 0 1px 4px rgba(0, 0, 0, 0.18);
+}
+
+/* History: the mockup's pill search field with a magnifier glyph, plus rows
+   that read time · text · app-tag · (kept) copy. The real .history-controls is
+   a flex row; the field wrapper holds the decorative icon over the input. */
+#view-home .history-search-field {
+  position: relative;
+  flex: 1;
+  display: flex;
+  align-items: center;
+}
+#view-home .history-search-field__icon {
+  position: absolute;
+  left: 13px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 1.6px solid var(--color-text-muted);
+  pointer-events: none;
+}
+#view-home .history-search-field__icon::after {
+  content: "";
+  position: absolute;
+  right: -3px;
+  bottom: 0;
+  width: 5px;
+  height: 1.6px;
+  background: var(--color-text-muted);
+  transform: rotate(45deg);
+}
+#view-home .history-search-field .history-search {
+  flex: 1;
+  padding-left: 32px;
+  border-radius: var(--radius-full);
+  background: var(--color-surface-solid);
+}
+
+/* Destructive "Clear all history" affordance — the mockup's red Clear…. */
+#view-home #history-clear {
+  color: var(--color-error);
+  border-color: rgba(251, 113, 133, 0.4);
+}
+#view-home #history-clear:hover:not(:disabled) {
+  color: var(--color-error);
+  border-color: var(--color-error);
+  background: var(--color-error-dim);
+}
+
+/* History rows: mono time-tag, ellipsised text, hover wash like the mockup .hrow.
+   The list keeps its own card border (set in dashboard.css). */
+#view-home .history-list {
+  background: var(--color-surface-solid);
+  padding: 4px;
+  gap: 0;
+}
+#view-home .history-item {
+  border-bottom: none;
+  border-radius: var(--radius-sm);
+  padding: 11px 12px;
+}
+#view-home .history-item:hover {
+  background: rgba(255, 255, 255, 0.03);
+}
+#view-home .history-item__time {
+  order: 2;
+  flex-shrink: 0;
+}
+#view-home .history-item__copy { order: 3; }
+
+/* ── Design v2: Settings ─────────────────────────────────────────────────────
+   Tightens the rhythm of #view-settings onto the real markup: model cards as a
+   metrics grid with a violet selected ring (extends the earlier pass), mono
+   uppercase group labels, denser control rows, and keycap-styled hotkey input.
+   The download banner (global #model-banner, the warn banner) already shimmers
+   via the rule above. View-id prefixes give specificity without !important.
+   ──────────────────────────────────────────────────────────────────────────── */
+
+/* Section group labels: tighten spacing so each .settings-group reads as a
+   discrete block separated by a hairline, matching the mockup's cadence. */
+#view-settings .settings-group + .settings-group,
+#view-settings .settings-group--devmode {
+  padding-top: 16px;
+  margin-top: 16px;
+}
+
+/* Control rows: a touch more vertical air, hints stay quiet and readable. */
+#view-settings .settings-row {
+  padding: 2px 0;
+}
+#view-settings .settings-hint {
+  font-size: 0.72rem;
+  line-height: 1.5;
+  color: var(--color-text-muted);
+}
+
+/* Model-card metrics row: the badges read as a mono size/backend/state strip,
+   spaced like the mockup's .mmeta (size · speed · WER). */
+#view-settings .model-card__meta {
+  gap: 10px;
+}
+#view-settings .model-card__badge {
+  background: transparent;
+  border: none;
+  padding: 0;
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--color-text-secondary);
+}
+#view-settings .model-card__desc {
+  font-size: 0.74rem;
+  line-height: 1.45;
+}
+
+/* Active model: brighten name + dot so the selected card reads at a glance. */
+#view-settings .model-card--active .model-card__name { color: var(--color-text); }
+
+/* Hotkey field as a keycap: mono, raised, centered like the mockup's <kbd>. */
+#view-settings .settings-input--hotkey {
+  background: linear-gradient(180deg, var(--color-surface-raised), var(--color-surface-solid));
+  border-bottom-width: 2px;
+  font-weight: 500;
+}
+
+/* Snippet-style affordance for the snippets/profiles textareas: keep them
+   tight and mono so trigger → expansion lines read like the mockup's .snip. */
+#view-settings .settings-textarea {
+  background: var(--color-surface-solid);
+}
+
+/* Folder list (codebase vocabulary) rows align with the denser settings rhythm. */
+#view-settings .folder-list__item {
+  background: var(--color-surface-solid);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #view-home .hero__level i { animation: none; height: 9px; }
+}
+
+/* ─── Help ──────────────────────────────────────────────────────────────────
+   Local semantic search over the bundled help articles. Reuses the history
+   search field's pill + magnifier glyph; results read as stacked cards with an
+   article tag, section heading, matched passage, and a quiet match score.
+   ──────────────────────────────────────────────────────────────────────────── */
+.help-search {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.help-search-field {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+.help-search-field__icon {
+  position: absolute;
+  left: 13px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 1.6px solid var(--color-text-muted);
+  pointer-events: none;
+}
+.help-search-field__icon::after {
+  content: "";
+  position: absolute;
+  right: -3px;
+  bottom: 0;
+  width: 5px;
+  height: 1.6px;
+  background: var(--color-text-muted);
+  transform: rotate(45deg);
+}
+.help-search-input {
+  flex: 1;
+  padding: 11px 14px 11px 32px;
+  font-size: 0.9rem;
+  color: var(--color-text);
+  background: var(--color-surface-solid);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-full);
+  outline: none;
+  transition: border-color var(--transition-fast);
+}
+.help-search-input::placeholder { color: var(--color-text-muted); }
+.help-search-input:focus { border-color: var(--color-accent); }
+
+.help-hint {
+  font-size: 0.72rem;
+  line-height: 1.5;
+  color: var(--color-text-muted);
+}
+
+.help-preparing {
+  font-size: 0.78rem;
+  color: var(--color-accent-light);
+}
+.help-preparing[hidden] { display: none; }
+
+.help-empty {
+  font-size: 0.82rem;
+  line-height: 1.55;
+  color: var(--color-text-muted);
+  padding: 8px 2px;
+}
+.help-empty[hidden] { display: none; }
+
+.help-results {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.help-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 14px 16px;
+  background: var(--color-surface-solid);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  transition: border-color var(--transition-fast);
+}
+.help-card:hover { border-color: var(--color-border-hover); }
+
+.help-card__article {
+  font-size: 0.66rem;
+  font-family: var(--font-mono);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--color-accent-light);
+}
+
+.help-card__heading {
+  font-size: 0.92rem;
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.help-card__body {
+  font-size: 0.82rem;
+  line-height: 1.55;
+  color: var(--color-text-secondary);
+  white-space: pre-wrap;
+}
+
+.help-card__score {
+  align-self: flex-start;
+  font-size: 0.66rem;
+  font-family: var(--font-mono);
+  color: var(--color-text-muted);
+}
+

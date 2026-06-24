@@ -100,6 +100,12 @@ jobs:
           releaseBody: |
             Fast, private, on-device dictation for Windows and Linux.
 
+            ## New in 0.5.0
+
+            - **Ask for help by voice.** A new Help tab lets you ask a question, by typing or by dictating it into the box, and Murmur instantly finds the most relevant help section. It runs entirely on-device with a small local search model, so it works offline and sends nothing anywhere.
+            - **Redesigned interface.** The app and the floating pill share a new visual identity, with recording states told apart by motion and shape, and the usage dashboard now draws live charts (words per day, a streak grid, and your top apps) from your local history.
+            - **Echo cancellation no longer silences the mic.** On some Windows audio setups the echo-cancellation path returned digital silence, ending a recording right after it started. Murmur now detects that and falls back to the raw microphone automatically, so dictation always works. You can also turn Echo Cancellation off in Settings.
+
             ## New in 0.4.1
 
             - **Faster dictation by default.** New installs now use Parakeet, which transcribes a phrase in about a tenth of a second on CPU, with native punctuation and high accuracy. Whisper (small/medium/large) stays available in the model picker for vocabulary biasing or multilingual use.

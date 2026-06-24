@@ -481,8 +481,15 @@ pub(crate) fn update_settings(
         if !sh && settings.save_history {
             let mut history = state.history.lock().unwrap_or_else(|e| e.into_inner());
             history.clear();
-            if let Err(e) = history.save(&state.history_path) {
-                tracing::warn!("Failed to purge history on opt-out: {}", e);
+            // The UI promises "store nothing on disk", so delete the file (and any
+            // parse-error .bak) rather than rewriting an empty one that lingers.
+            let bak = state.history_path.with_extension("json.bak");
+            for path in [&state.history_path, &bak] {
+                if let Err(e) = std::fs::remove_file(path)
+                    && e.kind() != std::io::ErrorKind::NotFound
+                {
+                    tracing::warn!(?path, "Failed to remove history file on opt-out: {}", e);
+                }
             }
         }
         settings.save_history = sh;
@@ -720,6 +727,47 @@ pub(crate) fn learn_vocabulary(state: State<'_, AppState>) -> Result<usize, Stri
         settings.save(&path).map_err(|e| e.to_string())?;
     }
     Ok(added)
+}
+
+/// Search the bundled Help articles for `query` and return the best-matching
+/// sections, newest-relevant first. Returns an empty list (not an error) when
+/// the Help engine is still preparing or unavailable, so the UI degrades
+/// gracefully. Runs locally; nothing leaves the machine.
+#[cfg(feature = "full")]
+#[tauri::command]
+pub(crate) fn help_search(
+    state: State<'_, AppState>,
+    query: String,
+) -> Result<Vec<crate::state::HelpResultDto>, String> {
+    let trimmed = query.trim();
+    if trimmed.is_empty() {
+        return Ok(Vec::new());
+    }
+    let guard = state.help.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(engine) = guard.as_ref() else {
+        return Ok(Vec::new());
+    };
+    let hits = engine.search(trimmed, 6).map_err(|e| e.to_string())?;
+    Ok(hits
+        .into_iter()
+        .map(|h| crate::state::HelpResultDto {
+            article: h.article,
+            heading: h.heading,
+            body: h.body,
+            score: h.score,
+        })
+        .collect())
+}
+
+/// Whether the local Help search engine has finished preparing.
+#[cfg(feature = "full")]
+#[tauri::command]
+pub(crate) fn help_ready(state: State<'_, AppState>) -> bool {
+    state
+        .help
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .is_some()
 }
 
 /// On-device usage stats (words, top apps, streak) derived from local history.

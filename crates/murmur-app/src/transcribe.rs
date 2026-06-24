@@ -143,8 +143,19 @@ pub(crate) fn transcribe_chunk(
         merge_vocabulary(user_vocab, project.as_slice())
     };
     let limits = ProfileLimits::for_profile(profile);
-    // English-tuned gates over-reject accented non-English speech; relax them.
-    let non_english = is_non_english_language(&language);
+    // English-tuned gates over-reject accented non-English speech, so relax them
+    // for non-English dictation — but only when the active model can actually
+    // decode that language. English-only models are forced to "en" regardless of
+    // the language setting, so their output is English and must keep the English
+    // hallucination filters and confidence gate.
+    let multilingual_model = state
+        .engine
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .as_ref()
+        .and_then(|engine| engine.model())
+        .is_some_and(|model| model.is_multilingual());
+    let non_english = is_non_english_language(&language) && multilingual_model;
 
     let prepared = preprocess(app, audio, &limits)?;
     let result = run_engine(app, &state, &prepared, &vocabulary, &language, translate)?;

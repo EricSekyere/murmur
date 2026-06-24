@@ -1,6 +1,8 @@
 pub mod audio;
 pub mod config;
 pub mod dictation;
+#[cfg(feature = "help")]
+pub mod help;
 pub mod history;
 pub mod hotkey;
 #[cfg(feature = "indexer")]

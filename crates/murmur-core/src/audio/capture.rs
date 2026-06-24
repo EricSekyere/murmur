@@ -4,6 +4,11 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{SampleFormat, SupportedStreamConfig};
 use std::sync::{Arc, Mutex};
 
+/// Per-run AEC health, so the (sometimes-broken) Windows AEC is probed at most
+/// once: 0 = unknown, 1 = delivers signal, -1 = silent (use the raw mic).
+#[cfg(windows)]
+static AEC_STATE: std::sync::atomic::AtomicI8 = std::sync::atomic::AtomicI8::new(0);
+
 /// Manages microphone capture via CPAL.
 ///
 /// Enumerates the device's supported configs, picks the best one,
@@ -59,7 +64,12 @@ impl AudioCapture {
     fn try_start_voice_capture(&mut self) -> Option<()> {
         #[cfg(windows)]
         {
+            use std::sync::atomic::Ordering;
             const MAX_SAMPLES: usize = 60 * 48_000 * 2;
+            // This machine's Communications AEC already proved silent this run.
+            if AEC_STATE.load(Ordering::Relaxed) < 0 {
+                return None;
+            }
             if let Ok(mut buf) = self.buffer.lock() {
                 buf.clear();
                 let want = 30 * 48_000 * 2;
@@ -78,6 +88,31 @@ impl AudioCapture {
                         rate,
                         channels
                     );
+                    // First session this run: confirm the AEC actually delivers
+                    // signal. Some Windows audio stacks' Communications AEC emits
+                    // only digital zeros even with a render reference; if so, drop
+                    // it and fall back to the raw mic so dictation still works.
+                    if AEC_STATE.load(Ordering::Relaxed) == 0 {
+                        std::thread::sleep(std::time::Duration::from_millis(250));
+                        let alive = self
+                            .buffer
+                            .lock()
+                            .map(|b| b.iter().any(|s| s.abs() > 1e-5))
+                            .unwrap_or(false);
+                        if alive {
+                            AEC_STATE.store(1, Ordering::Relaxed);
+                        } else {
+                            AEC_STATE.store(-1, Ordering::Relaxed);
+                            tracing::warn!(
+                                "Echo cancellation delivered only silence; using the raw microphone instead"
+                            );
+                            self.voice = None;
+                            if let Ok(mut b) = self.buffer.lock() {
+                                b.clear();
+                            }
+                            return None;
+                        }
+                    }
                     Some(())
                 }
                 Err(e) => {
@@ -507,16 +542,25 @@ fn lowpass_antialias(samples: &[f32], from_rate: u32, to_rate: u32) -> Vec<f32> 
     let dt = 1.0 / from_rate as f32;
     let alpha = dt / (rc + dt);
 
+    // An empty input has no signal to filter; bail before any indexing.
+    let Some(&first) = samples.first() else {
+        return Vec::new();
+    };
+
     // Forward pass
     let mut filtered = Vec::with_capacity(samples.len());
-    let mut prev = samples[0];
+    let mut prev = first;
     for &s in samples {
         prev += alpha * (s - prev);
         filtered.push(prev);
     }
 
-    // Backward pass (zero-phase: eliminates phase distortion from forward pass)
-    prev = *filtered.last().unwrap();
+    // Backward pass (zero-phase: eliminates phase distortion from forward pass).
+    // `filtered` matches `samples`' non-zero length, so `last()` is always Some.
+    let Some(&last) = filtered.last() else {
+        return filtered;
+    };
+    prev = last;
     for s in filtered.iter_mut().rev() {
         prev += alpha * (*s - prev);
         *s = prev;
