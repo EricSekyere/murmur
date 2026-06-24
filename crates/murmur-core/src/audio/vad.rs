@@ -258,6 +258,11 @@ impl SileroInner {
 const SILERO_VAD_URL: &str =
     "https://github.com/snakers4/silero-vad/raw/master/src/silero_vad/data/silero_vad.onnx";
 
+/// Pinned SHA256 of the Silero VAD model (snakers4/silero-vad @ master; the
+/// pinned bytes were re-fetched from the live URL and matched the cached copy).
+#[cfg(feature = "vad")]
+const SILERO_VAD_SHA256: &str = "1a153a22f4509e292a94e67d6f9b85e8deb25b4988682b7e174c65279d8788e3";
+
 /// Filesystem path where the Silero VAD ONNX model is cached.
 #[cfg(feature = "vad")]
 pub fn model_path() -> Result<std::path::PathBuf> {
@@ -296,6 +301,8 @@ pub async fn download() -> Result<std::path::PathBuf> {
         .bytes()
         .await
         .context("Failed to read Silero VAD response body")?;
+
+    crate::integrity::verify_or_log_sha256(&bytes, SILERO_VAD_SHA256, "Silero VAD model")?;
 
     // Write atomically: tempfile + rename.
     let tmp = dest.with_extension("partial");

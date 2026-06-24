@@ -1,6 +1,10 @@
 use anyhow::{Context, Result};
 use arboard::Clipboard;
 
+/// How long to leave our text on the clipboard after the paste keystroke so a
+/// slow target finishes reading before we restore the previous contents.
+const CLIPBOARD_READ_GRACE_MS: u64 = 500;
+
 /// Outputs text by copying to the clipboard and simulating a paste keystroke.
 ///
 /// This is more reliable than direct keystroke simulation in many applications:
@@ -37,15 +41,35 @@ impl ClipboardPasteOutput {
         let mut clipboard =
             Clipboard::new().context("Failed to open clipboard for paste output")?;
 
-        // Save current clipboard content so we can restore it after pasting.
-        let previous = clipboard.get_text().ok();
+        // Save current clipboard content (text or image) so we can restore it
+        // after pasting and not destroy what the user had copied.
+        let previous = capture_clipboard(&mut clipboard);
 
         clipboard
             .set_text(text)
             .context("Failed to set clipboard text")?;
 
-        // Brief pause to let the clipboard update propagate.
-        std::thread::sleep(std::time::Duration::from_millis(30));
+        // Wait until the clipboard actually reports our text before pasting.
+        // A fixed sleep is unreliable: if Ctrl+V fires before the OS finishes
+        // updating the clipboard, it pastes the user's *previous* clipboard
+        // content into the target window. Poll up to ~250ms for confirmation.
+        let mut confirmed = false;
+        for _ in 0..25 {
+            if clipboard.get_text().is_ok_and(|t| t == text) {
+                confirmed = true;
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        if !confirmed {
+            tracing::warn!(
+                "Clipboard did not confirm our text; skipping paste to avoid pasting stale content"
+            );
+            // Restore the original content and bail; the caller's fallback
+            // chain (keyboard typing) will deliver the text instead.
+            restore_clipboard(&mut clipboard, &previous);
+            anyhow::bail!("Clipboard update not confirmed; refusing to paste stale content");
+        }
 
         // Release any stuck modifier keys before simulating Ctrl+V.
         #[cfg(windows)]
@@ -53,24 +77,47 @@ impl ClipboardPasteOutput {
 
         let paste_result = simulate_paste();
 
-        // Wait for the paste to be processed by the target application.
-        std::thread::sleep(std::time::Duration::from_millis(100));
+        // Give the target app time to actually read the clipboard before we
+        // restore it. If we restore too soon, a slow app (e.g. an Electron
+        // terminal under load) reads the clipboard after the restore and
+        // pastes the user's previous content instead of our text. This path is
+        // only reached for genuine terminals, so the wait is off the common
+        // path; favour a wider window over a tighter one to avoid leaking the
+        // previous clipboard. This is still best-effort, not a guarantee.
+        std::thread::sleep(std::time::Duration::from_millis(CLIPBOARD_READ_GRACE_MS));
 
-        // Restore the original clipboard content. If there was nothing
-        // restorable (the clipboard was empty or held non-text content like
-        // an image), clear it instead of leaving our dictated text behind —
-        // otherwise the transcription silently lands on the user's clipboard.
-        match previous {
-            Some(prev) => {
-                let _ = clipboard.set_text(&prev);
-            }
-            None => {
-                let _ = clipboard.clear();
-            }
-        }
+        // Restore the original clipboard content (text or image). If there was
+        // nothing restorable, clear it rather than leave our dictated text on
+        // the user's clipboard.
+        restore_clipboard(&mut clipboard, &previous);
 
         paste_result
     }
+}
+
+/// What the clipboard held before we overwrote it with the dictated text.
+enum PreviousClipboard {
+    Text(String),
+    Image(arboard::ImageData<'static>),
+    Empty,
+}
+
+fn capture_clipboard(clipboard: &mut Clipboard) -> PreviousClipboard {
+    if let Ok(text) = clipboard.get_text() {
+        PreviousClipboard::Text(text)
+    } else if let Ok(image) = clipboard.get_image() {
+        PreviousClipboard::Image(image)
+    } else {
+        PreviousClipboard::Empty
+    }
+}
+
+fn restore_clipboard(clipboard: &mut Clipboard, previous: &PreviousClipboard) {
+    let _ = match previous {
+        PreviousClipboard::Text(text) => clipboard.set_text(text),
+        PreviousClipboard::Image(image) => clipboard.set_image(image.clone()),
+        PreviousClipboard::Empty => clipboard.clear(),
+    };
 }
 
 /// Simulate Ctrl+V (Windows/Linux) or Cmd+V (macOS).

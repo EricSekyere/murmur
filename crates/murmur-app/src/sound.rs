@@ -1,9 +1,9 @@
 //! Short audio cues for recording start and stop.
 //!
-//! On Windows this uses the Win32 `Beep` API (routed through the default
-//! audio device on modern Windows). On macOS it plays a built-in system
-//! sound via `afplay`. Both run on a detached thread so they never block
-//! the recording path. No-op on other platforms.
+//! On Windows this uses the Win32 `Beep` API (routed through the default audio
+//! device on modern Windows), with cues queued to one long-lived worker thread
+//! so rapid start/stop never piles up threads. On macOS it plays a built-in
+//! system sound via `afplay` on a detached thread. No-op on other platforms.
 
 /// Play a cue when recording starts.
 pub(crate) fn play_start() {
@@ -21,15 +21,29 @@ pub(crate) fn play_stop() {
     play_system_sound("/System/Library/Sounds/Bottle.aiff");
 }
 
-/// Spawn a thread that plays one tone (frequency_hz, duration_ms).
+/// Queue one tone (frequency_hz, duration_ms) to the single cue thread.
 #[cfg(windows)]
 fn play_tone(freq: u32, duration_ms: u32) {
-    unsafe extern "system" {
-        fn Beep(dw_freq: u32, dw_duration: u32) -> i32;
-    }
-    std::thread::spawn(move || unsafe {
-        Beep(freq, duration_ms);
+    use std::sync::OnceLock;
+    use std::sync::mpsc::{Sender, channel};
+
+    static CUES: OnceLock<Sender<(u32, u32)>> = OnceLock::new();
+    let tx = CUES.get_or_init(|| {
+        let (tx, rx) = channel::<(u32, u32)>();
+        std::thread::spawn(move || {
+            unsafe extern "system" {
+                fn Beep(dw_freq: u32, dw_duration: u32) -> i32;
+            }
+            while let Ok((freq, dur)) = rx.recv() {
+                unsafe {
+                    Beep(freq, dur);
+                }
+            }
+        });
+        tx
     });
+    // Sender lives for the process, so this only fails if the worker panicked.
+    let _ = tx.send((freq, duration_ms));
 }
 
 /// Spawn `afplay` to play a system sound file without blocking.

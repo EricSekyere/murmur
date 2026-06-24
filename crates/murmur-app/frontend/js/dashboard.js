@@ -10,6 +10,7 @@
     analytics: document.getElementById('view-analytics'),
     settings: document.getElementById('view-settings'),
     diagnostics: document.getElementById('view-diagnostics'),
+    help: document.getElementById('view-help'),
   };
   const viewToggles = {
     home: document.getElementById('history-toggle'),

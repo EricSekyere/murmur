@@ -2,14 +2,15 @@
 
 let uiState = 'idle';
 let modelReady = false;
-let modelName = 'small.en';
+let modelName = 'Parakeet TDT 0.6B v2';
 let recordingStartTime = null;
 let durationTimerHandle = null;
 let lastTranscription = '';
-let history = [];                  // max 10, newest first
-let transcriptionHandled = false;  // guard: prevent double-display from invoke + event
+let history = [];                  // backend-backed entries, newest first
+let historyQuery = '';             // active history search filter
 let currentSession = null;
 let sessionPhrases = [];           // delivered segments this session; '\n' marks line breaks
+let interimText = '';              // live partial for the phrase currently being spoken
 
 let vizActive = false;
 let animationFrameHandle = null;
@@ -103,7 +104,7 @@ function applyState(newState) {
 
 function updateModelBanner(status) {
   modelReady = !!status.model_ready;
-  modelName  = status.model || 'small.en';
+  modelName  = status.model || 'Parakeet TDT 0.6B v2';
 
   modelBanner.hidden = modelReady;
   if (!modelReady) {

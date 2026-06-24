@@ -1,32 +1,32 @@
-/* ─── Fonts ─────────────────────────────────────────────────────────────── */
-@import url('https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
-
 /* ─── Custom Properties ─────────────────────────────────────────────────── */
 :root {
-  --color-bg: #0b0c10;
-  --color-surface: rgba(18, 20, 30, 0.55);
-  --color-surface-solid: #12141e;
-  --color-surface-raised: rgba(28, 31, 46, 0.65);
-  --color-border: rgba(255, 255, 255, 0.06);
-  --color-border-hover: rgba(255, 255, 255, 0.12);
+  /* Design language v2 ("the ripple"): refined cool blue-black void + violet
+     signal, bone text. The accent was already this violet, so the palette swap
+     is mostly the void/bone refinements; the big shift is Space Grotesk type. */
+  --color-bg: #0a0b0f;
+  --color-surface: rgba(22, 25, 41, 0.55);
+  --color-surface-solid: #161929;
+  --color-surface-raised: rgba(39, 44, 66, 0.65);
+  --color-border: rgba(255, 255, 255, 0.07);
+  --color-border-hover: rgba(255, 255, 255, 0.13);
 
-  --color-text: #e2e4ec;
-  --color-text-secondary: #8b90a0;
-  --color-text-muted: #3d4155;
+  --color-text: #e8eaf2;
+  --color-text-secondary: #8a90a6;
+  --color-text-muted: #565c72;
 
   --color-accent: #8b5cf6;
   --color-accent-light: #a78bfa;
   --color-accent-dim: rgba(139, 92, 246, 0.12);
   --color-accent-glow: rgba(139, 92, 246, 0.25);
 
-  --color-record: #ef4444;
-  --color-record-dim: rgba(239, 68, 68, 0.12);
-  --color-processing: #f59e0b;
-  --color-processing-dim: rgba(245, 158, 11, 0.12);
-  --color-done: #22c55e;
-  --color-done-dim: rgba(34, 197, 94, 0.12);
-  --color-error: #f87171;
-  --color-error-dim: rgba(248, 113, 113, 0.12);
+  --color-record: #fb6e72;
+  --color-record-dim: rgba(251, 110, 114, 0.12);
+  --color-processing: #fbbf24;
+  --color-processing-dim: rgba(251, 191, 36, 0.12);
+  --color-done: #34d399;
+  --color-done-dim: rgba(52, 211, 153, 0.12);
+  --color-error: #fb7185;
+  --color-error-dim: rgba(251, 113, 133, 0.12);
 
   --color-warn-bg: rgba(30, 24, 10, 0.9);
   --color-warn-border: rgba(180, 130, 20, 0.3);
@@ -36,8 +36,8 @@
   --color-error-border: rgba(180, 40, 40, 0.3);
   --color-error-text: #f08080;
 
-  --font-sans: "Instrument Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  --font-mono: "JetBrains Mono", "Cascadia Code", "Fira Code", "Consolas", monospace;
+  --font-sans: "Space Grotesk", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
 
   --mic-size: 96px;
   --radius-sm: 8px;
@@ -641,5 +641,65 @@ header {
   font-family: var(--font-mono);
   font-size: 0.75rem;
   font-weight: 500;
+}
+
+/* ─── Design v2 · the ripple signature ──────────────────────────────────────
+   One shape (concentric rings from a violet core) marks the brand and the home
+   hub, echoing the floating pill. Kept to two spots so it reads as a signature,
+   not decoration. */
+.brandmark { position: relative; width: 20px; height: 20px; flex: 0 0 auto; display: grid; place-items: center; }
+.brandmark .bm-core {
+  width: 7px; height: 7px; border-radius: 50%; background: var(--color-accent);
+  box-shadow: 0 0 8px var(--color-accent); z-index: 2;
+}
+.brandmark .bm-ring {
+  position: absolute; inset: 0; margin: auto; width: 9px; height: 9px; border-radius: 50%;
+  border: 1.5px solid var(--color-accent-light); opacity: 0;
+  animation: hub-ripple 3.2s var(--ease-out) infinite;
+}
+.brandmark .bm-ring:nth-child(2) { animation-delay: 1.6s; }
+
+/* Home hub mic: a filled violet disc that ripples while idle. The .mic-wrapper
+   prefix keeps this winning over the base .mic-btn--idle in any stylesheet. */
+.mic-wrapper .mic-btn--idle {
+  border-color: transparent;
+  background: radial-gradient(120% 120% at 50% 25%, var(--color-accent-light), var(--color-accent) 60%, #6d3fd6);
+  color: #0c0814;
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.18) inset,
+    0 10px 30px -8px rgba(139, 92, 246, 0.7),
+    0 0 40px -10px var(--color-accent);
+}
+.mic-wrapper .mic-btn--idle:hover:not(:disabled) {
+  background: radial-gradient(120% 120% at 50% 25%, var(--color-accent-light), var(--color-accent) 65%, #7a4ce0);
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.22) inset,
+    0 12px 34px -8px rgba(139, 92, 246, 0.8),
+    0 0 48px -10px var(--color-accent);
+}
+
+/* Idle ripples emanate from the mic disc (the ring element + its two pseudos). */
+#mic-ring::before, #mic-ring::after { content: ""; position: absolute; inset: 0; border-radius: 50%; }
+.mic-wrapper:has(.mic-btn--idle) #mic-ring,
+.mic-wrapper:has(.mic-btn--idle) #mic-ring::before,
+.mic-wrapper:has(.mic-btn--idle) #mic-ring::after {
+  border: 1.5px solid var(--color-accent-light); opacity: 0;
+  animation: hub-ripple 3.4s var(--ease-out) infinite;
+}
+.mic-wrapper:has(.mic-btn--idle) #mic-ring::before { animation-delay: 1.13s; }
+.mic-wrapper:has(.mic-btn--idle) #mic-ring::after { animation-delay: 2.26s; }
+
+@keyframes hub-ripple {
+  0% { transform: scale(0.62); opacity: 0.5; }
+  80% { opacity: 0; }
+  100% { transform: scale(1.15); opacity: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .brandmark .bm-ring,
+  .mic-wrapper:has(.mic-btn--idle) #mic-ring,
+  .mic-wrapper:has(.mic-btn--idle) #mic-ring::before,
+  .mic-wrapper:has(.mic-btn--idle) #mic-ring::after { animation: none; }
+  .brandmark .bm-ring { opacity: 0.4; }
 }
 

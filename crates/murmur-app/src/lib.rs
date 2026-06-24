@@ -3,15 +3,18 @@
 
 mod audio_worker;
 mod calibration;
+mod caption;
 mod commands;
 mod focus;
 mod input;
 mod model_setup;
+mod preview;
 mod session;
 mod sound;
 mod state;
 mod transcribe;
 mod updater;
+mod watcher;
 
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -21,7 +24,7 @@ use murmur_core::config::Settings;
 use murmur_core::output::OutputMode;
 use murmur_core::stt::engine::SttEngine;
 use tauri::{
-    Manager,
+    Emitter, Manager,
     image::Image,
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
@@ -30,13 +33,52 @@ use tauri_plugin_global_shortcut::GlobalShortcutExt;
 
 use state::AppState;
 
+/// Run as a stdio MCP server (`murmur-app mcp`), which is what Claude / Cursor
+/// spawn after the in-app "Connect to editor" button writes their config. Talks
+/// JSON-RPC over stdin/stdout and never starts the GUI; the protocol owns
+/// stdout, so the only diagnostics go to stderr. Returns a process exit code.
+pub fn run_mcp() -> i32 {
+    // A fresh stderr subscriber: file logging isn't set up in this mode, and
+    // stdout must stay pure JSON-RPC.
+    let _ = tracing_subscriber::fmt()
+        .with_writer(std::io::stderr)
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("warn")),
+        )
+        .try_init();
+
+    let runtime = match tokio::runtime::Runtime::new() {
+        Ok(rt) => rt,
+        Err(e) => {
+            tracing::error!("Failed to start MCP runtime: {e}");
+            return 1;
+        }
+    };
+    match runtime.block_on(murmur_mcp::serve()) {
+        Ok(()) => 0,
+        Err(e) => {
+            tracing::error!("MCP server error: {e}");
+            1
+        }
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() -> anyhow::Result<()> {
+    // Migrate the legacy config directory before logging runs: init_logging
+    // creates the new murmur directory, and the migration only fires when that
+    // directory does not yet exist.
+    Settings::migrate_from_voitex();
     let _log_guard = init_logging();
     let settings = load_settings()?;
     let model = settings.model;
     let hotkey = settings.hotkey.clone();
     let show_widget_on_start = settings.show_widget;
+
+    let history_path = murmur_core::history::History::default_path()
+        .context("Failed to determine history path")?;
+    let history = murmur_core::history::History::load(&history_path);
 
     // Engine loads in the background so startup is instant; the UI shows a
     // loading banner until it is ready.
@@ -44,8 +86,27 @@ pub fn run() -> anyhow::Result<()> {
     let engine_for_setup = Arc::clone(&engine);
 
     tauri::Builder::default()
+        // Must be the first plugin: a second launch hands off to the running
+        // instance and exits, so two copies can never run at once. Multiple
+        // instances would double-capture audio and race on the clipboard
+        // during clipboard+paste output (corrupting what gets pasted).
+        .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
+            // An `mcp` launch is an editor spawning the stdio server; the normal
+            // `main()` branch handles it before Tauri inits, but guard here too
+            // so a stale/downgraded config that reaches the GUI never yanks the
+            // window to the front on every editor connect.
+            if args.iter().any(|a| a == "mcp") {
+                return;
+            }
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.show();
+                let _ = window.unminimize();
+                let _ = window.set_focus();
+            }
+        }))
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_dialog::init())
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(move |app, _shortcut, event| {
@@ -58,14 +119,27 @@ pub fn run() -> anyhow::Result<()> {
             engine,
             engine_loaded: std::sync::atomic::AtomicBool::new(false),
             recording: Mutex::new(false),
+            session_generation: std::sync::atomic::AtomicU64::new(0),
+            streaming_worker: Mutex::new(None),
             settings: Mutex::new(settings),
             last_toggle: Mutex::new(Instant::now() - Duration::from_secs(10)),
             session_prev_text: Mutex::new(String::new()),
             last_delivered_len: Mutex::new(0),
+            history: Mutex::new(history),
+            history_path,
+            session_dev_mode: Mutex::new(None),
             #[cfg(windows)]
             previous_foreground: Mutex::new(0),
             #[cfg(windows)]
             last_external_foreground: Mutex::new(0),
+            startup_notice: Mutex::new(None),
+            suppress_output: std::sync::atomic::AtomicBool::new(false),
+            project_vocab: Mutex::new(Vec::new()),
+            codebase_watcher: Mutex::new(None),
+            indexing: std::sync::atomic::AtomicBool::new(false),
+            index_pending: std::sync::atomic::AtomicBool::new(false),
+            #[cfg(feature = "full")]
+            help: Arc::new(Mutex::new(None)),
         })
         .on_window_event(|window, event| {
             // Hide the main window on close so the tray can re-show it.
@@ -78,7 +152,11 @@ pub fn run() -> anyhow::Result<()> {
         })
         .invoke_handler(tauri::generate_handler![
             commands::get_status,
+            commands::take_startup_notice,
+            commands::set_output_suppressed,
             commands::toggle_recording,
+            commands::get_history,
+            commands::clear_history,
             commands::get_config,
             commands::download_model,
             commands::list_models,
@@ -89,6 +167,17 @@ pub fn run() -> anyhow::Result<()> {
             commands::list_audio_devices,
             commands::set_widget_visible,
             commands::open_privacy_settings,
+            commands::locate_widget,
+            commands::pick_project_folder,
+            commands::set_codebase_vocabulary,
+            commands::mark_whats_new_seen,
+            commands::mcp_install,
+            commands::get_usage_stats,
+            commands::learn_vocabulary,
+            #[cfg(feature = "full")]
+            commands::help_search,
+            #[cfg(feature = "full")]
+            commands::help_ready,
             updater::install_update,
         ])
         .setup(move |app| setup_app(app, engine_for_setup, model, &hotkey, show_widget_on_start))
@@ -127,7 +216,6 @@ fn init_logging() -> tracing_appender::non_blocking::WorkerGuard {
 }
 
 fn load_settings() -> anyhow::Result<Settings> {
-    Settings::migrate_from_voitex();
     let config_path = Settings::default_path().context("Failed to determine config path")?;
     let mut settings = Settings::load(&config_path).context("Failed to load settings")?;
 
@@ -161,12 +249,163 @@ fn setup_app(
     register_hotkey(app, hotkey);
     configure_widget(app, show_widget_on_start);
 
+    // The roaming caption is display-only: make it click-through so it never
+    // intercepts input meant for the window beneath it.
+    if let Some(caption) = app.get_webview_window("caption") {
+        let _ = caption.set_ignore_cursor_events(true);
+    }
+
     model_setup::spawn_download_and_init(app.handle().clone(), engine, model);
     input::spawn_global_input_listener(app.handle().clone());
     updater::spawn_startup_check(app.handle().clone());
+    spawn_project_index(app.handle().clone());
+    #[cfg(feature = "full")]
+    spawn_help_index(app.handle().clone());
+    watcher::rewatch(app.handle());
 
     tracing::info!("Murmur app started");
     Ok(())
+}
+
+/// Index the configured project in the background and store its symbols in
+/// `project_vocab`, so transcription can bias toward them. No-ops when the
+/// indexer is disabled or no project root is set. Safe to call again (e.g.
+/// after a settings change) — it overwrites the cached result.
+pub(crate) fn spawn_project_index(app: tauri::AppHandle) {
+    use std::sync::atomic::Ordering;
+
+    {
+        let state = app.state::<AppState>();
+        let settings = state.settings.lock().unwrap_or_else(|e| e.into_inner());
+        if !settings.indexer.enabled || settings.indexer.project_roots.is_empty() {
+            return;
+        }
+    }
+
+    // Coalesce: if a scan is already running, flag that another is needed and
+    // let the running one pick it up, instead of stacking concurrent full scans
+    // (a burst of file-watcher events over a large tree would otherwise spawn an
+    // unbounded number of indexing threads).
+    {
+        let state = app.state::<AppState>();
+        if state.indexing.swap(true, Ordering::AcqRel) {
+            state.index_pending.store(true, Ordering::Release);
+            return;
+        }
+    }
+
+    std::thread::spawn(move || {
+        loop {
+            run_one_index(&app);
+
+            // A change that arrived during the scan set `index_pending`; run once
+            // more for it. The re-check after releasing `indexing` re-claims a
+            // change that landed in the tiny window between the swap and store.
+            let state = app.state::<AppState>();
+            if state.index_pending.swap(false, Ordering::AcqRel) {
+                continue;
+            }
+            state.indexing.store(false, Ordering::Release);
+            if !state.index_pending.load(Ordering::Acquire) {
+                break;
+            }
+            if state.indexing.swap(true, Ordering::AcqRel) {
+                break; // another invocation re-claimed it
+            }
+        }
+    });
+}
+
+/// One project-index pass: read the current roots, scan, and publish the result.
+fn run_one_index(app: &tauri::AppHandle) {
+    use murmur_core::indexer::{IndexConfig, index_projects};
+
+    let (enabled, roots, max_symbols, extensions) = {
+        let state = app.state::<AppState>();
+        let settings = state.settings.lock().unwrap_or_else(|e| e.into_inner());
+        let idx = &settings.indexer;
+        (
+            idx.enabled,
+            idx.project_roots.clone(),
+            idx.max_symbols,
+            idx.extensions.clone(),
+        )
+    };
+    if !enabled || roots.is_empty() {
+        return;
+    }
+
+    let cfg = IndexConfig {
+        max_symbols,
+        extensions,
+        ..IndexConfig::default()
+    };
+    match index_projects(&roots, &cfg) {
+        Ok(symbols) => {
+            let count = symbols.len();
+            tracing::info!(
+                "Codebase index: {} symbols from {} folder(s)",
+                count,
+                roots.len()
+            );
+            let state = app.state::<AppState>();
+            *state
+                .project_vocab
+                .lock()
+                .unwrap_or_else(|e| e.into_inner()) = symbols;
+            let _ = app.emit(
+                "codebase-index",
+                serde_json::json!({ "count": count, "enabled": true }),
+            );
+        }
+        Err(e) => {
+            tracing::warn!("Codebase index failed: {:#}", e);
+            let _ = app.emit(
+                "codebase-index",
+                serde_json::json!({ "count": 0, "enabled": true, "error": e.to_string() }),
+            );
+        }
+    }
+}
+
+/// Prepare the local Help search engine in the background: download the small
+/// embedder model if missing, then embed the bundled corpus off the async
+/// reactor and store the ready engine in `AppState::help`. Emits `help-ready`
+/// so the Help view can drop its "preparing" note. Non-fatal: on any failure
+/// Help simply stays unavailable (the command returns no hits).
+#[cfg(feature = "full")]
+pub(crate) fn spawn_help_index(app: tauri::AppHandle) {
+    use murmur_core::help::{self, HelpEngine};
+
+    tauri::async_runtime::spawn(async move {
+        if let Err(e) = help::download().await {
+            tracing::warn!(
+                "Help embedder download failed; Help search unavailable: {:#}",
+                e
+            );
+            return;
+        }
+
+        // Corpus embedding is CPU-heavy: build off the reactor.
+        let engine = match tokio::task::spawn_blocking(HelpEngine::load).await {
+            Ok(Ok(engine)) => engine,
+            Ok(Err(e)) => {
+                tracing::warn!("Help engine load failed; Help search unavailable: {:#}", e);
+                return;
+            }
+            Err(e) => {
+                tracing::warn!("Help engine load task panicked; Help search unavailable: {e}");
+                return;
+            }
+        };
+
+        let Some(state) = app.try_state::<AppState>() else {
+            return;
+        };
+        *state.help.lock().unwrap_or_else(|e| e.into_inner()) = Some(engine);
+        let _ = app.emit("help-ready", serde_json::json!({ "ready": true }));
+        tracing::info!("Help search ready");
+    });
 }
 
 fn build_tray(app: &mut tauri::App) -> tauri::Result<()> {
@@ -226,16 +465,38 @@ fn register_hotkey(app: &tauri::App, hotkey: &str) {
     // force-kill that skipped cleanup).
     let _ = app.global_shortcut().unregister_all();
 
-    match hotkey.parse::<tauri_plugin_global_shortcut::Shortcut>() {
+    let failure = match hotkey.parse::<tauri_plugin_global_shortcut::Shortcut>() {
         Ok(shortcut) => match app.global_shortcut().register(shortcut) {
-            Ok(()) => tracing::info!("Registered global hotkey: {}", hotkey),
-            Err(e) => tracing::warn!(
-                "Could not register hotkey '{}': {:?} (app still works via UI)",
-                hotkey,
-                e
-            ),
+            Ok(()) => {
+                tracing::info!("Registered global hotkey: {}", hotkey);
+                None
+            }
+            Err(e) => {
+                tracing::warn!(
+                    "Could not register hotkey '{}': {:?} (app still works via UI)",
+                    hotkey,
+                    e
+                );
+                Some(format!(
+                    "Hotkey '{hotkey}' is already in use by another app. Murmur still works \
+                     via the mic button or your double-tap key; pick a new hotkey in Settings."
+                ))
+            }
         },
-        Err(e) => tracing::warn!("Could not parse hotkey '{}': {:?}", hotkey, e),
+        Err(e) => {
+            tracing::warn!("Could not parse hotkey '{}': {:?}", hotkey, e);
+            Some(format!(
+                "Hotkey '{hotkey}' is not valid. Set a working hotkey in Settings."
+            ))
+        }
+    };
+
+    if let Some(message) = failure {
+        let state = app.state::<AppState>();
+        *state
+            .startup_notice
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = Some(message);
     }
 }
 

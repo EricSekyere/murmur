@@ -11,9 +11,21 @@ micBtn.addEventListener('click', async () => {
   }
 });
 
+if (findPillBtn) {
+  findPillBtn.addEventListener('click', async () => {
+    try {
+      await invoke('locate_widget');
+      showToast('Flashing the pill — look for the glowing widget', 'success');
+    } catch (err) {
+      showToast(`Could not locate the pill: ${err}`, 'error');
+    }
+  });
+}
+
 async function init() {
   createVoiceBars();
   renderAnalytics();
+  renderUsageStats();
   renderDiagnostics();
   try {
     const status = await invoke('get_status');
@@ -29,9 +41,18 @@ async function init() {
     }
     developerModeToggle.checked = !!status.developer_mode;
     devModeBadge.hidden = !status.developer_mode;
+    maybeShowWhatsNew(status);
   } catch (err) {
     console.error('Failed to get status:', err);
-    updateModelBanner({ model_ready: false, model: 'small.en', recording: false, mode: 'idle' });
+    updateModelBanner({ model_ready: false, model: 'Parakeet TDT 0.6B v2', recording: false, mode: 'idle' });
+  }
+
+  // Surface a one-shot startup warning (e.g. the hotkey failed to register).
+  try {
+    const notice = await invoke('take_startup_notice');
+    if (notice) showToast(notice, 'error', 8000);
+  } catch (err) {
+    console.error('Failed to read startup notice:', err);
   }
 }
 

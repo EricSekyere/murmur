@@ -97,6 +97,13 @@ impl SttModel {
         }
     }
 
+    /// Whether the model can transcribe languages other than English and
+    /// translate to English. Only the multilingual Whisper checkpoints can;
+    /// the `.en` models and Parakeet are English-only.
+    pub fn is_multilingual(&self) -> bool {
+        matches!(self, Self::WhisperLargeV3Turbo)
+    }
+
     /// Approximate total download size in MB.
     pub fn size_mb(&self) -> u32 {
         match self {
@@ -184,20 +191,22 @@ impl SttModel {
                 sha256: "1fc70f774d38eb169993ac391eea357ef47c88757ef72ee5943879b7e8e2bc69",
             }],
             Self::ParakeetTdt06bV2 => vec![
+                // Pinned to istupakov/parakeet-tdt-0.6b-v2-onnx @ main (the LFS
+                // oid is the file's SHA256; verified against the resolved bytes).
                 ModelFile {
                     remote_name: "encoder-model.int8.onnx",
                     local_name: "encoder-model.onnx",
-                    sha256: "", // TODO: compute after first download
+                    sha256: "3e0581fda6ab843888b51e56d7ee78b6d5bc3237ec113af1f732d1d5286aa155",
                 },
                 ModelFile {
                     remote_name: "decoder_joint-model.int8.onnx",
                     local_name: "decoder_joint-model.onnx",
-                    sha256: "", // TODO: compute after first download
+                    sha256: "a449f49acd68979d418651dd2dcb737cc0f1bf0225e009e29ee326354edbf7d3",
                 },
                 ModelFile {
                     remote_name: "vocab.txt",
                     local_name: "vocab.txt",
-                    sha256: "", // TODO: compute after first download
+                    sha256: "ec182b70dd42113aff6c5372c75cac58c952443eb22322f57bbd7f53977d497d",
                 },
             ],
         }
@@ -261,13 +270,17 @@ impl ModelManager {
         }
     }
 
-    /// Check if all required files for a model are downloaded.
+    /// Check if all required files for a model are present and non-empty.
+    /// Empty or missing files (e.g. an interrupted download that left a stub)
+    /// are treated as not downloaded so the file is fetched again.
     pub fn is_downloaded(&self, model: SttModel) -> bool {
         let dir = self.model_dir(model);
-        model
-            .model_files()
-            .iter()
-            .all(|f| dir.join(f.local_name).exists())
+        model.model_files().iter().all(|f| {
+            dir.join(f.local_name)
+                .metadata()
+                .map(|m| m.len() > 0)
+                .unwrap_or(false)
+        })
     }
 
     /// List all downloaded models.
@@ -337,27 +350,8 @@ impl ModelManager {
 
             pb.finish_with_message(format!("{} downloaded", file.local_name));
 
-            // Verify SHA256 (skip if checksum not specified)
             let hash = format!("{:x}", hasher.finalize());
-            if !file.sha256.is_empty() && hash != file.sha256 {
-                let _ = tokio::fs::remove_file(&temp_path).await;
-                anyhow::bail!(
-                    "SHA256 mismatch for {}: expected {}, got {}",
-                    file.local_name,
-                    file.sha256,
-                    hash
-                );
-            }
-
-            if file.sha256.is_empty() {
-                tracing::debug!(
-                    "SHA256 checksum not specified for {}, skipping verification (hash={})",
-                    file.local_name,
-                    hash
-                );
-            } else {
-                tracing::info!("Checksum verified for {}", file.local_name);
-            }
+            verify_download(&temp_path, file, &hash).await?;
 
             tokio::fs::rename(&temp_path, &dest)
                 .await
@@ -424,27 +418,8 @@ impl ModelManager {
                 on_progress(cumulative_downloaded, Some(estimated_total));
             }
 
-            // Verify SHA256 (skip if checksum not specified)
             let hash = format!("{:x}", hasher.finalize());
-            if !file.sha256.is_empty() && hash != file.sha256 {
-                let _ = tokio::fs::remove_file(&temp_path).await;
-                anyhow::bail!(
-                    "SHA256 mismatch for {}: expected {}, got {}",
-                    file.local_name,
-                    file.sha256,
-                    hash
-                );
-            }
-
-            if file.sha256.is_empty() {
-                tracing::debug!(
-                    "SHA256 checksum not specified for {}, skipping verification (hash={})",
-                    file.local_name,
-                    hash
-                );
-            } else {
-                tracing::info!("Checksum verified for {}", file.local_name);
-            }
+            verify_download(&temp_path, file, &hash).await?;
 
             tokio::fs::rename(&temp_path, &dest)
                 .await
@@ -455,4 +430,39 @@ impl ModelManager {
         tracing::info!("Model {} ready at {}", model.name(), path.display());
         Ok(path)
     }
+}
+
+/// Reject an empty download and verify its SHA256 when one is pinned. A model
+/// file without a pinned checksum cannot be verified, so warn loudly rather
+/// than accepting it silently.
+async fn verify_download(temp_path: &std::path::Path, file: &ModelFile, hash: &str) -> Result<()> {
+    let len = tokio::fs::metadata(temp_path)
+        .await
+        .map(|m| m.len())
+        .unwrap_or(0);
+    if len == 0 {
+        let _ = tokio::fs::remove_file(temp_path).await;
+        anyhow::bail!("Downloaded file {} is empty", file.local_name);
+    }
+
+    if file.sha256.is_empty() {
+        tracing::warn!(
+            "No pinned checksum for {}; integrity cannot be verified (sha256={})",
+            file.local_name,
+            hash
+        );
+        return Ok(());
+    }
+
+    if hash != file.sha256 {
+        let _ = tokio::fs::remove_file(temp_path).await;
+        anyhow::bail!(
+            "SHA256 mismatch for {}: expected {}, got {}",
+            file.local_name,
+            file.sha256,
+            hash
+        );
+    }
+    tracing::info!("Checksum verified for {}", file.local_name);
+    Ok(())
 }

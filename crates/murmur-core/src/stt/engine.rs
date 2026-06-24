@@ -1,4 +1,4 @@
-﻿#[cfg(any(feature = "stt", feature = "parakeet"))]
+#[cfg(any(feature = "stt", feature = "parakeet"))]
 use anyhow::Context;
 use anyhow::Result;
 #[cfg(any(feature = "stt", feature = "parakeet"))]
@@ -53,6 +53,11 @@ pub struct SttEngine {
     /// Comma-separated user glossary (names, jargon) included in the prompt
     /// so whisper spells them correctly.
     vocabulary: Option<String>,
+    /// Spoken-language hint: `None` or "auto" auto-detects, "en"/"es"/… force
+    /// a language. Ignored for English-only models (always "en").
+    language: Option<String>,
+    /// Translate the recognized speech to English (multilingual models only).
+    translate: bool,
 }
 
 /// Samples in 1ms at 16kHz. Used for leading-silence padding.
@@ -62,6 +67,13 @@ const SAMPLES_PER_MS: usize = 16;
 /// attenuates the first ~50ms; 100ms keeps utterance starts intact.
 #[cfg(feature = "stt")]
 const WHISPER_LEAD_MS: usize = 100;
+
+/// Char budget for the vocabulary clause in Whisper's prompt. The prompt window
+/// is ~224 tokens, shared with the style hint and rolling context, so a long
+/// glossary (a big manual list, or the codebase indexer) must be capped or it
+/// crowds out decoding and degrades transcription.
+#[cfg(feature = "stt")]
+const MAX_VOCAB_PROMPT_CHARS: usize = 400;
 
 /// Default leading-silence padding for Parakeet. Its mel windowing drops
 /// more of the start than Whisper — transcribe-rs uses 250ms.
@@ -126,6 +138,8 @@ impl SttEngine {
                 model: None,
                 initial_prompt: None,
                 vocabulary: None,
+                language: None,
+                translate: false,
             })
         }
 
@@ -139,6 +153,8 @@ impl SttEngine {
                 model: None,
                 initial_prompt: None,
                 vocabulary: None,
+                language: None,
+                translate: false,
             })
         }
     }
@@ -154,31 +170,24 @@ impl SttEngine {
             // Ensure ONNX Runtime DLL is loaded before creating any sessions
             super::runtime::init_ort().context("Failed to initialize ONNX Runtime for Parakeet")?;
 
-            // Use DirectML (GPU) on Windows for ~5-10x faster inference.
-            // Falls back to CPU automatically if GPU is unavailable.
-            let config = parakeet_rs::ExecutionConfig::new()
-                .with_execution_provider(parakeet_rs::ExecutionProvider::DirectML);
+            // Parakeet is a small int8 model on short dictation clips, so the
+            // default CPU provider is the fast path: it warms up in ~90ms. A GPU
+            // provider (DirectML) is a net loss here — its first inference spends
+            // ~40s compiling shaders every launch, and the TDT/LSTM decoder
+            // ping-pongs tensors host<->device. Use CPU on every platform.
+            let config: Option<parakeet_rs::ExecutionConfig> = None;
 
-            tracing::info!(
-                "Loading Parakeet model from {} with DirectML GPU acceleration...",
-                model_dir
-            );
+            tracing::info!("Loading Parakeet model from {}...", model_dir);
 
-            let engine = match parakeet_rs::ParakeetTDT::from_pretrained(model_dir, Some(config)) {
+            let engine = match parakeet_rs::ParakeetTDT::from_pretrained(model_dir, config) {
                 Ok(e) => {
-                    tracing::info!("Parakeet engine loaded successfully from: {}", model_dir);
+                    tracing::info!("Parakeet engine loaded from: {}", model_dir);
                     e
                 }
                 Err(e) => {
-                    tracing::error!(
-                        "Parakeet model load failed (DirectML): {}. \
-                         This may indicate a GPU compatibility issue. \
-                         Check that DirectML is supported on this GPU.",
-                        e
-                    );
+                    tracing::error!("Parakeet model load failed: {}", e);
                     return Err(anyhow::anyhow!(
-                        "Failed to load Parakeet model: {}. \
-                         Try a Whisper model if this persists.",
+                        "Failed to load Parakeet model: {}. Try a Whisper model if this persists.",
                         e
                     ));
                 }
@@ -192,6 +201,8 @@ impl SttEngine {
                 model: None,
                 initial_prompt: None,
                 vocabulary: None,
+                language: None,
+                translate: false,
             })
         }
 
@@ -205,6 +216,8 @@ impl SttEngine {
                 model: None,
                 initial_prompt: None,
                 vocabulary: None,
+                language: None,
+                translate: false,
             })
         }
     }
@@ -218,6 +231,28 @@ impl SttEngine {
     /// (temperature fallback, segment mode, etc.) per model size.
     pub fn set_model(&mut self, model: SttModel) {
         self.model = Some(model);
+    }
+
+    /// The model this engine was loaded with, if set.
+    pub fn model(&self) -> Option<SttModel> {
+        self.model
+    }
+
+    /// Whether this backend decodes fast enough to drive the live-preview loop,
+    /// which re-transcribes the growing in-progress phrase every ~0.7s. A CPU
+    /// Whisper decode pays the fixed ~30s mel-encoder cost per call (seconds per
+    /// phrase), so previewing would run it 6-7x per phrase and starve the final
+    /// decode — disable preview there. Parakeet (and a GPU-accelerated Whisper
+    /// build) are fast enough to preview.
+    pub fn supports_realtime_preview(&self) -> bool {
+        match &self.inner {
+            #[cfg(feature = "parakeet")]
+            EngineInner::Parakeet { .. } => true,
+            #[cfg(feature = "stt")]
+            EngineInner::Whisper { .. } => cfg!(feature = "cuda"),
+            #[allow(unreachable_patterns)]
+            _ => false,
+        }
     }
 
     /// Set the running session transcript used as decoder context for the
@@ -241,6 +276,18 @@ impl SttEngine {
         } else {
             Some(cleaned.join(", "))
         };
+    }
+
+    /// Set the spoken-language hint. `None` or "auto" auto-detects; a code like
+    /// "es" forces a language. Only honored by multilingual models.
+    pub fn set_language(&mut self, language: Option<String>) {
+        self.language = language.filter(|l| !l.trim().is_empty());
+    }
+
+    /// Translate recognized speech to English. Only honored by multilingual
+    /// models; English-only models always transcribe verbatim.
+    pub fn set_translate(&mut self, translate: bool) {
+        self.translate = translate;
     }
 
     /// Transcribe raw PCM audio samples (16kHz mono f32) to text.
@@ -293,6 +340,8 @@ impl SttEngine {
                 self.model,
                 self.initial_prompt.as_deref(),
                 self.vocabulary.as_deref(),
+                self.language.as_deref(),
+                self.translate,
             ),
             #[cfg(feature = "parakeet")]
             EngineInner::Parakeet { engine } => Self::transcribe_parakeet(engine, input, start),
@@ -319,6 +368,26 @@ impl SttEngine {
         Ok(result)
     }
 
+    /// Trim a comma-joined glossary to a char budget at a comma boundary, so the
+    /// vocabulary clause cannot exceed the prompt's token budget no matter how
+    /// many words the caller supplies.
+    #[cfg(feature = "stt")]
+    fn cap_glossary(glossary: &str, max_chars: usize) -> &str {
+        if glossary.chars().count() <= max_chars {
+            return glossary;
+        }
+        let cut = glossary
+            .char_indices()
+            .nth(max_chars)
+            .map(|(i, _)| i)
+            .unwrap_or(glossary.len());
+        let head = &glossary[..cut];
+        match head.rfind(',') {
+            Some(comma) => &head[..comma],
+            None => head,
+        }
+    }
+
     #[cfg(feature = "stt")]
     #[allow(clippy::too_many_arguments)]
     fn transcribe_whisper(
@@ -329,6 +398,8 @@ impl SttEngine {
         model: Option<SttModel>,
         initial_prompt: Option<&str>,
         vocabulary: Option<&str>,
+        language: Option<&str>,
+        translate: bool,
     ) -> Result<TranscriptionResult> {
         let mut state = ctx
             .create_state()
@@ -356,8 +427,26 @@ impl SttEngine {
             })
         };
         params.set_n_threads(n_threads);
-        params.set_language(Some("en"));
-        params.set_translate(false);
+        // Whisper always pads a clip's mel to a fixed 30s (1500 encoder frames),
+        // so a 2-5s dictation phrase otherwise pays the full-30s encoder cost.
+        // Size the audio context to the actual clip length (50 ctx frames/sec)
+        // plus ~2.5s of headroom, clamped, so short phrases decode ~3x faster
+        // with no accuracy loss. Clips near/over 30s keep the full context.
+        let clip_secs = samples.len() as f32 / 16_000.0;
+        if clip_secs < 28.0 {
+            let audio_ctx = ((clip_secs * 50.0).ceil() as i32 + 128).clamp(256, 1500);
+            params.set_audio_ctx(audio_ctx);
+        }
+        // Language/translation only apply to multilingual checkpoints; the
+        // `.en` models can't do either, so force English and no translation.
+        let multilingual = model.map(|m| m.is_multilingual()).unwrap_or(false);
+        let (effective_lang, effective_translate) = if multilingual {
+            (language.unwrap_or("auto"), translate)
+        } else {
+            ("en", false)
+        };
+        params.set_language(Some(effective_lang));
+        params.set_translate(effective_translate);
         params.set_print_special(false);
         params.set_print_progress(false);
         params.set_print_realtime(false);
@@ -369,21 +458,28 @@ impl SttEngine {
         params.set_no_timestamps(false);
         params.set_suppress_blank(true);
         params.set_suppress_nst(true);
-        // Encourage proper punctuation and capitalization via initial prompt.
-        // Whisper uses this as a style hint for the decoder. When the caller
-        // has provided session context (the trailing portion of the prior
-        // transcript), append it so cross-phrase punctuation/capitalization
-        // stays consistent — this is whisper.cpp's intended streaming pattern.
         // Base style hint, optionally extended with a user glossary so names
         // and jargon spell correctly. Both are prepended to the rolling
         // session context (whisper.cpp's streaming pattern).
-        let mut prompt = String::from("Use proper punctuation and capitalization.");
+        // The English style hint only helps when the output is English; on a
+        // non-English transcription it can nudge whisper to code-switch.
+        let output_is_english = effective_translate || effective_lang == "en";
+        let mut prompt = String::new();
+        if output_is_english {
+            prompt.push_str("Use proper punctuation and capitalization.");
+        }
         if let Some(glossary) = vocabulary.filter(|g| !g.trim().is_empty()) {
-            prompt.push_str(" Vocabulary: ");
-            prompt.push_str(glossary.trim());
+            if !prompt.is_empty() {
+                prompt.push(' ');
+            }
+            prompt.push_str("Vocabulary: ");
+            prompt.push_str(Self::cap_glossary(glossary.trim(), MAX_VOCAB_PROMPT_CHARS));
             prompt.push('.');
         }
-        if let Some(prev) = initial_prompt.filter(|s| !s.trim().is_empty()) {
+        // The rolling session context is the prior English transcript, so only
+        // feed it back when the output is English. On a non-English decode it
+        // would push whisper to code-switch into English.
+        if output_is_english && let Some(prev) = initial_prompt.filter(|s| !s.trim().is_empty()) {
             // Cap at ~200 chars to keep the prompt token budget bounded.
             let trimmed = prev.trim();
             let start_byte = trimmed
@@ -392,10 +488,14 @@ impl SttEngine {
                 .nth(200)
                 .map(|(i, _)| i)
                 .unwrap_or(0);
-            prompt.push(' ');
+            if !prompt.is_empty() {
+                prompt.push(' ');
+            }
             prompt.push_str(&trimmed[start_byte..]);
         }
-        params.set_initial_prompt(&prompt);
+        if !prompt.is_empty() {
+            params.set_initial_prompt(&prompt);
+        }
         params.set_temperature(0.0);
         if is_large {
             // Larger models (medium, large-v3-turbo) hit more edge cases where
@@ -478,16 +578,13 @@ impl SttEngine {
 
         let elapsed = start.elapsed();
         tracing::info!(
-            "Whisper transcribed {} samples in {}ms -> {} segment(s), text={:?}",
+            "Whisper transcribed {} samples in {}ms -> {} segment(s), {} chars",
             samples.len(),
             elapsed.as_millis(),
             segments.len(),
-            if full_text.trim().is_empty() {
-                "<empty>"
-            } else {
-                full_text.trim()
-            }
+            full_text.trim().chars().count()
         );
+        tracing::trace!("Whisper text: {:?}", full_text.trim());
 
         Ok(TranscriptionResult {
             text: full_text.trim().to_string(),
@@ -548,15 +645,12 @@ impl SttEngine {
 
         let elapsed = start.elapsed();
         tracing::info!(
-            "Parakeet transcribed {} samples in {}ms -> {:?}",
+            "Parakeet transcribed {} samples in {}ms -> {} chars",
             samples.len(),
             elapsed.as_millis(),
-            if result.text.is_empty() {
-                "<empty>"
-            } else {
-                &result.text
-            }
+            result.text.trim().chars().count()
         );
+        tracing::trace!("Parakeet text: {:?}", result.text.trim());
 
         Ok(TranscriptionResult {
             text: result.text.trim().to_string(),
@@ -568,5 +662,24 @@ impl SttEngine {
     /// Get the path to the loaded model.
     pub fn model_path(&self) -> &str {
         &self.model_path
+    }
+}
+
+#[cfg(all(test, feature = "stt"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cap_glossary_passes_through_within_budget() {
+        let g = "FooBar, baz, qux";
+        assert_eq!(SttEngine::cap_glossary(g, 100), g);
+    }
+
+    #[test]
+    fn cap_glossary_trims_at_comma_boundary() {
+        // The 20-char prefix lands inside "charlie"; trimming backs up to the
+        // last comma so no entry is split.
+        let g = "alpha, bravo, charlie, delta, echo";
+        assert_eq!(SttEngine::cap_glossary(g, 20), "alpha, bravo");
     }
 }

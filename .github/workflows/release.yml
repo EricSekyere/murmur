@@ -1,15 +1,42 @@
 name: Release
 
+# Releases ship from the production branch: promote main -> production after a
+# version bump and this builds Windows + Linux and publishes the release. A
+# push that does not bump the version is skipped (see the tag check), so
+# promoting docs or CI changes never re-releases.
 on:
   push:
-    tags:
-      - "v*"
+    branches: [production]
+  workflow_dispatch:
 
 permissions:
   contents: write
 
 jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      release: ${{ steps.v.outputs.release }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: v
+        shell: bash
+        run: |
+          version=$(grep -m1 '"version"' crates/murmur-app/tauri.conf.json \
+            | sed -E 's/.*"version"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/')
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          if git ls-remote --exit-code --tags origin "refs/tags/v$version" >/dev/null 2>&1; then
+            echo "release=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::v$version is already released; skipping."
+          else
+            echo "release=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::Releasing v$version."
+          fi
+
   release-windows:
+    needs: prepare
+    if: needs.prepare.outputs.release == 'true'
     runs-on: windows-2022
     env:
       LIBCLANG_PATH: C:\Program Files\LLVM\bin
@@ -68,14 +95,124 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           projectPath: crates/murmur-app
-          tagName: ${{ github.ref_name }}
-          releaseName: "Murmur ${{ github.ref_name }}"
+          tagName: v${{ needs.prepare.outputs.version }}
+          releaseName: "Murmur v${{ needs.prepare.outputs.version }}"
           releaseBody: |
-            Voice-to-text dictation for Windows.
+            Fast, private, on-device dictation for Windows and Linux.
 
-            **Install:** download the `.exe` installer below and run it.
-            Models download automatically on first launch.
+            ## New in 0.5.0
 
-            Requires a CPU with AVX2 (any Intel/AMD CPU from ~2013 onward).
+            - **Ask for help by voice.** A new Help tab lets you ask a question, by typing or by dictating it into the box, and Murmur instantly finds the most relevant help section. It runs entirely on-device with a small local search model, so it works offline and sends nothing anywhere.
+            - **Redesigned interface.** The app and the floating pill share a new visual identity, with recording states told apart by motion and shape, and the usage dashboard now draws live charts (words per day, a streak grid, and your top apps) from your local history.
+            - **Echo cancellation no longer silences the mic.** On some Windows audio setups the echo-cancellation path returned digital silence, ending a recording right after it started. Murmur now detects that and falls back to the raw microphone automatically, so dictation always works. You can also turn Echo Cancellation off in Settings.
+
+            ## New in 0.4.1
+
+            - **Faster dictation by default.** New installs now use Parakeet, which transcribes a phrase in about a tenth of a second on CPU, with native punctuation and high accuracy. Whisper (small/medium/large) stays available in the model picker for vocabulary biasing or multilingual use.
+            - **Whisper dictation is fast again.** Fixed a regression where the live-preview loop re-ran Whisper several times per phrase, and Whisper now sizes its encoder to the actual clip length instead of a fixed 30 seconds. Short phrases on small.en dropped from tens of seconds to well under a second.
+            - **No more post-processing crashes.** A Unicode edge case in speech cleanup (on punctuation such as the ellipsis) could take down a recording; it now falls back to the raw transcript instead.
+
+            ## New in 0.4.0
+
+            - **Codebase-aware vocabulary.** Point Murmur at your project folders and it learns your identifiers (functions, types, symbols) with tree-sitter, so terms like `calculateTotalRevenue` transcribe correctly. Re-indexes automatically as files change. Settings → Codebase Vocabulary.
+            - **Editor integration (MCP).** Claude Desktop, Cursor, and Claude Code can read your recent dictation through a built-in, fully local Model Context Protocol server. One click in Settings → Connect to Cursor / Claude, or `murmur mcp install`.
+            - **Cleaner speech.** Ordinary dictation now removes "um/uh" hesitations (and their stretched forms) and collapses stutters, while keeping meaningful words and yes/no answers like "uh-huh". Spoken "number one… number two…" becomes a numbered list. Toggle under Settings → Clean up speech.
+            - **Personal dictionary that learns.** "Learn from history" scans what you've dictated and adds the technical terms you use to your dictionary.
+            - **Usage dashboard.** Words, words this week, day streak, and top apps — computed on-device from your local history, no telemetry.
+            - **Fixes.** Dictating into a maximized window no longer knocks it out of full screen; rapid start/stop is more reliable; turning history off now also purges the stored log.
+
+            ## New in 0.3.10
+
+            - **Echo cancellation (Windows).** When sound is playing through your speakers, the microphone no longer picks it up and transcribes it. Murmur opens the mic in the same communications mode conferencing apps use, so video, music, and call audio are filtered out before they reach the recognizer. It is on by default and stays quiet during silence instead of inventing filler text. Linux and macOS still use the raw microphone for now.
+
+            ## New in 0.3.9
+
+            - **Linux (X11): dictation types directly into apps.** On an X11 session, recognized text is injected straight into the focused window instead of going through a clipboard paste. On Wayland, where apps can't be typed into directly, Murmur falls back to copying the text so you can paste it. This is the first release with a Linux `.deb` and `.AppImage`.
+            - Microphone error messages no longer assume Windows.
+
+            ## New in 0.3.8
+
+            - **Privacy controls.** A new Save History toggle keeps no on-disk record of what you dictate, and transcripts no longer reach the debug log.
+            - **Push-to-talk on your hotkey.** Hold to talk now works on your configured hotkey, not just the double-tap key. The default hotkey moved off Ctrl+Q, which collided with app shortcuts like Slack's quit, and Murmur now warns you when its hotkey is already in use.
+            - **More reliable model switching.** Switching models no longer drops a phrase that was mid-flight, and a failed switch no longer leaves the app reporting the wrong active model.
+            - **Better for other languages.** Choosing a non-English language on an English-only model now warns you instead of producing garble, and the quality filters no longer over-reject quiet, accented speech.
+            - **Safer first-run test.** The onboarding mic test is display-only, so it can never type into a background app.
+            - **Smoother model downloads.** The banner shows the model size and a Retry button if a download fails.
+            - **Smaller touches.** Dictation lands in the window you started in (or the clipboard, never a stray one), say "literally" before a command to type the words instead of running it, and the session timeout can be set to always-on for hands-free use.
+
+            ## Fixes in 0.3.7
+
+            - **Live caption sits correctly on scaled displays.** When the caption follows your active window, it now centers properly beneath it on high-DPI screens (125%, 150%, and up) instead of drifting off-center, and it no longer appears in a screen corner when there is no active window to anchor to.
+
+            ## New in 0.3.6
+
+            - **Live caption can follow your active window.** The live preview can now appear right next to the window you are typing into, the way macOS dictation does, instead of only under the floating pill. Pick where it shows in Settings, under Live caption position. Each caption clears the moment its text lands in the field.
+
+            ## Fixes in 0.3.5
+
+            - **The clipboard can no longer leak.** Murmur now types directly into every app, including terminals and chat apps like Warp. It no longer routes any output through the clipboard, so your previous clipboard contents can never be pasted into the focused window. If a specific app needs paste, choose the Clipboard + Paste output mode for it.
+
+            ## Earlier in 0.3.4
+
+            - **Stays offline.** Removed a Google Fonts request that fired on every launch, and stopped writing recognized text to the on-disk log.
+            - **Recovers from a lost mic.** Unplugging the microphone mid-session now ends the session with a clear message instead of hanging.
+            - **Model switching is safe.** Changing models while recording no longer drops the rest of the session.
+            - **Clipboard and focus.** Wider window before restoring the clipboard after a terminal paste, an image clipboard is preserved, and dictation lands in the window you started in rather than one focus drifted to.
+            - **Live preview is lighter.** The preview snapshot is bounded so long phrases no longer slow the final, and the capture buffer is capped.
+            - **Many smaller fixes:** non-English context no longer leaks into non-English decodes, non-ASCII text survives developer-mode cleanup, a corrupt config recovers to defaults instead of failing to start, and a bare "undo" no longer fires Ctrl+Z.
+
+            ## Also in 0.3.x
+
+            - **Find pill.** A button in the dashboard flashes the floating pill so you can spot it, and pulls it back on-screen if it has been dragged off a monitor.
+
+            - **Live preview.** Your words appear as you speak, in the dashboard and as a caption under the floating pill, before each phrase is final.
+            - **Voice editing commands.** "select all", "copy that", "cut", "paste", "undo", "redo", "press tab", and "press escape", alongside "new line", "new paragraph", and "scratch that".
+            - **Text snippets.** Define "trigger = expansion" pairs and say the trigger to type the expansion.
+            - **Multilingual and translate.** Transcribe many languages, or translate your speech straight to English, using the multilingual model (Large v3 Turbo).
+            - **Searchable history.** Every delivered phrase is saved locally, tagged with the app it landed in, and filterable from the dashboard.
+            - **Per-app profiles.** Automatically switch output mode and developer mode based on the focused application.
+
+            ## Install
+
+            **Windows:** download the `.exe` installer and run it. Requires Windows 10/11 x64 with an AVX2-capable CPU (any Intel or AMD CPU from about 2013 onward). An NVIDIA GPU is optional and accelerates the larger models.
+
+            **Linux (X11):** download the `.AppImage`, `chmod +x`, and run it, or install the `.deb`. Best on an X11 session; on Wayland, typing into other apps is limited.
+
+            Models download automatically on first launch. Installed copies update themselves.
           releaseDraft: false
           prerelease: false
+
+  # Runs after Windows so the GitHub release already exists; this just uploads
+  # the Linux .deb and signed .AppImage to it.
+  release-linux:
+    needs: [prepare, release-windows]
+    if: needs.prepare.outputs.release == 'true'
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev \
+            librsvg2-dev libasound2-dev libxdo-dev \
+            libx11-dev libxtst-dev libxi-dev libxcb1-dev \
+            cmake clang libclang-dev pkg-config
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target"
+
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          APPIMAGE_EXTRACT_AND_RUN: 1
+        with:
+          projectPath: crates/murmur-app
+          tagName: v${{ needs.prepare.outputs.version }}
+          args: --bundles deb,appimage

@@ -9,7 +9,7 @@ description = "Core library for Murmur voice-to-text tool"
 [features]
 default = ["audio", "keyboard"]
 # Enable all features (requires cmake + libclang for whisper.cpp, ONNX Runtime for VAD + Parakeet)
-full = ["audio", "stt", "vad", "keyboard", "parakeet"]
+full = ["audio", "stt", "vad", "keyboard", "parakeet", "indexer", "treesitter", "help"]
 # Audio capture via CPAL
 audio = ["dep:cpal"]
 # Speech-to-text via whisper.cpp (requires cmake + libclang)
@@ -24,6 +24,23 @@ vad = ["audio", "dep:ort", "dep:zip", "dep:flate2", "dep:tar"]
 parakeet = ["dep:parakeet-rs", "dep:ort", "dep:zip", "dep:flate2", "dep:tar"]
 # Keystroke simulation
 keyboard = ["dep:enigo"]
+# Local Help retrieval: semantic search over bundled help articles via a small
+# ONNX sentence embedder (reuses the ORT runtime the STT path already loads).
+help = ["dep:ort", "dep:tokenizers", "dep:zip", "dep:flate2", "dep:tar"]
+# Codebase-derived vocabulary: lexical project indexer (gitignore-aware walk + regex)
+indexer = ["dep:ignore", "dep:regex"]
+# Tree-sitter symbol extraction for the indexer (AST-accurate; needs a C compiler
+# to build the bundled grammars). Falls back to the lexical scan when off.
+treesitter = [
+    "indexer",
+    "dep:tree-sitter",
+    "dep:tree-sitter-rust",
+    "dep:tree-sitter-python",
+    "dep:tree-sitter-javascript",
+    "dep:tree-sitter-typescript",
+    "dep:tree-sitter-go",
+    "dep:tree-sitter-java",
+]
 
 [dependencies]
 # Audio (optional — needs system audio libs)
@@ -35,8 +52,17 @@ whisper-rs = { version = "0.15", optional = true }
 # VAD (optional — needs ONNX Runtime, load-dynamic avoids MSVC STL version issues)
 ort = { version = "2.0.0-rc.11", optional = true, features = ["load-dynamic"] }
 
-# Parakeet STT (optional — uses ONNX Runtime with DirectML GPU acceleration on Windows)
-parakeet-rs = { workspace = true, optional = true, features = ["load-dynamic", "directml"] }
+# Help embedder tokenizer (optional — bge-small WordPiece, loaded from bundled
+# JSON). default-features = false drops esaxx_fast (a C++ training dep that links
+# with the static CRT and clashes with whisper.cpp's dynamic CRT); inference-only
+# encoding needs none of the default features, and bge uses no regex pretokenizer.
+tokenizers = { version = "0.22", optional = true, default-features = false, features = [
+    "fancy-regex",
+] }
+
+# Parakeet STT (optional — ONNX Runtime). DirectML is Windows-only and added
+# via the target table below; other platforms use the default CPU provider.
+parakeet-rs = { workspace = true, optional = true, features = ["load-dynamic"] }
 
 # ZIP extraction (optional — for downloading ONNX Runtime DLL on Windows)
 zip = { workspace = true, optional = true }
@@ -57,6 +83,7 @@ tokio.workspace = true
 
 # Serialization & Config
 serde.workspace = true
+serde_json.workspace = true
 toml.workspace = true
 
 # Logging
@@ -71,3 +98,33 @@ sha2 = "0.10"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream"] }
 futures-util = "0.3"
 indicatif = "0.17"
+
+# Codebase indexer (optional — gitignore-aware walk + identifier extraction)
+ignore = { version = "0.4", optional = true }
+regex = { version = "1", optional = true }
+
+# Tree-sitter AST extraction (optional — grammars compile C, decoupled from the
+# core version via the tree-sitter-language ABI)
+tree-sitter = { version = "0.24", optional = true }
+tree-sitter-rust = { version = "0.23", optional = true }
+tree-sitter-python = { version = "0.23", optional = true }
+tree-sitter-javascript = { version = "0.23", optional = true }
+tree-sitter-typescript = { version = "0.23", optional = true }
+tree-sitter-go = { version = "0.23", optional = true }
+tree-sitter-java = { version = "0.23", optional = true }
+
+[dev-dependencies]
+tempfile = "3"
+
+# DirectML GPU execution provider for Parakeet — Windows only.
+[target.'cfg(windows)'.dependencies]
+parakeet-rs = { workspace = true, optional = true, features = ["directml"] }
+# WASAPI: open the mic in communications mode so Windows applies its built-in
+# echo cancellation. Used by audio::wasapi.
+windows = { version = "0.58", features = [
+    "Win32_Foundation",
+    "Win32_Media_Audio",
+    "Win32_Security",
+    "Win32_System_Com",
+    "Win32_System_Threading",
+] }

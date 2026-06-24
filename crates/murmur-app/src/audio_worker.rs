@@ -22,6 +22,13 @@ use crate::state::emit_hotkey_error;
 /// Rolling window for the in-session noise-floor estimate: ~5s of 50ms ticks.
 const FLOOR_WINDOW_TICKS: usize = 100;
 const MONITOR_TICK: Duration = Duration::from_millis(50);
+/// Emit a live-preview partial every this many ticks (~700ms). Spaced out so
+/// interim transcriptions stay cheap and never starve the final-phrase path.
+const PARTIAL_TICKS: u32 = 14;
+/// End the session if the stream stops delivering samples for this many ticks
+/// mid-recording (~3s). A connected mic always delivers silence samples, so a
+/// sustained gap means the device disconnected or the driver stalled.
+const MID_SESSION_STALL_TICKS: u32 = 60;
 
 #[derive(Clone)]
 pub(crate) struct StartParams {
@@ -30,6 +37,10 @@ pub(crate) struct StartParams {
     pub vad_threshold: f32,
     pub phrase_pause: Duration,
     pub session_timeout: Duration,
+    /// Emit periodic `PartialPhrase` snapshots for live preview.
+    pub live_preview: bool,
+    /// Use the OS echo-cancelling capture path when available.
+    pub echo_cancellation: bool,
 }
 
 enum Cmd {
@@ -41,6 +52,10 @@ pub(crate) enum AudioResult {
     Started,
     StartFailed(String),
     PhraseReady(AudioBuffer),
+    /// Snapshot of the in-progress phrase for live preview, sent every
+    /// ~700ms while speech continues. Transcribed for display only, never
+    /// delivered to the target app.
+    PartialPhrase(AudioBuffer),
     /// Periodic RMS level update, sent every ~100ms.
     AudioLevel(f32),
     SignalDetected,
@@ -82,12 +97,12 @@ impl Handle {
     /// Queue a StartStreaming command. Non-blocking; called synchronously
     /// from the toggle handler so the command channel's FIFO ordering
     /// guarantees a later Stop toggle can never overtake the start.
+    ///
+    /// We do NOT drain the result channel here: a new streaming worker first
+    /// joins the prior one (see `spawn_streaming_worker`), so the prior session
+    /// has already consumed its own results — including its final `PhraseReady`.
+    /// Draining here would race that and discard the user's last phrase.
     pub fn send_start(&self, params: StartParams) -> Result<(), String> {
-        // Drain stale results so they cannot race the next handshake.
-        if let Ok(rx) = self.result_rx.lock() {
-            while rx.try_recv().is_ok() {}
-        }
-
         self.cmd_tx
             .send(Cmd::StartStreaming(params))
             .map_err(|e| format!("Audio worker channel closed: {}", e))
@@ -146,7 +161,22 @@ fn run_worker(cmd_rx: &mpsc::Receiver<Cmd>, result_tx: &mpsc::Sender<AudioResult
     while let Ok(cmd) = cmd_rx.recv() {
         match cmd {
             Cmd::StartStreaming(params) => {
-                run_session(&mut capture, &params, cmd_rx, result_tx);
+                // Contain a panic inside a single session (a driver or VAD bug)
+                // so it ends that session instead of unwinding the whole worker
+                // thread — which would wedge every future session with a closed
+                // channel. The thread-level catch in Handle::spawn remains a
+                // last resort for a panic outside a session.
+                let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    run_session(&mut capture, &params, cmd_rx, result_tx);
+                }));
+                if let Err(panic_info) = outcome {
+                    let msg = panic_message(panic_info, "panic in recording session");
+                    tracing::error!("Recording session panicked, recovering: {}", msg);
+                    // Best-effort cleanup, then unblock the app-side streaming
+                    // worker so the UI returns to idle.
+                    stop_capture(&mut capture, "panic recovery");
+                    let _ = result_tx.send(AudioResult::StreamingDone);
+                }
             }
             Cmd::Stop => {
                 tracing::debug!("Stop received outside monitoring loop, ignoring");
@@ -163,7 +193,11 @@ fn run_session(
     cmd_rx: &mpsc::Receiver<Cmd>,
     result_tx: &mpsc::Sender<AudioResult>,
 ) {
-    if let Err(msg) = start_capture(capture, params.audio_device.as_deref()) {
+    if let Err(msg) = start_capture(
+        capture,
+        params.audio_device.as_deref(),
+        params.echo_cancellation,
+    ) {
         let _ = result_tx.send(AudioResult::StartFailed(msg));
         return;
     }
@@ -178,7 +212,7 @@ fn run_session(
     );
 
     if !probe_initial_samples(&live_buf) {
-        let msg = "Microphone opened but produced no audio samples. Check Windows microphone privacy permissions and selected input device.".to_string();
+        let msg = "Microphone opened but produced no audio samples. Check your microphone permissions and the selected input device.".to_string();
         tracing::error!("{}", msg);
         stop_capture(capture, "startup sample probe failure");
         let _ = result_tx.send(AudioResult::StartFailed(msg));
@@ -186,6 +220,7 @@ fn run_session(
     }
     let _ = result_tx.send(AudioResult::Started);
 
+    let echo_cancellation = capture.echo_cancellation_active();
     let mut analyzed_up_to = 0usize;
     let calibration = calibrate(
         &live_buf,
@@ -193,10 +228,11 @@ fn run_session(
         native_channels,
         native_rate,
         params.rms_threshold,
+        echo_cancellation,
     );
     keep_calibration_preroll(&live_buf, &mut analyzed_up_to, native_rate, native_channels);
 
-    let session = build_session(params, &calibration, native_rate);
+    let session = build_session(params, &calibration, native_rate, echo_cancellation);
 
     Monitor {
         cmd_rx,
@@ -215,15 +251,23 @@ fn run_session(
         level_tick: 0,
         saw_signal: false,
         consecutive_no_sample_ticks: 0,
+        consecutive_silent_ticks: 0,
         startup_deadline: Instant::now() + Duration::from_millis(1200),
         silence_deadline: Instant::now() + Duration::from_secs(3),
+        live_preview: params.live_preview,
     }
     .run();
 }
 
 /// CPAL's native backend (WASAPI) can panic on some drivers â€” contain it.
-fn start_capture(capture: &mut AudioCapture, device: Option<&str>) -> Result<(), String> {
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| capture.start(device)));
+fn start_capture(
+    capture: &mut AudioCapture,
+    device: Option<&str>,
+    echo_cancellation: bool,
+) -> Result<(), String> {
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        capture.start(device, echo_cancellation)
+    }));
     match result {
         Ok(Ok(())) => Ok(()),
         Ok(Err(e)) => Err(e.to_string()),
@@ -276,8 +320,11 @@ struct Monitor<'a> {
     level_tick: u32,
     saw_signal: bool,
     consecutive_no_sample_ticks: u32,
+    /// Post-signal ticks where the stream delivers only digital silence.
+    consecutive_silent_ticks: u32,
     startup_deadline: Instant,
     silence_deadline: Instant,
+    live_preview: bool,
 }
 
 enum Flow {
@@ -308,6 +355,14 @@ impl Monitor<'_> {
                 let _ = self.result_tx.send(AudioResult::AudioLevel(chunk_rms));
             }
             self.adapt_threshold(chunk.is_some(), chunk_rms);
+
+            if self.live_preview
+                && self.level_tick.is_multiple_of(PARTIAL_TICKS)
+                && let Some(partial) = self.session.current_phrase()
+                && !partial.samples.is_empty()
+            {
+                let _ = self.result_tx.send(AudioResult::PartialPhrase(partial));
+            }
 
             if let Flow::EndSession = self.dispatch_events(events) {
                 return;
@@ -385,7 +440,7 @@ impl Monitor<'_> {
             let snapshot = buf[self.analyzed_up_to..].to_vec();
             self.analyzed_up_to = buf.len();
             let dropped = trim_buffer_to_preroll(&mut buf, self.native_rate, self.native_channels);
-            self.analyzed_up_to -= dropped;
+            self.analyzed_up_to = self.analyzed_up_to.saturating_sub(dropped);
             snapshot
         };
         let mono = downmix_to_mono(&raw, self.native_channels);
@@ -424,6 +479,31 @@ impl Monitor<'_> {
             return self.fail_no_signal("Microphone stream stopped delivering audio samples.");
         }
 
+        // After we have already heard audio, a sustained gap means the device
+        // disconnected mid-session. Without this the session would hang until
+        // the inactivity timeout, silently capturing nothing.
+        if self.saw_signal && self.consecutive_no_sample_ticks >= MID_SESSION_STALL_TICKS {
+            return self.fail_no_signal(
+                "Microphone stopped delivering audio. The input device may have been disconnected or changed.",
+            );
+        }
+
+        // A driver delivering only digital silence after a disconnect/mute
+        // evades the no-sample check above. Room noise floor sits above this
+        // threshold, so real speech pauses don't trip it.
+        if self.saw_signal {
+            if saw_new_samples && chunk_rms <= 0.00005 {
+                self.consecutive_silent_ticks += 1;
+            } else if saw_new_samples {
+                self.consecutive_silent_ticks = 0;
+            }
+            if self.consecutive_silent_ticks >= MID_SESSION_STALL_TICKS {
+                return self.fail_no_signal(
+                    "Microphone is delivering only silence. The input device may have been disconnected, muted, or changed.",
+                );
+            }
+        }
+
         if !self.saw_signal
             && Instant::now() >= self.silence_deadline
             && saw_new_samples
@@ -431,7 +511,7 @@ impl Monitor<'_> {
             && self.effective_ambient <= 0.00005
         {
             return self.fail_no_signal(
-                "Microphone stream is delivering digital silence. Check Windows microphone permissions, input device, mute switch, and input volume.",
+                "Microphone stream is delivering digital silence. Check your microphone permissions, input device, mute switch, and input volume.",
             );
         }
         Flow::Continue

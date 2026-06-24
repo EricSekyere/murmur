@@ -6,6 +6,7 @@ use std::time::{Duration, Instant};
 use murmur_core::output::OutputMode;
 use murmur_core::voice_commands::{self, VoiceCommand};
 use tauri::{Emitter, Manager};
+use unicode_segmentation::UnicodeSegmentation;
 
 use crate::audio_worker::{AudioResult, StartParams, panic_message};
 use crate::state::{
@@ -33,8 +34,17 @@ pub(crate) fn handle_toggle(app: &tauri::AppHandle) {
         drop(recording);
         stop_session(app, &state);
     } else {
+        // Claim the start under the lock so two sources can never both start.
+        *recording = true;
+        // Bump the generation under the same lock as the flag, so a superseded
+        // worker's gated release (see `release_if_current`) is ordered against
+        // this start and can't clear the new session's flag.
+        let generation = state
+            .session_generation
+            .fetch_add(1, std::sync::atomic::Ordering::AcqRel)
+            + 1;
         drop(recording);
-        start_session(app, &state);
+        start_session(app, &state, generation);
     }
 }
 
@@ -42,11 +52,19 @@ pub(crate) fn handle_toggle(app: &tauri::AppHandle) {
 /// auto-repeats won't restart an active session.
 pub(crate) fn begin_recording(app: &tauri::AppHandle) {
     let state = app.state::<AppState>();
-    let already = *state.recording.lock().unwrap_or_else(|e| e.into_inner());
-    if already {
-        return;
-    }
-    start_session(app, &state);
+    let generation = {
+        let mut recording = state.recording.lock().unwrap_or_else(|e| e.into_inner());
+        if *recording {
+            return;
+        }
+        // Claim the start atomically so a concurrent toggle cannot also start.
+        *recording = true;
+        state
+            .session_generation
+            .fetch_add(1, std::sync::atomic::Ordering::AcqRel)
+            + 1
+    };
+    start_session(app, &state, generation);
 }
 
 /// Push-to-talk: stop recording if active. Idempotent.
@@ -77,16 +95,17 @@ fn stop_session(app: &tauri::AppHandle, state: &AppState) {
     }
 }
 
-fn start_session(app: &tauri::AppHandle, state: &AppState) {
+fn start_session(app: &tauri::AppHandle, state: &AppState, generation: u64) {
+    // The caller has already claimed the recording flag; release it on any
+    // path that does not actually start a session.
     if !state
         .engine_loaded
         .load(std::sync::atomic::Ordering::Acquire)
     {
-        emit_hotkey_error(app, "Model still loading — please wait");
+        release_if_current(app, state, generation);
+        emit_hotkey_error(app, "Model still loading, please wait");
         return;
     }
-
-    *state.recording.lock().unwrap_or_else(|e| e.into_inner()) = true;
 
     #[cfg(windows)]
     crate::focus::save_output_target_window(state);
@@ -104,6 +123,8 @@ fn start_session(app: &tauri::AppHandle, state: &AppState) {
             vad_threshold: settings.vad_threshold,
             phrase_pause: Duration::from_secs_f32(settings.phrase_pause_secs),
             session_timeout: Duration::from_secs_f32(settings.session_timeout_secs),
+            live_preview: settings.live_preview,
+            echo_cancellation: settings.echo_cancellation,
         }
     };
     let send_result = match state.audio.get() {
@@ -112,31 +133,65 @@ fn start_session(app: &tauri::AppHandle, state: &AppState) {
     };
     if let Err(e) = send_result {
         tracing::error!("Failed to queue start command: {}", e);
-        *state.recording.lock().unwrap_or_else(|e| e.into_inner()) = false;
-        emit_recording_state(app, false, false);
+        release_if_current(app, state, generation);
         emit_hotkey_error(app, &format!("Failed to start recording: {}", e));
         return;
     }
 
     emit_recording_state(app, true, false);
-    spawn_streaming_worker(app.clone());
+    spawn_streaming_worker(app.clone(), state, generation);
 }
 
-fn spawn_streaming_worker(app: tauri::AppHandle) {
-    std::thread::spawn(move || {
+/// Clear the recording flag and emit the idle state, but only if `generation`
+/// is still the current session. A superseded worker (the user stopped and
+/// restarted) must not stomp the live session's flag/UI. Returns whether it
+/// acted, so callers can skip their own user-facing emits when stale.
+fn release_if_current(app: &tauri::AppHandle, state: &AppState, generation: u64) -> bool {
+    // Check the generation and clear the flag under the same lock that a start
+    // uses to set it, so the decision and the write are atomic against a start.
+    let mut recording = state.recording.lock().unwrap_or_else(|e| e.into_inner());
+    if generation
+        != state
+            .session_generation
+            .load(std::sync::atomic::Ordering::Acquire)
+    {
+        return false;
+    }
+    *recording = false;
+    drop(recording);
+    emit_recording_state(app, false, false);
+    true
+}
+
+fn spawn_streaming_worker(app: tauri::AppHandle, state: &AppState, generation: u64) {
+    // Serialize behind any still-finishing prior worker: two workers draining
+    // the one audio result channel would split or drop phrases. The new worker
+    // joins its immediate predecessor on its own thread, so the input thread
+    // never blocks. Hold the slot lock across take+spawn+store so a concurrent
+    // start can't lose a handle and break the chain.
+    let mut slot = state
+        .streaming_worker
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let prev = slot.take();
+    let handle = std::thread::spawn(move || {
+        if let Some(prev) = prev {
+            let _ = prev.join();
+        }
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            streaming_worker(&app);
+            streaming_worker(&app, generation);
         }));
         if let Err(panic_info) = outcome {
             let msg = panic_message(panic_info, "unknown panic in streaming worker");
             tracing::error!("Streaming worker panicked: {}", msg);
-            if let Some(state) = app.try_state::<AppState>() {
-                *state.recording.lock().unwrap_or_else(|e| e.into_inner()) = false;
+            if let Some(state) = app.try_state::<AppState>()
+                && release_if_current(&app, &state, generation)
+            {
+                emit_hotkey_error(&app, &format!("Recording crashed: {}", msg));
             }
-            emit_recording_state(&app, false, false);
-            emit_hotkey_error(&app, &format!("Recording crashed: {}", msg));
         }
     });
+    *slot = Some(handle);
 }
 
 /// Per-session bookkeeping used to pick the right end-of-session message.
@@ -150,12 +205,48 @@ struct SessionStats {
 
 /// Background thread: receive phrases from the audio worker, transcribe
 /// each, and deliver the text to the focused application.
-fn streaming_worker(app: &tauri::AppHandle) {
+fn streaming_worker(app: &tauri::AppHandle, generation: u64) {
     let state = app.state::<AppState>();
-    let (output_mode, sound_feedback) = {
+    // Resolve any per-app profile for the foreground app up front, so its
+    // overrides apply for the whole session.
+    let target_app = current_app_name();
+    let (output_mode, sound_feedback, live_preview, caption_at_window) = {
         let settings = state.settings.lock().unwrap_or_else(|e| e.into_inner());
-        (settings.output_mode, settings.sound_feedback)
+        let profile = target_app
+            .as_deref()
+            .and_then(|app| settings.app_profiles.iter().find(|p| p.matches(app)));
+        let dev_override = profile.and_then(|p| p.developer_mode);
+        *state
+            .session_dev_mode
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = dev_override;
+        if let Some(p) = profile {
+            tracing::info!(
+                "Applied app profile '{}' for {:?}",
+                p.app,
+                target_app.as_deref().unwrap_or("?")
+            );
+        }
+        (
+            profile
+                .and_then(|p| p.output_mode)
+                .unwrap_or(settings.output_mode),
+            settings.sound_feedback,
+            settings.live_preview,
+            settings.caption_position == "window",
+        )
     };
+
+    // Tell the widget which caption mode is active so it only grows its own
+    // caption when the preview is meant to live under the pill.
+    tracing::debug!(
+        "Live caption position: {}",
+        if caption_at_window { "window" } else { "pill" }
+    );
+    let _ = app.emit(
+        "caption-mode",
+        serde_json::json!({ "at_window": caption_at_window }),
+    );
 
     #[cfg(windows)]
     let previous_hwnd = *state
@@ -177,22 +268,50 @@ fn streaming_worker(app: &tauri::AppHandle) {
 
     let Some(audio) = state.audio.get() else {
         tracing::error!("Audio worker not initialized in streaming_worker");
-        *state.recording.lock().unwrap_or_else(|e| e.into_inner()) = false;
-        emit_recording_state(app, false, false);
+        release_if_current(app, &state, generation);
         return;
     };
     if let Err(e) = audio.await_started() {
         tracing::error!("Failed to start streaming: {}", e);
-        *state.recording.lock().unwrap_or_else(|e| e.into_inner()) = false;
-        emit_recording_state(app, false, false);
-        emit_hotkey_error(app, &format!("Failed to start recording: {}", e));
+        if release_if_current(app, &state, generation) {
+            emit_hotkey_error(app, &format!("Failed to start recording: {}", e));
+        }
         return;
     }
 
-    // Recording is live — play the start cue if enabled.
     if sound_feedback {
         crate::sound::play_start();
     }
+
+    // When the caption should roam to the active window, capture that window
+    // and (best-effort) the focused input's rect so the preview worker anchors
+    // the caption by the text field. A zero hwnd means no external window was
+    // captured, so leave the caption under the pill.
+    #[cfg(windows)]
+    let caption_target =
+        (caption_at_window && previous_hwnd != 0).then(|| crate::caption::CaptionAnchor {
+            hwnd: previous_hwnd,
+            focus: crate::caption::focused_input_rect(previous_hwnd),
+        });
+    #[cfg(not(windows))]
+    let caption_target: Option<crate::caption::CaptionAnchor> = None;
+
+    // Live preview re-decodes the growing phrase every ~0.7s, so it's only
+    // viable on a backend fast enough to keep up. A CPU Whisper decode pays the
+    // fixed ~30s mel-encoder cost per call and would run 6-7x per phrase,
+    // starving the final decode (the root cause of slow Whisper dictation), so
+    // skip preview for it. Parakeet and GPU-accelerated Whisper stay previewed.
+    let engine_can_preview = state
+        .engine
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .as_ref()
+        .is_some_and(|e| e.supports_realtime_preview());
+    // Live preview runs on its own thread so interim decodes never stall the
+    // delivery of finished phrases. `None` when the feature is off or the
+    // backend is too slow to preview without delaying delivery.
+    let mut preview = (live_preview && engine_can_preview)
+        .then(|| crate::preview::spawn(app.clone(), caption_target));
 
     let mut stats = SessionStats::default();
     loop {
@@ -208,6 +327,11 @@ fn streaming_worker(app: &tauri::AppHandle) {
                     previous_hwnd,
                     &mut stats,
                 );
+            }
+            Ok(AudioResult::PartialPhrase(buffer)) => {
+                if let Some((tx, _)) = &preview {
+                    let _ = tx.send(buffer);
+                }
             }
             Ok(AudioResult::StreamingDone) => {
                 tracing::info!("Streaming session ended");
@@ -238,7 +362,14 @@ fn streaming_worker(app: &tauri::AppHandle) {
         }
     }
 
-    finish_streaming(app, &state, &stats, sound_feedback);
+    // Stop the preview worker and wait for any in-flight decode to finish, so
+    // a late partial can't overwrite the final text on screen.
+    if let Some((tx, handle)) = preview.take() {
+        drop(tx);
+        let _ = handle.join();
+    }
+
+    finish_streaming(app, &state, &stats, sound_feedback, generation);
 }
 
 /// Transcribe one phrase and deliver the result. Phrases that arrive after
@@ -262,19 +393,65 @@ fn handle_phrase(
 
     if let Some((text, processing_time_ms)) = transcribe_chunk(app, buffer) {
         stats.had_transcription = true;
-        match voice_commands::parse(&text) {
-            VoiceCommand::Text => deliver_text(
+        // Display-only mode (onboarding test): show the words, deliver nothing.
+        if state
+            .suppress_output
+            .load(std::sync::atomic::Ordering::Acquire)
+        {
+            let _ = app.emit(
+                "streaming-phrase",
+                serde_json::json!({ "text": text, "processing_time_ms": processing_time_ms }),
+            );
+            crate::caption::hide(app);
+            let still_recording = *state.recording.lock().unwrap_or_else(|e| e.into_inner());
+            if still_recording {
+                emit_recording_state(app, true, false);
+            }
+            return;
+        }
+        // Literal escape ("literally <command>"): deliver the words verbatim.
+        let literal = {
+            let settings = state.settings.lock().unwrap_or_else(|e| e.into_inner());
+            voice_commands::literal_escape(&text, &settings.snippets)
+        };
+        if let Some(literal_text) = literal {
+            deliver_text(
                 app,
                 state,
-                &text,
+                &literal_text,
                 output_mode,
                 processing_time_ms,
                 #[cfg(windows)]
                 previous_hwnd,
-            ),
-            command => execute_command(app, state, command),
+            );
+        } else {
+            match voice_commands::parse(&text) {
+                VoiceCommand::Text => {
+                    // A user snippet expands to its replacement text; otherwise
+                    // the spoken phrase is delivered verbatim.
+                    let expansion = {
+                        let settings = state.settings.lock().unwrap_or_else(|e| e.into_inner());
+                        voice_commands::match_snippet(&text, &settings.snippets).map(str::to_string)
+                    };
+                    let delivered = expansion.as_deref().unwrap_or(text.as_str());
+                    deliver_text(
+                        app,
+                        state,
+                        delivered,
+                        output_mode,
+                        processing_time_ms,
+                        #[cfg(windows)]
+                        previous_hwnd,
+                    );
+                }
+                command => execute_command(app, state, command),
+            }
         }
     }
+
+    // The phrase has landed in the target, so clear the roaming caption; the
+    // next phrase's first partial will bring it back.
+    crate::caption::hide(app);
 
     let still_recording = *state.recording.lock().unwrap_or_else(|e| e.into_inner());
     if still_recording {
@@ -302,21 +479,62 @@ fn deliver_text(
     );
 
     // Focused modes append a trailing space (dispatch_output); clipboard-only
-    // doesn't type, so there is nothing to scratch.
+    // doesn't type, so there is nothing to scratch. Count grapheme clusters,
+    // not scalar values or UTF-16 units, so one backspace per visible character:
+    // emoji, combining marks, and newlines in a snippet expansion each erase as
+    // one. This is correct for grapheme-aware targets (browsers, Electron
+    // editors, terminals — the developer audience). A legacy Win32 Edit control
+    // deletes one UTF-16 unit per backspace, so it would under-delete a
+    // multi-unit grapheme and leave a visible stray glyph — the safer failure
+    // mode than over-deleting real text the user did not intend to remove.
     let delivered = if matches!(output_mode, OutputMode::Clipboard | OutputMode::Stdout) {
         0
     } else {
-        text.trim().chars().count() + 1
+        text.trim().graphemes(true).count() + 1
     };
     *state
         .last_delivered_len
         .lock()
         .unwrap_or_else(|e| e.into_inner()) = delivered;
 
+    record_history(state, text);
+
     let _ = app.emit(
         "streaming-phrase",
         serde_json::json!({ "text": text, "processing_time_ms": processing_time_ms }),
     );
+}
+
+/// Append a delivered phrase to the persistent history and save it. Best
+/// effort: a failed write is logged, never surfaced to the user. Skipped
+/// entirely when the user has turned history off.
+fn record_history(state: &AppState, text: &str) {
+    if !state
+        .settings
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .save_history
+    {
+        return;
+    }
+    let app_name = current_app_name();
+    let mut history = state.history.lock().unwrap_or_else(|e| e.into_inner());
+    history.add(text, app_name);
+    if let Err(e) = history.save(&state.history_path) {
+        tracing::warn!("Failed to save history: {}", e);
+    }
+}
+
+/// Name of the foreground application receiving the text, when available.
+#[cfg(windows)]
+fn current_app_name() -> Option<String> {
+    murmur_core::output::keyboard::foreground_window_info_public()
+        .and_then(|info| info.process_name)
+}
+
+#[cfg(not(windows))]
+fn current_app_name() -> Option<String> {
+    None
 }
 
 /// Run a spoken editing command (new line, new paragraph, scratch that).
@@ -340,6 +558,11 @@ fn execute_command(app: &tauri::AppHandle, state: &AppState, command: VoiceComma
                 .clear();
             keyboard::press_backspace(count)
         }
+        VoiceCommand::Copy => keyboard::copy(),
+        VoiceCommand::Undo => keyboard::undo(),
+        VoiceCommand::Redo => keyboard::redo(),
+        VoiceCommand::Tab => keyboard::press_tab(),
+        VoiceCommand::Escape => keyboard::press_escape(),
         VoiceCommand::Text => return,
     };
     if let Err(e) = result {
@@ -358,6 +581,11 @@ fn execute_command(app: &tauri::AppHandle, state: &AppState, command: VoiceComma
         VoiceCommand::NewLine => "new line",
         VoiceCommand::NewParagraph => "new paragraph",
         VoiceCommand::ScratchThat => "scratch that",
+        VoiceCommand::Copy => "copy",
+        VoiceCommand::Undo => "undo",
+        VoiceCommand::Redo => "redo",
+        VoiceCommand::Tab => "tab",
+        VoiceCommand::Escape => "escape",
         VoiceCommand::Text => "",
     };
     tracing::info!("Executed voice command: {}", label);
@@ -409,7 +637,15 @@ fn finish_streaming(
     state: &AppState,
     stats: &SessionStats,
     sound_feedback: bool,
+    generation: u64,
 ) {
+    // A superseded worker (the user already stopped and restarted) must not play
+    // the stop cue, surface this session's diagnostics, or clear the live
+    // session's flag/UI. release_if_current clears the flag iff still current.
+    if !release_if_current(app, state, generation) {
+        return;
+    }
+
     if sound_feedback {
         crate::sound::play_stop();
     }
@@ -422,7 +658,11 @@ fn finish_streaming(
         emit_hotkey_error(app, msg);
     }
 
-    *state.recording.lock().unwrap_or_else(|e| e.into_inner()) = false;
-    emit_recording_state(app, false, false);
+    // Drop any per-app override so the next session starts from the globals.
+    *state
+        .session_dev_mode
+        .lock()
+        .unwrap_or_else(|e| e.into_inner()) = None;
+    crate::caption::hide(app);
     let _ = app.emit("streaming-done", serde_json::json!({}));
 }

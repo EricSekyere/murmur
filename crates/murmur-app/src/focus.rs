@@ -32,23 +32,32 @@ pub(crate) fn output_text(
     murmur_core::output::dispatch_output(text, mode)
 }
 
-/// Make sure an external (non-Murmur) window has focus, preferring the
-/// live-tracked last-external window over the recording-start snapshot.
+/// Make sure the window dictation started in receives the text. With a real
+/// start window, deliver only to it (focused or restorable); if it's gone,
+/// return false so the caller diverts to the clipboard instead of typing into
+/// whatever window is now live. The live-tracked fallback applies only when no
+/// start window was captured (dictation triggered from Murmur's own UI).
 #[cfg(windows)]
 fn ensure_external_target(previous_hwnd: usize, last_external_hwnd: usize) -> bool {
     let current_fg = foreground_window();
-    if current_fg != 0 && !is_own_window(current_fg) {
-        return true;
+    let current_is_external = current_fg != 0 && !is_own_window(current_fg);
+
+    // The window dictation started in is the authoritative target.
+    let start_target =
+        (previous_hwnd != 0 && !is_own_window(previous_hwnd)).then_some(previous_hwnd);
+    if let Some(target) = start_target {
+        // Deliver only to that window; if it's gone, refuse (caller -> clipboard).
+        return current_fg == target || restore_foreground_window(target);
     }
 
-    tracing::info!(
-        "Murmur holds focus; restoring target (previous=0x{:x}, last_external=0x{:x})",
-        previous_hwnd,
-        last_external_hwnd
-    );
-    [last_external_hwnd, previous_hwnd]
-        .iter()
-        .any(|&h| h != 0 && !is_own_window(h) && restore_foreground_window(h))
+    // No start window captured: fall back to the last external window.
+    if last_external_hwnd != 0
+        && !is_own_window(last_external_hwnd)
+        && restore_foreground_window(last_external_hwnd)
+    {
+        return true;
+    }
+    current_is_external
 }
 
 /// Restore focus to the window the user was working in before recording.
@@ -67,6 +76,7 @@ fn restore_foreground_window(hwnd: usize) -> bool {
         fn GetWindowThreadProcessId(hwnd: usize, lpdw_process_id: *mut u32) -> u32;
         fn IsWindow(hwnd: usize) -> i32;
         fn IsWindowVisible(hwnd: usize) -> i32;
+        fn IsIconic(hwnd: usize) -> i32;
         fn ShowWindow(hwnd: usize, n_cmd_show: i32) -> i32;
     }
     const SW_RESTORE: i32 = 9;
@@ -83,7 +93,12 @@ fn restore_foreground_window(hwnd: usize) -> bool {
     }
 
     unsafe {
-        ShowWindow(hwnd, SW_RESTORE);
+        // Only un-minimize a genuinely minimized target. SW_RESTORE on a
+        // maximized window un-maximizes it, which yanked a full-screen browser
+        // out of full screen the moment dictation raised the target window.
+        if IsIconic(hwnd) != 0 {
+            ShowWindow(hwnd, SW_RESTORE);
+        }
         BringWindowToTop(hwnd);
         SetForegroundWindow(hwnd);
     }
@@ -105,7 +120,12 @@ fn restore_foreground_window(hwnd: usize) -> bool {
             AttachThreadInput(current_thread, target_thread, 1);
         }
 
-        ShowWindow(hwnd, SW_RESTORE);
+        // Only un-minimize a genuinely minimized target. SW_RESTORE on a
+        // maximized window un-maximizes it, which yanked a full-screen browser
+        // out of full screen the moment dictation raised the target window.
+        if IsIconic(hwnd) != 0 {
+            ShowWindow(hwnd, SW_RESTORE);
+        }
         BringWindowToTop(hwnd);
         SetForegroundWindow(hwnd);
 

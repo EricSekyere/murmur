@@ -7,61 +7,6 @@ pub mod stdout;
 
 use serde::{Deserialize, Serialize};
 
-#[cfg(windows)]
-fn should_prefer_clipboard_paste_for_foreground() -> bool {
-    let Some(info) = keyboard::foreground_window_info_public() else {
-        return false;
-    };
-
-    let process = info.process_name.unwrap_or_default().to_ascii_lowercase();
-    let title = info.title.to_ascii_lowercase();
-    let class_name = info.class_name.to_ascii_lowercase();
-
-    let process_match = matches!(
-        process.as_str(),
-        "warp.exe"
-            | "windows terminal.exe"
-            | "windowsterminal.exe"
-            | "wezterm-gui.exe"
-            | "alacritty.exe"
-            | "claude.exe"
-            | "codex.exe"
-    );
-
-    let title_match = [
-        "warp",
-        "claude",
-        "codex",
-        "terminal",
-        "powershell",
-        "cmd",
-        "wezterm",
-    ]
-    .iter()
-    .any(|needle| title.contains(needle));
-
-    let class_match = [
-        "cascadiahostingwindowclass",
-        "pty",
-        "terminal",
-        "chrome_widgetwin_1",
-    ]
-    .iter()
-    .any(|needle| class_name.contains(needle));
-
-    if process_match || title_match || class_match {
-        tracing::info!(
-            process = process,
-            title = info.title,
-            class = info.class_name,
-            "Foreground target looks terminal-like; preferring clipboard+paste output"
-        );
-        true
-    } else {
-        false
-    }
-}
-
 /// Output strategy for transcribed text.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -98,46 +43,17 @@ pub fn dispatch_output(text: &str, mode: OutputMode) -> anyhow::Result<()> {
     );
 
     match mode {
-        OutputMode::Auto => {
-            // macOS-Dictation-style: paste reliably. Ctrl+V is accepted by
-            // virtually every text-accepting surface on Windows (terminals,
-            // browsers, IDEs, Electron apps, elevated windows via clipboard
-            // sharing) and is immune to keyboard-layout differences and
-            // stuck-modifier interference. SendInput Unicode is kept as a
-            // fallback for the rare app that suppresses paste.
+        // Auto and Keyboard both type directly with SendInput Unicode, which
+        // never touches the clipboard. This is the only way to guarantee the
+        // user's clipboard can never leak into the target: routing terminals
+        // through clipboard+paste always left a window where a slow app could
+        // read and paste the previous clipboard. Modern terminals (Warp,
+        // Windows Terminal, ...) accept direct Unicode input fine. Clipboard
+        // paste is now only a fallback when direct typing fails (e.g. an
+        // elevated window), and a user who genuinely needs it can still select
+        // the ClipboardPaste mode, per app via App Profiles if they like.
+        OutputMode::Auto | OutputMode::Keyboard => {
             let text_with_space = format!("{} ", trimmed);
-
-            if let Err(e) = paste::ClipboardPasteOutput::new().paste_text(&text_with_space) {
-                tracing::warn!(
-                    "Auto: clipboard+paste failed, falling back to keyboard simulation: {}",
-                    e
-                );
-                let kb_result = keyboard::KeyboardOutput::new()
-                    .and_then(|mut kb| kb.type_text(&text_with_space));
-
-                if let Err(e2) = kb_result {
-                    tracing::warn!(
-                        "Auto: keyboard fallback also failed, copying to clipboard: {}",
-                        e2
-                    );
-                    clipboard::ClipboardOutput::new()?.copy(trimmed)?;
-                }
-            }
-        }
-        OutputMode::Keyboard => {
-            let text_with_space = format!("{} ", trimmed);
-
-            #[cfg(windows)]
-            if should_prefer_clipboard_paste_for_foreground() {
-                if let Err(e) = paste::ClipboardPasteOutput::new().paste_text(&text_with_space) {
-                    tracing::warn!(
-                        "Terminal-target clipboard+paste failed, copying to clipboard: {}",
-                        e
-                    );
-                    clipboard::ClipboardOutput::new()?.copy(trimmed)?;
-                }
-                return Ok(());
-            }
 
             let kb_result =
                 keyboard::KeyboardOutput::new().and_then(|mut kb| kb.type_text(&text_with_space));

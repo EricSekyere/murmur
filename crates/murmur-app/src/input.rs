@@ -1,5 +1,7 @@
 //! Global input: hotkey events, double-tap toggle, and click-to-stop.
 
+// Only the double-tap tracker (Windows/macOS) uses these.
+#[cfg(any(windows, target_os = "macos"))]
 use std::time::{Duration, Instant};
 
 use tauri::Manager;
@@ -8,11 +10,35 @@ use tauri_plugin_global_shortcut::ShortcutState;
 use crate::session::handle_toggle;
 use crate::state::AppState;
 
-/// Toggle mode: press starts/stops, release is ignored.
+/// Dispatch the configured global hotkey by activation mode: toggle (press
+/// flips) or hold/push-to-talk (press starts, release stops).
 pub(crate) fn handle_hotkey_event(app: &tauri::AppHandle, shortcut_state: ShortcutState) {
-    if shortcut_state == ShortcutState::Pressed {
+    if hotkey_hold_mode(app) {
+        match shortcut_state {
+            // Auto-repeat may resend Pressed; begin_recording is idempotent.
+            ShortcutState::Pressed => {
+                crate::session::begin_recording(app);
+                show_widget_window(app);
+            }
+            ShortcutState::Released => crate::session::end_recording(app),
+        }
+    } else if shortcut_state == ShortcutState::Pressed {
         handle_toggle(app);
     }
+}
+
+/// Whether the configured hotkey should hold-to-talk. Falls back to toggle on
+/// lock contention (try_lock keeps the shortcut handler non-blocking).
+fn hotkey_hold_mode(app: &tauri::AppHandle) -> bool {
+    app.try_state::<AppState>()
+        .and_then(|state| {
+            state
+                .settings
+                .try_lock()
+                .ok()
+                .map(|s| s.activation_mode == "hold")
+        })
+        .unwrap_or(false)
 }
 
 fn show_widget_window(app: &tauri::AppHandle) {

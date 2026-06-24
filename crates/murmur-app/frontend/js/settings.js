@@ -20,13 +20,23 @@ settingsToggle.addEventListener('click', async () => {
     if (status.transcription_profile) {
       transcriptionProfileSelect.value = status.transcription_profile;
     }
+    if (status.language) {
+      languageSelect.value = status.language;
+    }
+    translateToggle.checked = !!status.translate_to_english;
+    applyMultilingualState(!!status.model_multilingual);
     if (status.phrase_pause_secs != null) {
       phrasePauseRange.value = status.phrase_pause_secs;
       phrasePauseValue.textContent = `${parseFloat(status.phrase_pause_secs).toFixed(1)}s`;
     }
+    if (status.vad_threshold != null) {
+      const pct = thresholdToSensitivity(status.vad_threshold);
+      micSensitivityRange.value = pct;
+      micSensitivityValue.textContent = `${pct}%`;
+    }
     if (status.session_timeout_secs != null) {
       sessionTimeoutRange.value = status.session_timeout_secs;
-      sessionTimeoutValue.textContent = `${status.session_timeout_secs}s`;
+      sessionTimeoutValue.textContent = formatTimeout(status.session_timeout_secs);
     }
     if (status.click_to_stop != null) {
       clickToStopToggle.checked = status.click_to_stop;
@@ -46,15 +56,158 @@ settingsToggle.addEventListener('click', async () => {
       vocabularyInput.value = status.custom_vocabulary.join('\n');
       vocabularySave.disabled = true;
     }
+    if (Array.isArray(status.snippets)) {
+      snippetsInput.value = status.snippets
+        .map(s => `${s.trigger} = ${s.expansion}`)
+        .join('\n');
+      snippetsSave.disabled = true;
+    }
+    if (Array.isArray(status.app_profiles)) {
+      appProfilesInput.value = status.app_profiles
+        .map(formatAppProfile)
+        .join('\n');
+      appProfilesSave.disabled = true;
+    }
     if (status.sound_feedback != null) {
       soundFeedbackToggle.checked = status.sound_feedback;
     }
     macosPermissions.hidden = status.os !== 'macos';
+    if (status.save_history != null) {
+      saveHistoryToggle.checked = status.save_history;
+    }
+    if (status.clean_speech != null) {
+      cleanSpeechToggle.checked = status.clean_speech;
+    }
+    codebaseVocabToggle.checked = !!status.codebase_vocab_enabled;
+    codebaseRoots = Array.isArray(status.codebase_vocab_roots)
+      ? status.codebase_vocab_roots.slice()
+      : [];
+    renderCodebaseRoots();
+    updateCodebaseVocabStatus(status.codebase_vocab_count || 0);
+    if (status.live_preview != null) {
+      livePreviewToggle.checked = status.live_preview;
+    }
+    if (status.caption_position) {
+      captionPositionSelect.value = status.caption_position;
+    }
     developerModeToggle.checked = !!status.developer_mode;
     devModeBadge.hidden = !status.developer_mode;
   } catch (err) {
     console.error('Failed to get settings:', err);
   }
+});
+
+// --- Codebase vocabulary ---
+
+let codebaseRoots = []; // project folders, mirrored to the backend on change
+
+const folderName = (root) => root.replace(/[\\/]+$/, '').split(/[\\/]/).pop() || root;
+
+// Render the chosen project folders as a removable list.
+function renderCodebaseRoots() {
+  codebaseVocabList.innerHTML = '';
+  codebaseRoots.forEach((root, i) => {
+    const item = document.createElement('div');
+    item.className = 'folder-list__item';
+    const name = document.createElement('span');
+    name.className = 'folder-list__name';
+    name.textContent = folderName(root);
+    name.title = root;
+    const remove = document.createElement('button');
+    remove.type = 'button';
+    remove.className = 'folder-list__remove';
+    remove.textContent = '×';
+    remove.setAttribute('aria-label', `Remove ${folderName(root)}`);
+    remove.addEventListener('click', async () => {
+      codebaseRoots.splice(i, 1);
+      renderCodebaseRoots();
+      await saveCodebaseVocab();
+    });
+    item.append(name, remove);
+    codebaseVocabList.appendChild(item);
+  });
+}
+
+// Status line derived from the folder count, toggle state, and indexed count.
+function updateCodebaseVocabStatus(count) {
+  const n = codebaseRoots.length;
+  if (n === 0) {
+    codebaseVocabStatus.textContent = 'No project folders selected.';
+  } else if (!codebaseVocabToggle.checked) {
+    codebaseVocabStatus.textContent = `Off (${n} folder${n === 1 ? '' : 's'})`;
+  } else {
+    codebaseVocabStatus.textContent = count > 0
+      ? `${count} symbol${count === 1 ? '' : 's'} from ${n} folder${n === 1 ? '' : 's'}`
+      : `Indexing ${n} folder${n === 1 ? '' : 's'}…`;
+  }
+}
+
+async function saveCodebaseVocab() {
+  try {
+    await invoke('set_codebase_vocabulary', {
+      enabled: codebaseVocabToggle.checked,
+      project_roots: codebaseRoots,
+    });
+    updateCodebaseVocabStatus(0); // optimistic until the index event arrives
+  } catch (err) {
+    showToast(`Failed: ${err}`, 'error');
+  }
+}
+
+codebaseVocabToggle.addEventListener('change', async () => {
+  await saveCodebaseVocab();
+  showToast(codebaseVocabToggle.checked ? 'Codebase vocabulary on' : 'Codebase vocabulary off', 'success');
+});
+
+codebaseVocabFolder.addEventListener('click', async () => {
+  try {
+    const folder = await invoke('pick_project_folder');
+    if (!folder) return; // user cancelled
+    if (codebaseRoots.includes(folder)) {
+      showToast('Folder already added', 'success');
+      return;
+    }
+    codebaseRoots.push(folder);
+    codebaseVocabToggle.checked = true;
+    renderCodebaseRoots();
+    await saveCodebaseVocab();
+    showToast('Indexing project…', 'success');
+  } catch (err) {
+    showToast(`Failed: ${err}`, 'error');
+  }
+});
+
+mcpInstallBtn.addEventListener('click', async () => {
+  const previous = mcpInstallBtn.textContent;
+  mcpInstallBtn.disabled = true;
+  mcpInstallBtn.textContent = 'Connecting…';
+  try {
+    const report = await invoke('mcp_install');
+    const configured = report.configured || [];
+    const skipped = report.skipped || [];
+    if (configured.length === 0) {
+      mcpInstallStatus.textContent = skipped.length
+        ? `No editor detected (${skipped.join(', ')}). Open Cursor or Claude Desktop first, then try again.`
+        : 'No editor detected.';
+      showToast('No MCP editor detected', 'error');
+    } else {
+      const names = configured.map((c) => c.client).join(', ');
+      mcpInstallStatus.textContent =
+        `Connected ${names}. Restart ${configured.length === 1 ? 'it' : 'them'} to load Murmur's tools.`;
+      showToast(`Connected ${names}`, 'success');
+    }
+  } catch (err) {
+    mcpInstallStatus.textContent = `Failed: ${err}`;
+    showToast(`Failed: ${err}`, 'error');
+  } finally {
+    mcpInstallBtn.disabled = false;
+    mcpInstallBtn.textContent = previous;
+  }
+});
+
+// Backend reports the indexed symbol count when a scan finishes.
+listen('codebase-index', (event) => {
+  updateCodebaseVocabStatus((event.payload || {}).count || 0);
 });
 
 developerModeToggle.addEventListener('change', async () => {
@@ -120,6 +273,39 @@ transcriptionProfileSelect.addEventListener('change', async () => {
   }
 });
 
+// Language and translation only work with a multilingual model; reflect that
+// by dimming the controls and noting it in the hint when an English-only
+// model is active.
+function applyMultilingualState(multilingual) {
+  languageSelect.disabled = !multilingual;
+  translateToggle.disabled = !multilingual;
+  if (languageHint) {
+    languageHint.textContent = multilingual
+      ? 'Auto-detect, or pick a language. Powered by the multilingual model.'
+      : 'Needs the multilingual model (Large v3 Turbo). The English models only do English.';
+  }
+}
+
+languageSelect.addEventListener('change', async () => {
+  const language = languageSelect.value;
+  try {
+    await invoke('update_settings', { language });
+    showToast(`Language: ${languageSelect.options[languageSelect.selectedIndex].text}`, 'success');
+  } catch (err) {
+    showToast(`Failed: ${err}`, 'error');
+  }
+});
+
+translateToggle.addEventListener('change', async () => {
+  const enabled = translateToggle.checked;
+  try {
+    await invoke('update_settings', { translate_to_english: enabled });
+  } catch (err) {
+    translateToggle.checked = !enabled;
+    showToast(`Failed: ${err}`, 'error');
+  }
+});
+
 async function loadAudioDevices(selectedDevice = '') {
   try {
     const devices = await invoke('list_audio_devices');
@@ -167,8 +353,43 @@ phrasePauseRange.addEventListener('change', async () => {
   }
 });
 
+// Mic Sensitivity. The slider is a 0-100 "sensitivity" percent; higher
+// sensitivity maps to a lower VAD threshold (picks up quieter speech).
+// 0% -> 0.60 (strict), 100% -> 0.10 (very sensitive).
+const SENS_MIN_THRESHOLD = 0.10;
+const SENS_MAX_THRESHOLD = 0.60;
+
+function sensitivityToThreshold(pct) {
+  const t = SENS_MAX_THRESHOLD - (pct / 100) * (SENS_MAX_THRESHOLD - SENS_MIN_THRESHOLD);
+  return Math.round(t * 100) / 100;
+}
+
+function thresholdToSensitivity(threshold) {
+  const clamped = Math.min(SENS_MAX_THRESHOLD, Math.max(SENS_MIN_THRESHOLD, threshold));
+  const pct = (SENS_MAX_THRESHOLD - clamped) / (SENS_MAX_THRESHOLD - SENS_MIN_THRESHOLD) * 100;
+  return Math.round(pct / 5) * 5; // snap to the slider's step
+}
+
+micSensitivityRange.addEventListener('input', () => {
+  micSensitivityValue.textContent = `${micSensitivityRange.value}%`;
+});
+
+micSensitivityRange.addEventListener('change', async () => {
+  const threshold = sensitivityToThreshold(parseInt(micSensitivityRange.value, 10));
+  try {
+    await invoke('update_settings', { vad_threshold: threshold });
+    showToast('Mic sensitivity updated', 'success');
+  } catch (err) {
+    showToast(`Failed: ${err}`, 'error');
+  }
+});
+
+function formatTimeout(secs) {
+  return Number(secs) === 0 ? 'Always on' : `${secs}s`;
+}
+
 sessionTimeoutRange.addEventListener('input', () => {
-  sessionTimeoutValue.textContent = `${sessionTimeoutRange.value}s`;
+  sessionTimeoutValue.textContent = formatTimeout(sessionTimeoutRange.value);
 });
 
 sessionTimeoutRange.addEventListener('change', async () => {
@@ -241,6 +462,48 @@ soundFeedbackToggle.addEventListener('change', async () => {
   }
 });
 
+livePreviewToggle.addEventListener('change', async () => {
+  const enabled = livePreviewToggle.checked;
+  try {
+    await invoke('update_settings', { live_preview: enabled });
+  } catch (err) {
+    livePreviewToggle.checked = !enabled;
+    showToast(`Failed: ${err}`, 'error');
+  }
+});
+
+saveHistoryToggle.addEventListener('change', async () => {
+  const enabled = saveHistoryToggle.checked;
+  try {
+    await invoke('update_settings', { save_history: enabled });
+    showToast(enabled ? 'History on' : 'History off — nothing stored', 'success');
+  } catch (err) {
+    saveHistoryToggle.checked = !enabled;
+    showToast(`Failed: ${err}`, 'error');
+  }
+});
+
+cleanSpeechToggle.addEventListener('change', async () => {
+  const enabled = cleanSpeechToggle.checked;
+  try {
+    await invoke('update_settings', { clean_speech: enabled });
+    showToast(enabled ? 'Speech cleanup on' : 'Verbatim — no cleanup', 'success');
+  } catch (err) {
+    cleanSpeechToggle.checked = !enabled;
+    showToast(`Failed: ${err}`, 'error');
+  }
+});
+
+captionPositionSelect.addEventListener('change', async () => {
+  const caption_position = captionPositionSelect.value;
+  try {
+    await invoke('update_settings', { caption_position });
+    showToast(`Live caption: ${captionPositionSelect.options[captionPositionSelect.selectedIndex].text}`, 'success');
+  } catch (err) {
+    showToast(`Failed: ${err}`, 'error');
+  }
+});
+
 vocabularyInput.addEventListener('input', () => {
   vocabularySave.disabled = false;
 });
@@ -260,7 +523,112 @@ vocabularySave.addEventListener('click', async () => {
   }
 });
 
-// ─── Model picker ────────────────────────────────────────────────────────
+vocabularyLearn.addEventListener('click', async () => {
+  const previous = vocabularyLearn.textContent;
+  vocabularyLearn.disabled = true;
+  vocabularyLearn.textContent = 'Scanning…';
+  try {
+    const added = await invoke('learn_vocabulary');
+    if (added > 0) {
+      // Reflect the merged dictionary back into the textarea.
+      const status = await invoke('get_status');
+      if (Array.isArray(status.custom_vocabulary)) {
+        vocabularyInput.value = status.custom_vocabulary.join('\n');
+        vocabularySave.disabled = true;
+      }
+      showToast(`Learned ${added} ${added === 1 ? 'term' : 'terms'} from history`, 'success');
+    } else {
+      showToast('No new terms found in history', 'success');
+    }
+  } catch (err) {
+    showToast(`Failed: ${err}`, 'error');
+  } finally {
+    vocabularyLearn.disabled = false;
+    vocabularyLearn.textContent = previous;
+  }
+});
+
+// Parse "trigger = expansion" lines into snippet objects. Only the first '='
+// splits, so an expansion can itself contain '='.
+function parseSnippets(text) {
+  return text
+    .split('\n')
+    .map(line => {
+      const eq = line.indexOf('=');
+      if (eq === -1) return null;
+      const trigger = line.slice(0, eq).trim();
+      const expansion = line.slice(eq + 1).trim();
+      return trigger && expansion ? { trigger, expansion } : null;
+    })
+    .filter(Boolean);
+}
+
+snippetsInput.addEventListener('input', () => {
+  snippetsSave.disabled = false;
+});
+
+snippetsSave.addEventListener('click', async () => {
+  const snippets = parseSnippets(snippetsInput.value);
+  snippetsSave.disabled = true;
+  try {
+    await invoke('update_settings', { snippets });
+    showToast(`Snippets saved (${snippets.length} ${snippets.length === 1 ? 'snippet' : 'snippets'})`, 'success');
+  } catch (err) {
+    snippetsSave.disabled = false;
+    showToast(`Failed: ${err}`, 'error');
+  }
+});
+
+const OUTPUT_MODES = ['auto', 'keyboard', 'clipboard_paste', 'clipboard'];
+
+// Render a profile object back to its "app = options" line.
+function formatAppProfile(p) {
+  const opts = [];
+  if (p.developer_mode === true) opts.push('dev');
+  else if (p.developer_mode === false) opts.push('plain');
+  if (p.output_mode) opts.push(p.output_mode);
+  return opts.length ? `${p.app} = ${opts.join(', ')}` : p.app;
+}
+
+// Parse "app = dev, clipboard_paste" lines into profile objects. Unknown
+// tokens are ignored; a line needs an app and at least one valid override.
+function parseAppProfiles(text) {
+  return text
+    .split('\n')
+    .map(line => {
+      const eq = line.indexOf('=');
+      if (eq === -1) return null;
+      const app = line.slice(0, eq).trim();
+      if (!app) return null;
+      const tokens = line.slice(eq + 1).split(',').map(t => t.trim().toLowerCase()).filter(Boolean);
+      let output_mode = null;
+      let developer_mode = null;
+      for (const t of tokens) {
+        if (t === 'dev' || t === 'developer') developer_mode = true;
+        else if (t === 'plain' || t === 'nodev') developer_mode = false;
+        else if (OUTPUT_MODES.includes(t)) output_mode = t;
+      }
+      if (output_mode === null && developer_mode === null) return null;
+      return { app, output_mode, developer_mode };
+    })
+    .filter(Boolean);
+}
+
+appProfilesInput.addEventListener('input', () => {
+  appProfilesSave.disabled = false;
+});
+
+appProfilesSave.addEventListener('click', async () => {
+  const appProfiles = parseAppProfiles(appProfilesInput.value);
+  appProfilesSave.disabled = true;
+  try {
+    await invoke('update_settings', { app_profiles: appProfiles });
+    showToast(`Profiles saved (${appProfiles.length} ${appProfiles.length === 1 ? 'profile' : 'profiles'})`, 'success');
+  } catch (err) {
+    appProfilesSave.disabled = false;
+    showToast(`Failed: ${err}`, 'error');
+  }
+});
 
 async function loadModelList() {
   try {
@@ -371,12 +739,37 @@ listen('model-changed', (event) => {
     micBtn.disabled = uiState === 'processing';
     showToast(`Switched to ${data.model_name}`, 'success');
     loadModelList();
+    // The new model may differ in multilingual support; refresh the controls.
+    invoke('get_status')
+      .then(s => applyMultilingualState(!!s.model_multilingual))
+      .catch(() => {});
   } else {
     modelReady = false;
     modelInfo.textContent = `Loading: ${data.model_name}...`;
     micBtn.disabled = true;
   }
 });
+
+// Non-blocking warnings from saving settings (e.g. a snippet that can never
+// fire because a built-in command shadows it or it duplicates another).
+listen('settings-warning', (event) => {
+  const messages = event?.payload?.messages || [];
+  messages.forEach(msg => showToast(msg, 'error', 6000));
+});
+
+// Retry a failed model download from the banner.
+if (modelRetry) {
+  modelRetry.addEventListener('click', async () => {
+    modelRetry.hidden = true;
+    modelBannerText.textContent = 'Retrying download...';
+    try {
+      await invoke('download_model');
+    } catch (err) {
+      modelBannerText.textContent = `Download failed: ${err}`;
+      modelRetry.hidden = false;
+    }
+  });
+}
 
 listen('model-download-progress', (event) => {
   const data = event.payload;
@@ -390,6 +783,7 @@ listen('model-download-progress', (event) => {
     modelBannerText.textContent = data.message || 'Download failed';
     modelProgressWrap.hidden = true;
     modelProgressPct.hidden = true;
+    if (modelRetry) modelRetry.hidden = false;
     const progressEl = inlineProgress();
     if (progressEl) progressEl.hidden = true;
     if (changingModelId) {
@@ -398,6 +792,8 @@ listen('model-download-progress', (event) => {
     }
     return;
   }
+
+  if (modelRetry) modelRetry.hidden = true;
 
   if (data.done) {
     modelReady = true;

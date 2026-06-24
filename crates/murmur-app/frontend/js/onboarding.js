@@ -13,6 +13,9 @@
   const hotkeyEl = document.getElementById('onboarding-hotkey');
   let micActive = false;
 
+  // The mic test needs the model loaded; enable it only when ready.
+  micBtn.disabled = true;
+
   function goTo(step) {
     panels.forEach(p => p.classList.toggle('onboarding__panel--active', +p.dataset.step === step));
     dots.forEach(d => d.classList.toggle('onboarding__dot--active', +d.dataset.step <= step));
@@ -23,8 +26,15 @@
       invoke('toggle_recording').catch(() => {});
       micActive = false;
     }
+    // Restore normal text delivery now the display-only test is over.
+    invoke('set_output_suppressed', { suppressed: false }).catch(() => {});
     localStorage.setItem(SEEN_KEY, '1');
     overlay.hidden = true;
+  }
+
+  function enableMicTest(message) {
+    micBtn.disabled = false;
+    result.textContent = message;
   }
 
   overlay.querySelectorAll('[data-next]').forEach(btn => {
@@ -33,18 +43,24 @@
   document.getElementById('onboarding-skip').addEventListener('click', finish);
   document.getElementById('onboarding-done').addEventListener('click', finish);
 
-  // Mic test reuses the real dictation pipeline.
+  // Mic test reuses the real dictation pipeline. The button state is driven
+  // by the recording-state event below, not toggled locally, so it stays in
+  // sync if the session auto-stops on silence.
   micBtn.addEventListener('click', async () => {
     try {
       await invoke('toggle_recording');
-      micActive = !micActive;
-      micBtn.className = micActive
-        ? 'mic-btn mic-btn--recording onboarding__mic'
-        : 'mic-btn mic-btn--idle onboarding__mic';
-      if (micActive) result.textContent = 'Listening… say something, then pause.';
     } catch (err) {
       result.textContent = `Could not start: ${err}`;
     }
+  });
+
+  listen('recording-state', (event) => {
+    if (overlay.hidden) return;
+    micActive = !!event.payload.recording;
+    micBtn.className = micActive
+      ? 'mic-btn mic-btn--recording onboarding__mic'
+      : 'mic-btn mic-btn--idle onboarding__mic';
+    if (micActive) result.textContent = 'Listening, say something then pause.';
   });
 
   // Show transcribed text in the test box while onboarding is open.
@@ -60,13 +76,21 @@
   // Reflect model readiness on the mic-test step.
   invoke('get_status').then(status => {
     if (status.hotkey) hotkeyEl.textContent = status.hotkey;
-    if (status.model_ready) result.textContent = 'Ready — click the mic and speak.';
+    if (status.model_ready) enableMicTest('Ready. Click the mic and speak.');
   }).catch(() => {});
 
   listen('model-download-progress', (event) => {
     if (overlay.hidden) return;
-    if (event.payload?.done) result.textContent = 'Ready — click the mic and speak.';
+    if (event.payload?.error) {
+      // Surface the failure in the overlay instead of leaving a dead, silent
+      // "Waiting for the model..." mic button on the user's very first run.
+      result.textContent = 'Model download failed. Check your connection, then retry from the banner above.';
+      return;
+    }
+    if (event.payload?.done) enableMicTest('Ready. Click the mic and speak.');
   });
 
+  // Run onboarding display-only so the test never types into a background app.
+  invoke('set_output_suppressed', { suppressed: true }).catch(() => {});
   overlay.hidden = false;
 })();

@@ -4,6 +4,11 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{SampleFormat, SupportedStreamConfig};
 use std::sync::{Arc, Mutex};
 
+/// Per-run AEC health, so the (sometimes-broken) Windows AEC is probed at most
+/// once: 0 = unknown, 1 = delivers signal, -1 = silent (use the raw mic).
+#[cfg(windows)]
+static AEC_STATE: std::sync::atomic::AtomicI8 = std::sync::atomic::AtomicI8::new(0);
+
 /// Manages microphone capture via CPAL.
 ///
 /// Enumerates the device's supported configs, picks the best one,
@@ -11,6 +16,9 @@ use std::sync::{Arc, Mutex};
 pub struct AudioCapture {
     buffer: Arc<Mutex<Vec<f32>>>,
     stream: Option<cpal::Stream>,
+    /// Active Windows voice-capture session (echo cancellation), when used.
+    #[cfg(windows)]
+    voice: Option<super::wasapi::WasapiVoiceCapture>,
     native_rate: u32,
     native_channels: u16,
 }
@@ -21,13 +29,106 @@ impl AudioCapture {
         Ok(Self {
             buffer: Arc::new(Mutex::new(Vec::new())),
             stream: None,
+            #[cfg(windows)]
+            voice: None,
             native_rate: AudioBuffer::SAMPLE_RATE,
             native_channels: 1,
         })
     }
 
-    /// Start recording from the default microphone.
-    pub fn start(&mut self, preferred_device: Option<&str>) -> Result<()> {
+    /// Start recording. With `echo_cancellation` on, prefer the OS voice-capture
+    /// path (Windows AEC) on the default mic; otherwise, or on failure, use the
+    /// raw CPAL microphone.
+    pub fn start(&mut self, preferred_device: Option<&str>, echo_cancellation: bool) -> Result<()> {
+        self.stream = None;
+        #[cfg(windows)]
+        {
+            self.voice = None;
+        }
+
+        let on_default = preferred_device
+            .map(str::trim)
+            .filter(|n| !n.is_empty())
+            .is_none();
+        if echo_cancellation && on_default && self.try_start_voice_capture().is_some() {
+            return Ok(());
+        }
+
+        self.start_cpal(preferred_device)
+    }
+
+    /// Try the OS echo-cancelling capture path. Returns `Some(())` on success.
+    /// Linux and macOS have no implementation yet (they return `None`, so the
+    /// caller falls back to the raw mic). Plan: PipeWire/Pulse echo-cancel on
+    /// Linux, the VoiceProcessingIO AudioUnit on macOS.
+    fn try_start_voice_capture(&mut self) -> Option<()> {
+        #[cfg(windows)]
+        {
+            use std::sync::atomic::Ordering;
+            const MAX_SAMPLES: usize = 60 * 48_000 * 2;
+            // This machine's Communications AEC already proved silent this run.
+            if AEC_STATE.load(Ordering::Relaxed) < 0 {
+                return None;
+            }
+            if let Ok(mut buf) = self.buffer.lock() {
+                buf.clear();
+                let want = 30 * 48_000 * 2;
+                let cap = buf.capacity();
+                if cap < want {
+                    buf.reserve(want - cap);
+                }
+            }
+            match super::wasapi::open_voice_capture(Arc::clone(&self.buffer), MAX_SAMPLES) {
+                Ok((cap, rate, channels)) => {
+                    self.native_rate = rate;
+                    self.native_channels = channels;
+                    self.voice = Some(cap);
+                    tracing::info!(
+                        "Voice capture (echo cancellation) active: {}Hz, {} channel(s)",
+                        rate,
+                        channels
+                    );
+                    // First session this run: confirm the AEC actually delivers
+                    // signal. Some Windows audio stacks' Communications AEC emits
+                    // only digital zeros even with a render reference; if so, drop
+                    // it and fall back to the raw mic so dictation still works.
+                    if AEC_STATE.load(Ordering::Relaxed) == 0 {
+                        std::thread::sleep(std::time::Duration::from_millis(250));
+                        let alive = self
+                            .buffer
+                            .lock()
+                            .map(|b| b.iter().any(|s| s.abs() > 1e-5))
+                            .unwrap_or(false);
+                        if alive {
+                            AEC_STATE.store(1, Ordering::Relaxed);
+                        } else {
+                            AEC_STATE.store(-1, Ordering::Relaxed);
+                            tracing::warn!(
+                                "Echo cancellation delivered only silence; using the raw microphone instead"
+                            );
+                            self.voice = None;
+                            if let Ok(mut b) = self.buffer.lock() {
+                                b.clear();
+                            }
+                            return None;
+                        }
+                    }
+                    Some(())
+                }
+                Err(e) => {
+                    tracing::warn!("Voice capture unavailable ({e}); using raw microphone");
+                    None
+                }
+            }
+        }
+        #[cfg(not(windows))]
+        {
+            None
+        }
+    }
+
+    /// Raw microphone capture via CPAL (no echo cancellation).
+    fn start_cpal(&mut self, preferred_device: Option<&str>) -> Result<()> {
         let host = cpal::default_host();
         let device = select_input_device(&host, preferred_device)?;
 
@@ -65,7 +166,19 @@ impl AudioCapture {
 
         let config = supported.config();
 
-        let stream = build_input_stream_for_format(&device, &config, sample_format, &self.buffer)?;
+        // Hard cap on the live buffer so a stalled consumer can never grow it
+        // without bound and reallocate (or OOM) on the realtime thread. Well
+        // above the 30s reserve, so normal operation never reaches it.
+        const MAX_BUFFER_SECS: usize = 60;
+        let max_samples = MAX_BUFFER_SECS * native_rate as usize * native_channels.max(1) as usize;
+
+        let stream = build_input_stream_for_format(
+            &device,
+            &config,
+            sample_format,
+            &self.buffer,
+            max_samples,
+        )?;
 
         stream.play()?;
         self.stream = Some(stream);
@@ -76,6 +189,10 @@ impl AudioCapture {
     /// Stop recording and return the captured audio buffer (16 kHz mono).
     pub fn stop(&mut self) -> Result<AudioBuffer> {
         self.stream = None;
+        #[cfg(windows)]
+        {
+            self.voice = None;
+        }
         let mut samples = self.buffer.lock().map_err(|e| anyhow::anyhow!("{}", e))?;
         let raw = std::mem::take(&mut *samples);
 
@@ -86,7 +203,6 @@ impl AudioCapture {
             self.native_channels
         );
 
-        // Downmix to mono
         let mono = if self.native_channels > 1 {
             let ch = self.native_channels as usize;
             raw.chunks_exact(ch)
@@ -96,7 +212,6 @@ impl AudioCapture {
             raw
         };
 
-        // Resample to 16 kHz
         let target_rate = AudioBuffer::SAMPLE_RATE;
         let resampled = if self.native_rate != target_rate {
             resample(&mono, self.native_rate, target_rate)
@@ -135,7 +250,26 @@ impl AudioCapture {
 
     /// Check if currently recording.
     pub fn is_recording(&self) -> bool {
+        #[cfg(windows)]
+        if self.voice.is_some() {
+            return true;
+        }
         self.stream.is_some()
+    }
+
+    /// Whether the OS echo-cancelling capture path is the active source (as
+    /// opposed to the raw CPAL mic it falls back to). Calibration uses this to
+    /// skip the gain boost the raw mic needs: the voice stream is already
+    /// AGC-leveled by the OS, so boosting it just re-amplifies idle noise.
+    pub fn echo_cancellation_active(&self) -> bool {
+        #[cfg(windows)]
+        {
+            self.voice.is_some()
+        }
+        #[cfg(not(windows))]
+        {
+            false
+        }
     }
 }
 
@@ -191,109 +325,78 @@ fn build_input_stream_for_format(
     config: &cpal::StreamConfig,
     sample_format: SampleFormat,
     buffer: &Arc<Mutex<Vec<f32>>>,
+    max_samples: usize,
 ) -> Result<cpal::Stream> {
-    let err_fn = |err| tracing::error!("Audio stream error: {}", err);
-
-    let stream = match sample_format {
+    // Zero-center for unsigned formats: silence sits at the midpoint, not 0.
+    match sample_format {
         SampleFormat::F32 => {
-            let buffer = Arc::clone(buffer);
-            device.build_input_stream(
-                config,
-                move |data: &[f32], _: &cpal::InputCallbackInfo| {
-                    if let Ok(mut buf) = buffer.lock() {
-                        buf.extend_from_slice(data);
-                    }
-                },
-                err_fn,
-                None,
-            )?
+            build_typed_stream::<f32, _>(device, config, buffer, max_samples, |s| s)
         }
         SampleFormat::I16 => {
-            let buffer = Arc::clone(buffer);
-            device.build_input_stream(
-                config,
-                move |data: &[i16], _: &cpal::InputCallbackInfo| {
-                    if let Ok(mut buf) = buffer.lock() {
-                        buf.extend(data.iter().map(|&s| s as f32 / 32768.0));
-                    }
-                },
-                err_fn,
-                None,
-            )?
+            build_typed_stream::<i16, _>(device, config, buffer, max_samples, |s| {
+                s as f32 / 32768.0
+            })
         }
         SampleFormat::U16 => {
-            let buffer = Arc::clone(buffer);
-            device.build_input_stream(
-                config,
-                move |data: &[u16], _: &cpal::InputCallbackInfo| {
-                    if let Ok(mut buf) = buffer.lock() {
-                        // Zero-centered: silence in unsigned formats sits at
-                        // the midpoint (32768), not at 0.
-                        buf.extend(data.iter().map(|&s| (s as f32 - 32768.0) / 32768.0));
-                    }
-                },
-                err_fn,
-                None,
-            )?
+            build_typed_stream::<u16, _>(device, config, buffer, max_samples, |s| {
+                (s as f32 - 32768.0) / 32768.0
+            })
         }
         SampleFormat::I32 => {
-            let buffer = Arc::clone(buffer);
-            device.build_input_stream(
-                config,
-                move |data: &[i32], _: &cpal::InputCallbackInfo| {
-                    if let Ok(mut buf) = buffer.lock() {
-                        buf.extend(data.iter().map(|&s| s as f32 / i32::MAX as f32));
-                    }
-                },
-                err_fn,
-                None,
-            )?
+            build_typed_stream::<i32, _>(device, config, buffer, max_samples, |s| {
+                // Convert through f64: an i32 has more precision than f32's
+                // mantissa, so dividing in f32 would lose low bits.
+                (s as f64 / i32::MAX as f64) as f32
+            })
         }
         SampleFormat::U32 => {
-            let buffer = Arc::clone(buffer);
-            device.build_input_stream(
-                config,
-                move |data: &[u32], _: &cpal::InputCallbackInfo| {
-                    if let Ok(mut buf) = buffer.lock() {
-                        buf.extend(
-                            data.iter()
-                                .map(|&s| ((s as f64 - 2_147_483_648.0) / 2_147_483_648.0) as f32),
-                        );
-                    }
-                },
-                err_fn,
-                None,
-            )?
+            build_typed_stream::<u32, _>(device, config, buffer, max_samples, |s| {
+                ((s as f64 - 2_147_483_648.0) / 2_147_483_648.0) as f32
+            })
         }
-        SampleFormat::I8 => {
-            let buffer = Arc::clone(buffer);
-            device.build_input_stream(
-                config,
-                move |data: &[i8], _: &cpal::InputCallbackInfo| {
-                    if let Ok(mut buf) = buffer.lock() {
-                        buf.extend(data.iter().map(|&s| s as f32 / i8::MAX as f32));
-                    }
-                },
-                err_fn,
-                None,
-            )?
-        }
-        SampleFormat::U8 => {
-            let buffer = Arc::clone(buffer);
-            device.build_input_stream(
-                config,
-                move |data: &[u8], _: &cpal::InputCallbackInfo| {
-                    if let Ok(mut buf) = buffer.lock() {
-                        buf.extend(data.iter().map(|&s| (s as f32 - 128.0) / 128.0));
-                    }
-                },
-                err_fn,
-                None,
-            )?
-        }
+        SampleFormat::I8 => build_typed_stream::<i8, _>(device, config, buffer, max_samples, |s| {
+            s as f32 / i8::MAX as f32
+        }),
+        SampleFormat::U8 => build_typed_stream::<u8, _>(device, config, buffer, max_samples, |s| {
+            (s as f32 - 128.0) / 128.0
+        }),
         format => anyhow::bail!("Unsupported sample format: {:?}", format),
-    };
+    }
+}
 
+/// Build an input stream that converts each sample to f32 and appends it to
+/// the live buffer, dropping new audio once the buffer hits `max_samples` so a
+/// stalled consumer cannot grow it without bound on the realtime thread.
+fn build_typed_stream<T, F>(
+    device: &cpal::Device,
+    config: &cpal::StreamConfig,
+    buffer: &Arc<Mutex<Vec<f32>>>,
+    max_samples: usize,
+    convert: F,
+) -> Result<cpal::Stream>
+where
+    T: cpal::SizedSample + Send + 'static,
+    F: Fn(T) -> f32 + Send + 'static,
+{
+    let buffer = Arc::clone(buffer);
+    let err_fn = |err| tracing::error!("Audio stream error: {}", err);
+    let stream = device.build_input_stream(
+        config,
+        move |data: &[T], _: &cpal::InputCallbackInfo| {
+            if let Ok(mut buf) = buffer.lock()
+                && buf.len() < max_samples
+            {
+                // Sanitize at the boundary: a NaN/inf from a misbehaving driver
+                // would otherwise poison RMS scoring and the resampler.
+                buf.extend(data.iter().map(|&s| {
+                    let v = convert(s);
+                    if v.is_finite() { v } else { 0.0 }
+                }));
+            }
+        },
+        err_fn,
+        None,
+    )?;
     Ok(stream)
 }
 
@@ -360,7 +463,6 @@ fn pick_best_config(device: &cpal::Device) -> Result<SupportedStreamConfig> {
         let fmt = range.sample_format();
         let ch = range.channels();
 
-        // Pick the best sample rate this range supports
         let preferred_rates = [16000u32, 48000, 44100];
         let rate = preferred_rates
             .iter()
@@ -440,16 +542,25 @@ fn lowpass_antialias(samples: &[f32], from_rate: u32, to_rate: u32) -> Vec<f32> 
     let dt = 1.0 / from_rate as f32;
     let alpha = dt / (rc + dt);
 
+    // An empty input has no signal to filter; bail before any indexing.
+    let Some(&first) = samples.first() else {
+        return Vec::new();
+    };
+
     // Forward pass
     let mut filtered = Vec::with_capacity(samples.len());
-    let mut prev = samples[0];
+    let mut prev = first;
     for &s in samples {
         prev += alpha * (s - prev);
         filtered.push(prev);
     }
 
-    // Backward pass (zero-phase: eliminates phase distortion from forward pass)
-    prev = *filtered.last().unwrap();
+    // Backward pass (zero-phase: eliminates phase distortion from forward pass).
+    // `filtered` matches `samples`' non-zero length, so `last()` is always Some.
+    let Some(&last) = filtered.last() else {
+        return filtered;
+    };
+    prev = last;
     for s in filtered.iter_mut().rev() {
         prev += alpha * (*s - prev);
         *s = prev;

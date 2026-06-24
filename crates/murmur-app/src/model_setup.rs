@@ -21,6 +21,19 @@ pub(crate) fn spawn_download_and_init(
     tauri::async_runtime::spawn(async move {
         if let Err(e) = download_and_init_model(&app, &engine, model).await {
             tracing::error!("Model download/init failed: {}", e);
+            // A previously-loaded engine is still usable after a failed switch:
+            // resync settings + readiness to it so the UI doesn't report the
+            // failed model as active.
+            let loaded = engine
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .as_ref()
+                .and_then(|engine| engine.model());
+            if let Some(loaded) = loaded
+                && let Some(app_state) = app.try_state::<AppState>()
+            {
+                resync_to_loaded(&app, &app_state, loaded);
+            }
             emit_progress(
                 &app,
                 0,
@@ -30,6 +43,46 @@ pub(crate) fn spawn_download_and_init(
             );
         }
     });
+}
+
+/// After a failed switch, point settings, the readiness flag, and the UI back
+/// at the engine that's actually loaded.
+fn resync_to_loaded(app: &tauri::AppHandle, state: &AppState, loaded: SttModel) {
+    {
+        let mut settings = state.settings.lock().unwrap_or_else(|e| e.into_inner());
+        if settings.model != loaded {
+            settings.model = loaded;
+            if let Ok(path) = murmur_core::config::Settings::default_path() {
+                let _ = settings.save(&path);
+            }
+        }
+    }
+    state
+        .engine_loaded
+        .store(true, std::sync::atomic::Ordering::Release);
+    let _ = app.emit(
+        "model-changed",
+        ModelChangedEvent {
+            model_id: loaded.id().to_string(),
+            model_name: loaded.name().to_string(),
+            ready: true,
+        },
+    );
+}
+
+/// Whether `model` is still the selected model: download_and_init skips a load
+/// the user already switched away from, so the engine never goes out of sync.
+fn is_current_selection(app: &tauri::AppHandle, model: SttModel) -> bool {
+    app.try_state::<AppState>()
+        .map(|state| {
+            state
+                .settings
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .model
+                == model
+        })
+        .unwrap_or(true)
 }
 
 fn emit_progress(
@@ -70,8 +123,26 @@ async fn download_and_init_model(
     download_vad_if_needed(app).await;
     download_model_files(app, &model_mgr, model).await?;
 
+    // Skip the costly init if the user already switched away.
+    if !is_current_selection(app, model) {
+        tracing::info!(
+            "Model selection changed before init; skipping {}",
+            model.name()
+        );
+        return Ok(());
+    }
+
     emit_progress(app, 100, "Loading model...", false, None);
     let stt = init_engine(&model_mgr, model).await?;
+
+    // Re-check after init: a switch during init wins; don't commit a stale engine.
+    if !is_current_selection(app, model) {
+        tracing::info!(
+            "Model selection changed during init; discarding {}",
+            model.name()
+        );
+        return Ok(());
+    }
 
     {
         let mut guard = engine.lock().unwrap_or_else(|e| e.into_inner());
@@ -156,10 +227,11 @@ async fn download_model_files(
         return Ok(());
     }
 
+    let size_mb = model.size_mb();
     emit_progress(
         app,
         0,
-        &format!("Downloading {}...", model.name()),
+        &format!("Downloading {} ({} MB, one-time)...", model.name(), size_mb),
         false,
         None,
     );
@@ -171,7 +243,7 @@ async fn download_model_files(
             emit_progress(
                 &app_ref,
                 percent,
-                &format!("Downloading {}... {}%", name, percent),
+                &format!("Downloading {} ({} MB)... {}%", name, size_mb, percent),
                 false,
                 None,
             );

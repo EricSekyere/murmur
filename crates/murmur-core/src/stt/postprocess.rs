@@ -14,12 +14,124 @@ impl PostProcessor {
         let text = apply_casing_formatters(&text);
         cleanup_whitespace(&text)
     }
+
+    /// Prose cleanup for ordinary (non-developer) dictation: strip clear
+    /// disfluencies and format spoken enumerations, but leave code transforms
+    /// (symbol expansion, tech-term correction, casing commands) alone.
+    pub fn process_prose(text: &str) -> String {
+        let text = remove_disfluencies(text);
+        // List formatting runs last: it introduces newlines that
+        // cleanup_whitespace would otherwise collapse back into spaces.
+        let text = cleanup_whitespace(&text);
+        format_spoken_lists(&text)
+    }
+}
+
+// ─── Spoken list formatting ──────────────────────────────────────────────────
+
+/// Number words 0–10, index = value ("one" → 1).
+const NUMBER_WORDS: &[&str] = &[
+    "zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten",
+];
+
+/// Turn a dictated "number one … number two …" enumeration into a numbered
+/// list. Deliberately conservative: it only fires on the explicit "number N"
+/// form (rare in flowing prose) with at least two markers whose values run
+/// 1, 2, 3, … so ordinary sentences are never reshaped.
+fn format_spoken_lists(text: &str) -> String {
+    let markers = number_markers(text);
+    if markers.len() < 2 || !markers.iter().enumerate().all(|(i, m)| m.2 == i as u32 + 1) {
+        return text.to_string();
+    }
+
+    let mut out = String::new();
+    let lead = text[..markers[0].0].trim();
+    if !lead.is_empty() {
+        out.push_str(lead);
+        out.push('\n');
+    }
+    for (i, m) in markers.iter().enumerate() {
+        let seg_end = markers.get(i + 1).map_or(text.len(), |next| next.0);
+        let item = text[m.1..seg_end]
+            .trim()
+            .trim_start_matches([',', '.', ':'])
+            .trim();
+        out.push_str(&format!("{}. {}", m.2, item));
+        if i + 1 < markers.len() {
+            out.push('\n');
+        }
+    }
+    out
+}
+
+/// Byte ranges and values of "number N" markers: (start of "number", end of the
+/// count word, value).
+fn number_markers(text: &str) -> Vec<(usize, usize, u32)> {
+    let words = word_positions(text);
+    let mut markers = Vec::new();
+    let mut i = 0;
+    while i + 1 < words.len() {
+        if words[i].1.eq_ignore_ascii_case("number")
+            && let Some(val) = parse_count(words[i + 1].1)
+        {
+            let end = words[i + 1].0 + words[i + 1].1.len();
+            markers.push((words[i].0, end, val));
+            i += 2;
+            continue;
+        }
+        i += 1;
+    }
+    markers
+}
+
+/// (byte offset, word) for each whitespace-separated token.
+fn word_positions(text: &str) -> Vec<(usize, &str)> {
+    let bytes = text.as_bytes();
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < text.len() {
+        if bytes[i].is_ascii_whitespace() {
+            i += 1;
+            continue;
+        }
+        let start = i;
+        while i < text.len() && !bytes[i].is_ascii_whitespace() {
+            i += 1;
+        }
+        out.push((start, &text[start..i]));
+    }
+    out
+}
+
+/// A count word ("one"…"ten") or a small digit, ignoring trailing punctuation.
+fn parse_count(word: &str) -> Option<u32> {
+    let w = word
+        .trim_matches(|c: char| !c.is_alphanumeric())
+        .to_ascii_lowercase();
+    if let Ok(n) = w.parse::<u32>() {
+        return (1..=99).contains(&n).then_some(n);
+    }
+    NUMBER_WORDS
+        .iter()
+        .position(|n| *n == w)
+        .map(|p| p as u32)
+        .filter(|&v| v >= 1)
 }
 
 // ─── Filler Removal ──────────────────────────────────────────────────────────
 
-/// Single-word fillers (matched case-insensitively, whole-word only).
-const SINGLE_FILLERS: &[&str] = &["um", "uh", "uhh", "umm", "hmm", "er", "ah"];
+/// Canonical hesitation/filled-pause tokens, compared AFTER collapsing repeated
+/// letters ("ummm"→"um", "uhhh"→"uh", "hmm"→"hm", "mmm"→"m"). Matched
+/// whole-token only, so backchannel answers ("uh-huh", "mm-hm") — which are
+/// distinct tokens that don't reduce to one of these — survive.
+const HESITATIONS: &[&str] = &["um", "uh", "hm", "m", "er", "ah", "eh", "huh", "mhm"];
+
+/// Function words that, repeated back-to-back, are a stutter rather than
+/// meaning ("the the" → "the"). Excludes words that legitimately double
+/// ("had had", "that that", "no no", "very very").
+const STUTTER_WORDS: &[&str] = &[
+    "i", "the", "a", "an", "to", "and", "you", "it", "we", "of", "in", "on", "my", "is", "are",
+];
 
 /// Multi-word fillers removed unconditionally.
 const MULTI_FILLERS: &[&str] = &["you know", "i mean", "basically", "actually", "literally"];
@@ -32,51 +144,171 @@ fn remove_fillers(text: &str) -> String {
         result = remove_phrase_ci(&result, filler);
     }
 
-    // "so" only at start of text
-    let trimmed = result.trim_start();
-    if starts_with_word_ci(trimmed, "so") {
-        let after = &trimmed[2..];
-        // Only remove if followed by whitespace or comma
-        if after.is_empty() || after.starts_with(' ') || after.starts_with(',') {
-            let prefix_ws = result.len() - trimmed.len();
-            let skip = if after.starts_with(", ") {
-                4 // "so, "
-            } else if after.starts_with(',') || after.starts_with(' ') {
-                3 // "so," or "so "
-            } else {
-                2 // just "so"
-            };
-            result = format!(
-                "{}{}",
-                &result[..prefix_ws],
-                &trimmed[skip.min(trimmed.len())..]
-            );
-        }
-    }
+    result = remove_leading_so(&result);
 
     // "like" only when preceded by comma or at sentence start
     result = remove_like_filler(&result);
 
-    // Remove single-word fillers
-    for filler in SINGLE_FILLERS {
-        result = remove_word_ci(&result, filler);
-    }
+    result = remove_hesitations(&result);
+    collapse_stutters(&result)
+}
 
-    result
+/// Drop a leading "so" disfluency ("so, let's…" → "let's…"), only at the very
+/// start and only when followed by whitespace/comma so real words ("solo") are
+/// untouched.
+fn remove_leading_so(text: &str) -> String {
+    let trimmed = text.trim_start();
+    if !starts_with_word_ci(trimmed, "so") {
+        return text.to_string();
+    }
+    let after = &trimmed[2..];
+    if !(after.is_empty() || after.starts_with(' ') || after.starts_with(',')) {
+        return text.to_string();
+    }
+    let prefix_ws = text.len() - trimmed.len();
+    let skip = if after.starts_with(", ") {
+        4
+    } else if after.starts_with(',') || after.starts_with(' ') {
+        3
+    } else {
+        2
+    };
+    format!(
+        "{}{}",
+        &text[..prefix_ws],
+        &trimmed[skip.min(trimmed.len())..]
+    )
+}
+
+/// Multi-word disfluencies safe to drop from prose. Unlike the developer-mode
+/// MULTI_FILLERS, this omits "actually" / "literally" / "basically", which
+/// carry meaning in ordinary writing.
+const PROSE_MULTI_FILLERS: &[&str] = &["you know", "i mean"];
+
+/// Prose-safe filler removal: clear verbal disfluencies only, keeping words
+/// that are meaningful outside dictating code.
+fn remove_disfluencies(text: &str) -> String {
+    // "you know" / "i mean" are only dropped when they stand alone as a
+    // comma-bracketed aside, so a meaningful "do you know the answer" survives.
+    let mut result = remove_parenthetical_fillers(text, PROSE_MULTI_FILLERS);
+    result = remove_leading_so(&result);
+    result = remove_like_filler(&result);
+    result = remove_hesitations(&result);
+    collapse_stutters(&result)
+}
+
+/// Drop standalone hesitation/filled-pause tokens in one linear pass. Each
+/// whitespace token is normalized (surrounding punctuation stripped, repeated
+/// letters collapsed, lowercased) and dropped if it is a pure hesitation.
+/// Answers like "uh-huh" and words like "umbrella" are single tokens that don't
+/// reduce to a hesitation, so they are kept.
+fn remove_hesitations(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for token in text.split_whitespace() {
+        if is_hesitation(token) {
+            continue;
+        }
+        if !out.is_empty() {
+            out.push(' ');
+        }
+        out.push_str(token);
+    }
+    out
+}
+
+fn is_hesitation(token: &str) -> bool {
+    let core = token.trim_matches(|c: char| !c.is_alphanumeric());
+    !core.is_empty() && HESITATIONS.contains(&collapse_repeats(core).to_ascii_lowercase().as_str())
+}
+
+/// Collapse runs of the same character to one ("uhhh"→"uh", "mmm"→"m"), so
+/// elongated hesitations match their canonical form.
+fn collapse_repeats(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut prev = None;
+    for c in s.chars() {
+        if Some(c) != prev {
+            out.push(c);
+            prev = Some(c);
+        }
+    }
+    out
+}
+
+/// Collapse a back-to-back stutter of the same function word ("I I I think" →
+/// "I think") in one linear pass. Only [`STUTTER_WORDS`] collapse, so emphatic
+/// repeats ("very very") are preserved.
+fn collapse_stutters(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut prev_key: Option<String> = None;
+    for token in text.split_whitespace() {
+        let key = token
+            .trim_matches(|c: char| !c.is_alphanumeric())
+            .to_ascii_lowercase();
+        if prev_key.as_deref() == Some(key.as_str()) && STUTTER_WORDS.contains(&key.as_str()) {
+            continue;
+        }
+        if !out.is_empty() {
+            out.push(' ');
+        }
+        out.push_str(token);
+        prev_key = Some(key);
+    }
+    out
+}
+
+/// Remove a multi-word filler only when it is a stand-alone, comma-bracketed
+/// aside ("I think, you know, it's fine" → "I think, it's fine"). A
+/// grammatically integrated use ("do you know the answer") is never a lone
+/// comma segment, so it is left untouched. Requires the model to have
+/// punctuated the aside, which it reliably does for a spoken pause.
+fn remove_parenthetical_fillers(text: &str, fillers: &[&str]) -> String {
+    if !text.contains(',') {
+        return text.to_string();
+    }
+    let segments: Vec<&str> = text.split(',').collect();
+    let kept: Vec<&str> = segments
+        .iter()
+        .copied()
+        .filter(|seg| {
+            let norm = seg.trim().to_ascii_lowercase();
+            !fillers.contains(&norm.as_str())
+        })
+        .collect();
+    if kept.len() == segments.len() {
+        return text.to_string();
+    }
+    kept.iter().map(|s| s.trim()).collect::<Vec<_>>().join(", ")
+}
+
+/// Push the UTF-8 character starting at byte `i` (a char boundary) onto
+/// `result` and return the index just past it. Avoids `bytes[i] as char`,
+/// which corrupts multibyte characters by treating a continuation byte as a
+/// Latin-1 char.
+fn push_char_at(result: &mut String, text: &str, i: usize) -> usize {
+    match text[i..].chars().next() {
+        Some(ch) => {
+            result.push(ch);
+            i + ch.len_utf8()
+        }
+        None => i + 1,
+    }
 }
 
 /// Remove a phrase (case-insensitive, whole-word boundaries) from text.
 fn remove_phrase_ci(text: &str, phrase: &str) -> String {
-    let lower = text.to_lowercase();
-    let phrase_lower = phrase.to_lowercase();
+    // ASCII-lowercase is length-preserving, so `lower` stays byte-aligned with
+    // `text` (a Unicode to_lowercase can change byte length, e.g. İ → i̇, which
+    // would desync the offset-indexed match below). Fillers are ASCII words.
+    let lower = text.to_ascii_lowercase();
+    let phrase_lower = phrase.to_ascii_lowercase();
     let mut result = String::with_capacity(text.len());
     let mut i = 0;
     let bytes = text.as_bytes();
     let plen = phrase_lower.len();
 
     while i < text.len() {
-        if i + plen <= text.len()
-            && lower[i..i + plen] == phrase_lower
+        if lower.get(i..i + plen).is_some_and(|s| s == phrase_lower)
             && is_word_boundary(bytes, i)
             && is_word_boundary_end(bytes, i + plen)
         {
@@ -90,29 +322,23 @@ fn remove_phrase_ci(text: &str, phrase: &str) -> String {
                 i = after;
             }
         } else {
-            result.push(bytes[i] as char);
-            i += 1;
+            i = push_char_at(&mut result, text, i);
         }
     }
 
     result
 }
 
-/// Remove a single word (case-insensitive, whole-word boundaries).
-fn remove_word_ci(text: &str, word: &str) -> String {
-    remove_phrase_ci(text, word)
-}
-
 /// Remove "like" only when preceded by a comma or at the start of a sentence.
 fn remove_like_filler(text: &str) -> String {
-    let lower = text.to_lowercase();
+    // ASCII-lowercase keeps `lower` byte-aligned with `text` (see remove_phrase_ci).
+    let lower = text.to_ascii_lowercase();
     let bytes = text.as_bytes();
     let mut result = String::with_capacity(text.len());
     let mut i = 0;
 
     while i < text.len() {
-        if i + 4 <= text.len()
-            && &lower[i..i + 4] == "like"
+        if lower.get(i..i + 4) == Some("like")
             && is_word_boundary(bytes, i)
             && is_word_boundary_end(bytes, i + 4)
         {
@@ -143,8 +369,7 @@ fn remove_like_filler(text: &str) -> String {
                 continue;
             }
         }
-        result.push(bytes[i] as char);
-        i += 1;
+        i = push_char_at(&mut result, text, i);
     }
 
     result
@@ -249,7 +474,10 @@ static SYMBOL_MAP: LazyLock<Vec<(&str, &str)>> = LazyLock::new(|| {
 });
 
 fn expand_symbols(text: &str) -> String {
-    let lower = text.to_lowercase();
+    // ASCII-lowercase keeps `lower` byte-aligned with `text` (see remove_phrase_ci);
+    // spoken-symbol keys are ASCII, so a length-changing char no longer desyncs
+    // the offset-indexed match and silently drops the expansion.
+    let lower = text.to_ascii_lowercase();
     let bytes = text.as_bytes();
     let mut result = String::with_capacity(text.len());
     let mut i = 0;
@@ -259,8 +487,7 @@ fn expand_symbols(text: &str) -> String {
 
         for &(spoken, symbol) in SYMBOL_MAP.iter() {
             let slen = spoken.len();
-            if i + slen <= text.len()
-                && lower[i..i + slen] == *spoken
+            if lower.get(i..i + slen) == Some(spoken)
                 && is_word_boundary(bytes, i)
                 && is_word_boundary_end(bytes, i + slen)
             {
@@ -276,8 +503,8 @@ fn expand_symbols(text: &str) -> String {
         }
 
         if !matched {
-            result.push(bytes[i] as char);
-            i += 1;
+            // Advance by whole UTF-8 chars; `bytes[i] as char` corrupts non-ASCII.
+            i = push_char_at(&mut result, text, i);
         }
     }
 
@@ -433,7 +660,6 @@ static TECH_TERMS: LazyLock<HashMap<String, &str>> = LazyLock::new(|| {
         ("deno", "Deno"),
         ("cargo", "Cargo"),
         ("pip", "pip"),
-        ("homebrew", "Homebrew"),
         ("homebrew", "Homebrew"),
         ("git", "Git"),
         ("jira", "Jira"),
@@ -715,6 +941,108 @@ fn cleanup_whitespace(text: &str) -> String {
 mod tests {
     use super::*;
 
+    #[test]
+    fn expand_symbols_stays_aligned_after_length_changing_lowercase() {
+        // İ (U+0130) lowercases to a longer byte string; the offset-indexed
+        // matcher must stay aligned and still expand "equals" rather than
+        // silently skip it (the to_ascii_lowercase fix).
+        let out = expand_symbols("İ equals x");
+        assert!(out.contains('='), "expected expansion, got {out:?}");
+        assert!(
+            !out.contains("equals"),
+            "'equals' should have been expanded: {out:?}"
+        );
+    }
+
+    #[test]
+    fn prose_strips_disfluencies_but_keeps_meaningful_words() {
+        let out = PostProcessor::process_prose("um I think, you know, it works");
+        let lower = out.to_lowercase();
+        assert!(!lower.contains("um"), "{out:?}");
+        assert!(!lower.contains("you know"), "{out:?}");
+        assert!(
+            out.contains("I think") && out.contains("it works"),
+            "{out:?}"
+        );
+        // "actually"/"literally" are meaningful in prose (kept, unlike dev mode).
+        let kept = PostProcessor::process_prose("I actually literally finished");
+        assert!(
+            kept.contains("actually") && kept.contains("literally"),
+            "{kept:?}"
+        );
+        // "you know" used meaningfully (not a comma-bracketed aside) is kept.
+        assert_eq!(
+            PostProcessor::process_prose("do you know the answer"),
+            "do you know the answer"
+        );
+        // "i mean" as a real clause is kept; as a parenthetical it's dropped.
+        assert_eq!(
+            PostProcessor::process_prose("I mean it when I say that"),
+            "I mean it when I say that"
+        );
+    }
+
+    #[test]
+    fn handles_ellipsis_and_unicode_punctuation_without_panic() {
+        // Parakeet emits native punctuation incl. '…' (3-byte char). Postprocess
+        // must not slice mid-codepoint.
+        for s in [
+            "alright, let's just try to find a good way to…",
+            "well… I mean, you know…",
+            "number one buy milk… number two walk…",
+            "café — résumé… naïve",
+        ] {
+            let _ = PostProcessor::process(s);
+            let _ = PostProcessor::process_prose(s);
+        }
+    }
+
+    #[test]
+    fn hesitation_variants_elongation_and_backchannels() {
+        // New variants + elongation are removed.
+        assert_eq!(
+            PostProcessor::process_prose("ummm I think uh it works"),
+            "I think it works"
+        );
+        assert_eq!(PostProcessor::process_prose("mm yeah eh okay"), "yeah okay");
+        // Real words that merely start with a hesitation are kept.
+        assert_eq!(
+            PostProcessor::process_prose("the umbrella is huge"),
+            "the umbrella is huge"
+        );
+        // Backchannel answers (yes/no) are kept, not split into a stray "uh".
+        assert_eq!(
+            PostProcessor::process_prose("uh-huh that works"),
+            "uh-huh that works"
+        );
+    }
+
+    #[test]
+    fn collapses_function_word_stutters_keeps_emphasis() {
+        assert_eq!(
+            PostProcessor::process_prose("I I I think the the answer"),
+            "I think the answer"
+        );
+        // Emphatic / legitimate repeats are preserved.
+        assert_eq!(
+            PostProcessor::process_prose("it is very very important"),
+            "it is very very important"
+        );
+    }
+
+    #[test]
+    fn spoken_number_list_only_fires_on_explicit_sequential_markers() {
+        assert_eq!(
+            PostProcessor::process_prose("my plan number one buy milk number two walk the dog"),
+            "my plan\n1. buy milk\n2. walk the dog"
+        );
+        // Mentioning a number in prose is left alone.
+        let prose = "the number one priority is shipping";
+        assert_eq!(format_spoken_lists(prose), prose);
+        // A single marker is not a list.
+        assert_eq!(format_spoken_lists("number one thing"), "number one thing");
+    }
+
     // ── Filler removal ───────────────────────────────────────────────────
 
     #[test]
@@ -749,6 +1077,18 @@ mod tests {
     #[test]
     fn filler_removes_so_at_start() {
         assert_eq!(remove_fillers("so I want to code"), "I want to code");
+    }
+
+    #[test]
+    fn filler_removal_preserves_non_ascii() {
+        // Byte-as-char rewriting used to corrupt accents/non-Latin text.
+        // Without a filler the text must pass through byte-for-byte.
+        assert_eq!(
+            remove_fillers("café déjà vu Iñtërnatização"),
+            "café déjà vu Iñtërnatização"
+        );
+        // A filler is still removed and the surrounding accents survive.
+        assert_eq!(remove_fillers("um café déjà vu"), "café déjà vu");
     }
 
     #[test]
@@ -819,6 +1159,17 @@ mod tests {
     #[test]
     fn symbol_fat_arrow() {
         assert_eq!(expand_symbols("fat arrow function"), "=>function");
+    }
+
+    #[test]
+    fn symbol_expansion_preserves_non_ascii() {
+        // Byte-as-char rewriting used to corrupt non-ASCII; it must pass through.
+        assert_eq!(
+            expand_symbols("café déjà vu Iñtërnatização 日本語 🚀"),
+            "café déjà vu Iñtërnatização 日本語 🚀"
+        );
+        // A symbol still expands and the surrounding accents survive.
+        assert_eq!(expand_symbols("café equals déjà"), "café =déjà");
     }
 
     // ── Casing formatters ────────────────────────────────────────────────

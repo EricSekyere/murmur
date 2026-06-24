@@ -46,6 +46,9 @@ impl Default for DictationConfig {
 /// 30ms @ 16 kHz; matches transcribe-rs's `frame_size = 480`.
 const SPLIT_FRAME_MS: u64 = 30;
 
+/// Trailing window of an in-progress phrase used for live preview snapshots.
+const PREVIEW_WINDOW_SECS: u64 = 12;
+
 #[derive(Debug, Clone)]
 pub enum DictationEvent {
     Level(f32),
@@ -283,9 +286,12 @@ impl DictationSession {
 
     /// How many consecutive speech-positive chunks are needed to open a
     /// phrase. With Silero VAD attached, require 2 (~100ms at the worker's
-    /// 50ms tick) so isolated breath/sigh frames don't start phrases. The
-    /// RMS fallback keeps the old single-chunk behaviour: its calibrated
-    /// threshold is already the noise gate.
+    /// 50ms tick) so an isolated breath/click frame doesn't start a phrase,
+    /// while keeping detection responsive to normal speech. Hallucinations on
+    /// noise are caught after transcription by the confidence and
+    /// repeated-phrase filters, not by making the input gate strict (which
+    /// would force the user to speak unnaturally loudly). The RMS fallback
+    /// keeps single-chunk behaviour: its calibrated threshold is the gate.
     fn onset_chunks_required(&self) -> u32 {
         #[cfg(feature = "vad")]
         if self.vad.is_some() {
@@ -296,6 +302,27 @@ impl DictationSession {
 
     pub fn finish(&mut self) -> Option<AudioBuffer> {
         self.flush_phrase(false)
+    }
+
+    /// Snapshot of the in-progress phrase, resampled to 16 kHz mono, for live
+    /// partial transcription. Returns `None` while idle or before the phrase
+    /// has enough audio to be worth transcribing. Does not mutate state, so it
+    /// is safe to call repeatedly while a phrase is still being spoken.
+    ///
+    /// Only the recent tail is returned. A preview just needs the latest words,
+    /// and bounding it keeps the resample and the preview decode cheap on long
+    /// phrases so they cannot starve the realtime tick or delay the final.
+    pub fn current_phrase(&self) -> Option<AudioBuffer> {
+        if !self.in_speech || self.phrase_samples.len() < self.min_phrase_samples {
+            return None;
+        }
+        let window = (PREVIEW_WINDOW_SECS * self.native_rate as u64) as usize;
+        let start = self.phrase_samples.len().saturating_sub(window);
+        Some(AudioBuffer::from_raw(
+            &self.phrase_samples[start..],
+            self.native_rate,
+            1,
+        ))
     }
 
     fn flush_phrase(&mut self, trim_trailing_silence: bool) -> Option<AudioBuffer> {
@@ -466,6 +493,36 @@ mod tests {
     }
 
     #[test]
+    fn current_phrase_snapshots_only_while_speaking() {
+        let rate = 16_000;
+        let mut session = DictationSession::new(
+            DictationConfig {
+                speech_threshold: 0.01,
+                silence_hold: Duration::from_millis(100),
+                min_phrase: Duration::from_millis(50),
+                max_phrase: Duration::from_secs(5),
+                split_search: Duration::from_millis(500),
+                preroll: Duration::from_millis(50),
+                session_timeout: Duration::from_secs(5),
+            },
+            rate,
+        );
+
+        // Idle: nothing in progress to preview.
+        assert!(session.current_phrase().is_none());
+
+        // Mid-phrase: a 16 kHz snapshot of the spoken audio so far.
+        let _ = session.ingest(&speech(1600));
+        let snapshot = session.current_phrase().expect("phrase in progress");
+        assert_eq!(snapshot.sample_rate, 16_000);
+        assert!(!snapshot.samples.is_empty());
+
+        // Once the phrase flushes on silence, there's nothing in progress again.
+        let _ = session.ingest(&silence(2000));
+        assert!(session.current_phrase().is_none());
+    }
+
+    #[test]
     fn proactively_flushes_long_phrase() {
         let rate = 16_000;
         let mut session = DictationSession::new(
@@ -489,6 +546,33 @@ mod tests {
                 .iter()
                 .any(|event| matches!(event, DictationEvent::PhraseReady(_)))
         );
+    }
+
+    #[test]
+    fn split_preserves_all_audio() {
+        let rate = 16_000;
+        let mut session = DictationSession::new(
+            DictationConfig {
+                max_phrase: Duration::from_millis(100),
+                split_search: Duration::from_millis(50),
+                min_phrase: Duration::from_millis(20),
+                ..DictationConfig::default()
+            },
+            rate,
+        );
+
+        // Stage an over-length phrase directly and force a split. At 16kHz the
+        // flushed head isn't resampled, so head + carried-forward tail must add
+        // back up to the original: the split never drops audio.
+        let total = 4000;
+        session.phrase_samples = vec![0.05_f32; total];
+        session.in_speech = true;
+
+        let head = session
+            .flush_phrase_at_split()
+            .expect("an over-length phrase must yield a head");
+        assert!(head.samples.len() >= session.min_phrase_samples);
+        assert_eq!(head.samples.len() + session.phrase_samples.len(), total);
     }
 
     #[test]

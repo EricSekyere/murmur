@@ -1,3 +1,3 @@
 pub mod settings;
 
-pub use settings::{Settings, TranscriptionProfile};
+pub use settings::{AppProfile, Settings, TranscriptionProfile};

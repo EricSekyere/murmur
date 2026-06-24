@@ -4,10 +4,11 @@ members = [
     "crates/murmur-core",
     "crates/murmur-cli",
     "crates/murmur-app",
+    "crates/murmur-mcp",
 ]
 
 [workspace.package]
-version = "0.2.1"
+version = "0.5.0"
 edition = "2024"
 license = "MIT"
 rust-version = "1.93"
@@ -19,8 +20,10 @@ codegen-units = 256
 
 [workspace.dependencies]
 murmur-core = { path = "crates/murmur-core" }
+murmur-mcp = { path = "crates/murmur-mcp" }
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 toml = "0.8"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

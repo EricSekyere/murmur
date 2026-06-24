@@ -4,6 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Murmur</title>
+  <link rel="stylesheet" href="fonts.css">
   <link rel="stylesheet" href="style.css">
   <link rel="stylesheet" href="components.css">
   <link rel="stylesheet" href="dashboard.css">
@@ -15,7 +16,7 @@
     <div class="ambient" aria-hidden="true"></div>
 
     <!-- Model Banner: shown when model not ready -->
-    <div id="model-banner" class="banner banner--warn" hidden>
+    <div id="model-banner" class="banner banner--warn" role="status" aria-live="polite" hidden>
       <span class="banner__text" id="model-banner-text">
         Downloading model...
       </span>
@@ -23,10 +24,11 @@
         <div id="model-progress-fill" class="progress-bar__fill"></div>
       </div>
       <span id="model-progress-pct" class="banner__pct" hidden>0%</span>
+      <button id="model-retry" class="btn-small" type="button" hidden>Retry</button>
     </div>
 
     <!-- Error Banner: shown on start/stop failures -->
-    <div id="error-banner" class="banner banner--error" hidden>
+    <div id="error-banner" class="banner banner--error" role="alert" hidden>
       <span class="banner__text" id="error-message"></span>
       <button class="banner__dismiss" id="dismiss-error" aria-label="Dismiss error">&#215;</button>
     </div>
@@ -44,6 +46,9 @@
       <!-- Sidebar -->
       <aside class="sidebar">
         <div class="header__brand">
+          <span class="brandmark" aria-hidden="true">
+            <span class="bm-ring"></span><span class="bm-ring"></span><span class="bm-core"></span>
+          </span>
           <h1 class="logo">murmur</h1>
           <span id="dev-mode-badge" class="badge badge--dev" hidden>DEV</span>
         </div>
@@ -80,13 +85,21 @@
             </svg>
             <span>Diagnostics</span>
           </button>
+          <button class="nav__item" data-view="help">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <circle cx="12" cy="12" r="10"/>
+              <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/>
+              <line x1="12" y1="17" x2="12.01" y2="17"/>
+            </svg>
+            <span>Help</span>
+          </button>
         </nav>
 
         <!-- Footer chips -->
         <footer>
-          <span id="hotkey-display" class="hotkey-badge">ctrl+q</span>
+          <span id="hotkey-display" class="hotkey-badge">ctrl+shift+space</span>
           <span id="output-mode-display" class="output-mode-badge">keyboard</span>
-          <span id="model-info" class="model-info">Model: small.en</span>
+          <span id="model-info" class="model-info">Model: Parakeet TDT 0.6B v2</span>
         </footer>
       </aside>
 
@@ -116,6 +129,16 @@
               </button>
             </div>
 
+            <!-- Design v2 hub copy (decorative/static; no JS binds to these) -->
+            <h2 class="hero__heading">Hold to speak</h2>
+            <p class="hero__status" aria-hidden="true">
+              Idle · ready when you are
+              <span class="hero__level"><i></i><i></i><i></i><i></i><i></i></span>
+            </p>
+            <span class="hero__chip" aria-hidden="true">
+              <span class="hero__chip-dot"></span> on-device · private · 99 languages
+            </span>
+
             <!-- Voice Bars Visualization -->
             <div id="visualization" hidden>
               <div class="voice-bars" id="voice-bars"></div>
@@ -133,6 +156,17 @@
               <span id="word-count" hidden>0 words</span>
               <span id="proc-time" hidden></span>
             </div>
+
+            <button id="find-pill-btn" class="find-pill-btn" type="button" title="Flash the floating pill so you can find it on screen">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <circle cx="12" cy="12" r="3"/>
+                <line x1="12" y1="2" x2="12" y2="5"/>
+                <line x1="12" y1="19" x2="12" y2="22"/>
+                <line x1="2" y1="12" x2="5" y2="12"/>
+                <line x1="19" y1="12" x2="22" y2="12"/>
+              </svg>
+              Find pill
+            </button>
           </section>
 
           <!-- Transcription -->
@@ -163,7 +197,14 @@
             <div class="section-header section-header--panel">
               <h2>History</h2>
             </div>
-            <ul id="history-list" class="history-list" hidden></ul>
+            <div class="history-controls">
+              <span class="history-search-field">
+                <span class="history-search-field__icon" aria-hidden="true"></span>
+                <input id="history-search" class="history-search" type="search" placeholder="Search transcripts, apps…" aria-label="Search history" autocomplete="off">
+              </span>
+              <button id="history-clear" class="btn-small" aria-label="Clear all history">Clear</button>
+            </div>
+            <ul id="history-list" class="history-list"></ul>
           </section>
         </div>
 
@@ -178,6 +219,36 @@
               </svg>
             </button>
             <div id="analytics-panel" class="analytics-panel" hidden>
+              <div class="analytics-group">
+                <h3 class="analytics-group__title">Usage (all time)</h3>
+                <div class="analytics-grid">
+                  <div class="stat-card">
+                    <span class="stat-card__value" id="usage-total-words">0</span>
+                    <span class="stat-card__label">Words</span>
+                  </div>
+                  <div class="stat-card">
+                    <span class="stat-card__value" id="usage-week-words">0</span>
+                    <span class="stat-card__label">This week</span>
+                  </div>
+                  <div class="stat-card">
+                    <span class="stat-card__value" id="usage-streak">0</span>
+                    <span class="stat-card__label">Day streak</span>
+                  </div>
+                  <div class="stat-card">
+                    <span class="stat-card__value" id="usage-phrases">0</span>
+                    <span class="stat-card__label">Phrases</span>
+                  </div>
+                </div>
+                <ul class="usage-apps" id="usage-top-apps" aria-label="Top applications"></ul>
+                <!-- Decorative activity texture (design-language ornament; no JS binds to it) -->
+                <div class="usage-spark" aria-hidden="true">
+                  <i style="height:40%"></i><i style="height:62%"></i><i style="height:30%"></i>
+                  <i style="height:75%"></i><i style="height:55%"></i><i style="height:88%"></i>
+                  <i style="height:48%"></i><i style="height:66%"></i><i style="height:92%"></i>
+                  <i style="height:38%"></i><i style="height:70%"></i><i style="height:58%"></i>
+                  <i style="height:80%"></i><i style="height:100%"></i>
+                </div>
+              </div>
               <div class="analytics-group">
                 <h3 class="analytics-group__title">Last Session</h3>
                 <div class="analytics-grid">
@@ -210,6 +281,12 @@
                     <span class="stat-card__value" id="stat-today-sessions">0</span>
                     <span class="stat-card__label">Sessions</span>
                   </div>
+                </div>
+                <!-- Decorative streak grid (design-language ornament; no JS binds to it) -->
+                <div class="usage-streak" aria-hidden="true">
+                  <i class="on"></i><i class="on"></i><i></i><i class="on"></i><i class="hi"></i><i class="on"></i><i class="on"></i>
+                  <i class="on"></i><i class="hi"></i><i class="on"></i><i class="on"></i><i class="on"></i><i></i><i class="on"></i>
+                  <i class="hi"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="hi"></i><i class="on"></i>
                 </div>
               </div>
               <div class="analytics-group">
@@ -279,6 +356,9 @@
                 </div>
               </div>
 
+              <div class="settings-actions">
+                <button id="whats-new-btn" class="btn-small">What's New</button>
+              </div>
               <!-- Hotkey -->
               <div class="settings-group">
                 <div class="settings-row">
@@ -352,6 +432,42 @@
                 </div>
               </div>
 
+              <!-- Speech Language -->
+              <div class="settings-group">
+                <div class="settings-row">
+                  <div class="settings-row__text">
+                    <label class="settings-label" for="language-select">Speech Language</label>
+                    <span class="settings-hint" id="language-hint">Needs the multilingual model (Large v3 Turbo). The English models only do English.</span>
+                  </div>
+                  <select id="language-select" class="settings-select">
+                    <option value="auto">Auto-detect</option>
+                    <option value="en">English</option>
+                    <option value="es">Spanish</option>
+                    <option value="fr">French</option>
+                    <option value="de">German</option>
+                    <option value="it">Italian</option>
+                    <option value="pt">Portuguese</option>
+                    <option value="nl">Dutch</option>
+                    <option value="ru">Russian</option>
+                    <option value="zh">Chinese</option>
+                    <option value="ja">Japanese</option>
+                    <option value="ko">Korean</option>
+                    <option value="ar">Arabic</option>
+                    <option value="hi">Hindi</option>
+                  </select>
+                </div>
+                <div class="settings-row">
+                  <div class="settings-row__text">
+                    <label class="settings-label" for="translate-toggle">Translate to English</label>
+                    <span class="settings-hint">Speak any language, type English. Multilingual model only.</span>
+                  </div>
+                  <label class="toggle-switch">
+                    <input type="checkbox" id="translate-toggle">
+                    <span class="toggle-switch__slider"></span>
+                  </label>
+                </div>
+              </div>
+
               <!-- Audio Device -->
               <div class="settings-group">
                 <div class="settings-row">
@@ -362,6 +478,20 @@
                   <select id="audio-device-select" class="settings-select">
                     <option value="">System Default</option>
                   </select>
+                </div>
+              </div>
+
+              <!-- Mic Sensitivity -->
+              <div class="settings-group">
+                <div class="settings-row">
+                  <div class="settings-row__text">
+                    <label class="settings-label" for="mic-sensitivity-range">Mic Sensitivity</label>
+                    <span class="settings-hint">Higher picks up quieter speech; lower ignores more background noise. Takes effect on your next recording.</span>
+                  </div>
+                  <div class="settings-slider-wrap">
+                    <input type="range" id="mic-sensitivity-range" min="0" max="100" step="5" value="60">
+                    <span id="mic-sensitivity-value" class="settings-slider-val">60%</span>
+                  </div>
                 </div>
               </div>
 
@@ -384,10 +514,10 @@
                 <div class="settings-row">
                   <div class="settings-row__text">
                     <label class="settings-label" for="session-timeout-range">Session Timeout</label>
-                    <span class="settings-hint">Total silence before session auto-stops.</span>
+                    <span class="settings-hint">Total silence before a session auto-stops. Set to 0 to keep listening until you stop it yourself (hands-free).</span>
                   </div>
                   <div class="settings-slider-wrap">
-                    <input type="range" id="session-timeout-range" min="5" max="120" step="5" value="30">
+                    <input type="range" id="session-timeout-range" min="0" max="120" step="5" value="30">
                     <span id="session-timeout-value" class="settings-slider-val">30s</span>
                   </div>
                 </div>
@@ -435,15 +565,123 @@
                 </div>
               </div>
 
+              <!-- Save History -->
+              <div class="settings-group">
+                <div class="settings-row">
+                  <div class="settings-row__text">
+                    <label class="settings-label" for="save-history-toggle">Save History</label>
+                    <span class="settings-hint">Keep an on-device, searchable log of dictated phrases. Turn off to store nothing on disk.</span>
+                  </div>
+                  <label class="toggle-switch">
+                    <input type="checkbox" id="save-history-toggle" checked>
+                    <span class="toggle-switch__slider"></span>
+                  </label>
+                </div>
+              </div>
+
+              <!-- Clean up speech -->
+              <div class="settings-group">
+                <div class="settings-row">
+                  <div class="settings-row__text">
+                    <label class="settings-label" for="clean-speech-toggle">Clean up speech</label>
+                    <span class="settings-hint">Strip "um"/"uh" disfluencies and format spoken number lists in ordinary dictation. Turn off for verbatim text. Developer mode always cleans up.</span>
+                  </div>
+                  <label class="toggle-switch">
+                    <input type="checkbox" id="clean-speech-toggle" checked>
+                    <span class="toggle-switch__slider"></span>
+                  </label>
+                </div>
+              </div>
+
+              <!-- Live Preview -->
+              <div class="settings-group">
+                <div class="settings-row">
+                  <div class="settings-row__text">
+                    <label class="settings-label" for="live-preview-toggle">Live Preview</label>
+                    <span class="settings-hint">Show words on screen as you speak, before the phrase is final. Turn off for the lowest latency.</span>
+                  </div>
+                  <label class="toggle-switch">
+                    <input type="checkbox" id="live-preview-toggle" checked>
+                    <span class="toggle-switch__slider"></span>
+                  </label>
+                </div>
+                <div class="settings-row">
+                  <div class="settings-row__text">
+                    <label class="settings-label" for="caption-position-select">Live caption position</label>
+                    <span class="settings-hint">Where the words appear as you speak: under the floating pill, or near the bottom of whatever window you are dictating into.</span>
+                  </div>
+                  <select id="caption-position-select" class="settings-select">
+                    <option value="pill">Below the pill</option>
+                    <option value="window">Near the active window</option>
+                  </select>
+                </div>
+              </div>
+
               <!-- Personal Dictionary -->
               <div class="settings-group">
                 <div class="settings-row__text">
                   <label class="settings-label" for="vocabulary-input">Personal Dictionary</label>
                   <span class="settings-hint">Names, jargon, or terms the model gets wrong. One per line — they bias transcription toward correct spelling.</span>
                 </div>
-                <textarea id="vocabulary-input" class="settings-textarea" rows="4" placeholder="GitHub&#10;Kubernetes&#10;Eric Sekyere"></textarea>
+                <textarea id="vocabulary-input" class="settings-textarea" rows="4" placeholder="GitHub&#10;Kubernetes&#10;PostgreSQL"></textarea>
                 <div class="settings-actions">
                   <button id="vocabulary-save" class="btn-small" disabled>Save Dictionary</button>
+                  <button id="vocabulary-learn" class="btn-small" title="Scan your history for technical terms you've dictated repeatedly and add them">Learn from history</button>
+                </div>
+              </div>
+
+              <!-- Codebase Vocabulary -->
+              <div class="settings-group">
+                <div class="settings-row">
+                  <div class="settings-row__text">
+                    <label class="settings-label" for="codebase-vocab-toggle">Codebase Vocabulary</label>
+                    <span class="settings-hint">Scan your project folders and bias transcription toward their identifiers, so symbols like calculateTotalRevenue transcribe correctly. Re-indexes automatically when files change. Whisper models only.</span>
+                  </div>
+                  <label class="toggle-switch">
+                    <input type="checkbox" id="codebase-vocab-toggle">
+                    <span class="toggle-switch__slider"></span>
+                  </label>
+                </div>
+                <div id="codebase-vocab-list" class="folder-list"></div>
+                <div class="settings-actions">
+                  <button id="codebase-vocab-folder" class="btn-small">Add Folder…</button>
+                </div>
+                <span class="settings-hint" id="codebase-vocab-status">No project folders selected.</span>
+              </div>
+
+              <!-- Editor integration (MCP) -->
+              <div class="settings-group">
+                <div class="settings-row__text">
+                  <label class="settings-label">Connect to Cursor / Claude</label>
+                  <span class="settings-hint">Let Claude and Cursor read your recent dictation through Murmur's built-in MCP server. One click adds it to any installed editor; restart the editor afterward to finish. Everything stays on your machine.</span>
+                </div>
+                <div class="settings-actions">
+                  <button id="mcp-install-btn" class="btn-small">Connect editors</button>
+                </div>
+                <span class="settings-hint" id="mcp-install-status"></span>
+              </div>
+
+              <!-- Text Snippets -->
+              <div class="settings-group">
+                <div class="settings-row__text">
+                  <label class="settings-label" for="snippets-input">Text Snippets</label>
+                  <span class="settings-hint">Say the trigger, type the expansion. One per line as <code>trigger = expansion</code>. Triggers fire only as a whole phrase.</span>
+                </div>
+                <textarea id="snippets-input" class="settings-textarea" rows="4" placeholder="my email = you@example.com&#10;sign off = Best regards,&#10;ship it = LGTM, merging now."></textarea>
+                <div class="settings-actions">
+                  <button id="snippets-save" class="btn-small" disabled>Save Snippets</button>
+                </div>
+              </div>
+
+              <!-- App Profiles -->
+              <div class="settings-group">
+                <div class="settings-row__text">
+                  <label class="settings-label" for="app-profiles-input">App Profiles</label>
+                  <span class="settings-hint">Override settings per app. One per line as <code>app = options</code>. Options: <code>dev</code> / <code>plain</code> for developer mode, and <code>auto</code> / <code>keyboard</code> / <code>clipboard_paste</code> / <code>clipboard</code> for output. The app is matched against the focused window's process name.</span>
+                </div>
+                <textarea id="app-profiles-input" class="settings-textarea" rows="4" placeholder="code = dev&#10;windowsterminal = dev, clipboard&#10;slack = plain"></textarea>
+                <div class="settings-actions">
+                  <button id="app-profiles-save" class="btn-small" disabled>Save Profiles</button>
                 </div>
               </div>
 
@@ -491,6 +729,26 @@
                   <div class="stat-card">
                     <span class="stat-card__value" id="diag-peak-rms">0.0000</span>
                     <span class="stat-card__label">Peak RMS</span>
+                  </div>
+                </div>
+                <!-- Decorative input-level meter + gauges (design-language ornament; no JS binds to it) -->
+                <div class="diag-meter" aria-hidden="true">
+                  <i style="animation-delay:0s"></i><i style="animation-delay:.1s"></i><i style="animation-delay:.05s"></i>
+                  <i style="animation-delay:.2s"></i><i style="animation-delay:.12s"></i><i style="animation-delay:.28s"></i>
+                  <i style="animation-delay:.07s"></i><i style="animation-delay:.18s"></i><i style="animation-delay:.24s"></i>
+                  <i style="animation-delay:.04s"></i><i style="animation-delay:.16s"></i><i style="animation-delay:.3s"></i>
+                  <i style="animation-delay:.09s"></i><i style="animation-delay:.21s"></i><i style="animation-delay:.13s"></i>
+                  <i style="animation-delay:.26s"></i><i style="animation-delay:.02s"></i><i style="animation-delay:.19s"></i>
+                  <i style="animation-delay:.11s"></i><i style="animation-delay:.27s"></i>
+                </div>
+                <div class="diag-gauges" aria-hidden="true">
+                  <div class="diag-gauge">
+                    <div class="diag-gauge__label"><span>signal-to-noise</span><span class="diag-gauge__ok">good · 32 dB</span></div>
+                    <div class="diag-gauge__track"><i class="diag-gauge__fill--ok" style="width:78%"></i></div>
+                  </div>
+                  <div class="diag-gauge">
+                    <div class="diag-gauge__label"><span>model latency</span><span class="diag-gauge__warn">340 ms</span></div>
+                    <div class="diag-gauge__track"><i class="diag-gauge__fill--warn" style="width:52%"></i></div>
                   </div>
                 </div>
               </div>
@@ -543,6 +801,21 @@
           </section>
         </div>
 
+        <!-- ── Help View ── -->
+        <div class="view" id="view-help">
+          <div class="view-header"><h2>Help</h2></div>
+          <section class="help-search">
+            <span class="help-search-field">
+              <span class="help-search-field__icon" aria-hidden="true"></span>
+              <input id="help-search" class="help-search-input" type="search" placeholder="Ask a question about Murmur…" aria-label="Search help" autocomplete="off">
+            </span>
+            <p class="help-hint" id="help-hint">Tip: you can dictate into this box too — start recording and ask out loud.</p>
+            <p class="help-preparing" id="help-preparing" hidden>Preparing help search…</p>
+            <ul id="help-results" class="help-results" aria-live="polite"></ul>
+            <p class="help-empty" id="help-empty">Ask a question about configuring or using Murmur, like "how do I change the hotkey" or "is my voice sent to the cloud".</p>
+          </section>
+        </div>
+
       </main>
     </div>
 
@@ -552,6 +825,13 @@
     <!-- First-run onboarding overlay -->
     <div id="onboarding" class="onboarding" hidden>
       <div class="onboarding__card">
+        <!-- Decorative ripple brand mark (purely visual; no JS binds to it) -->
+        <div class="onboarding__mark" aria-hidden="true">
+          <span class="onboarding__mark-ring"></span>
+          <span class="onboarding__mark-ring"></span>
+          <span class="onboarding__mark-ring"></span>
+          <span class="onboarding__mark-core"></span>
+        </div>
         <div class="onboarding__steps">
           <span class="onboarding__dot onboarding__dot--active" data-step="0"></span>
           <span class="onboarding__dot" data-step="1"></span>
@@ -564,7 +844,7 @@
           <p class="onboarding__text">Private, on-device dictation. Speak and your words appear in whatever app you're using — nothing leaves your machine.</p>
           <ul class="onboarding__list">
             <li><kbd>Double-tap Right Ctrl</kbd> to start and stop</li>
-            <li>Or press your hotkey <kbd id="onboarding-hotkey">ctrl+q</kbd></li>
+            <li>Or press your hotkey <kbd id="onboarding-hotkey">ctrl+shift+space</kbd></li>
             <li>Say <em>"new line"</em>, <em>"new paragraph"</em>, or <em>"scratch that"</em> while dictating</li>
           </ul>
           <div class="onboarding__actions">
@@ -610,6 +890,19 @@
       </div>
     </div>
 
+    <!-- What's New overlay -->
+    <div id="whats-new" class="whatsnew" hidden>
+      <div class="whatsnew__card">
+        <button class="whatsnew__close" id="whats-new-close" aria-label="Close">×</button>
+        <h2 class="whatsnew__title">What's New</h2>
+        <p class="whatsnew__sub" id="whats-new-version"></p>
+        <div class="whatsnew__body" id="whats-new-body"></div>
+        <div class="whatsnew__actions">
+          <button class="model-card__btn" id="whats-new-ok">Got it</button>
+        </div>
+      </div>
+    </div>
+
   </div>
   <script src="js/dom.js"></script>
   <script src="js/ui.js"></script>
@@ -617,7 +910,9 @@
   <script src="js/transcription.js"></script>
   <script src="js/settings.js"></script>
   <script src="js/analytics.js"></script>
+  <script src="js/help.js"></script>
   <script src="js/updater.js"></script>
+  <script src="js/whatsnew.js"></script>
   <script src="js/main.js"></script>
   <script src="js/dashboard.js"></script>
   <script src="js/onboarding.js"></script>

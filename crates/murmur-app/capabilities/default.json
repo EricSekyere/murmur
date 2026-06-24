@@ -2,7 +2,7 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "main-capability",
   "description": "Capability for the main window",
-  "windows": ["main", "widget"],
+  "windows": ["main", "widget", "caption"],
   "permissions": [
     "core:path:default",
     "core:event:default",
@@ -17,6 +17,7 @@
     "global-shortcut:allow-unregister",
     "global-shortcut:allow-unregister-all",
     "core:window:allow-start-dragging",
+    "core:window:allow-set-size",
     "app:default",
     "updater:default",
     "process:default",
