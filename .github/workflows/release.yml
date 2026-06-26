@@ -85,6 +85,37 @@ jobs:
         with:
           workspaces: ". -> target"
 
+      # Windows Authenticode signing via Azure Trusted Signing. Inert until the
+      # signing secrets exist: with AZURE_TRUSTED_SIGNING_ENDPOINT unset this is a
+      # no-op (empty `args`, the install step skipped) and the build ships
+      # unsigned exactly as before. Once the AZURE_* secrets are set, Tauri signs
+      # the .exe and the NSIS installer during bundling, which clears the
+      # SmartScreen "unknown publisher" warning. For an EV cert + signtool
+      # instead, swap the install step and the signCommand.
+      - name: Configure Windows code signing (Trusted Signing, if secrets present)
+        id: winsign
+        shell: bash
+        env:
+          TS_ENDPOINT: ${{ secrets.AZURE_TRUSTED_SIGNING_ENDPOINT }}
+          TS_ACCOUNT: ${{ secrets.AZURE_TRUSTED_SIGNING_ACCOUNT }}
+          TS_PROFILE: ${{ secrets.AZURE_TRUSTED_SIGNING_PROFILE }}
+        run: |
+          if [ -z "$TS_ENDPOINT" ]; then
+            echo "tauri_args=" >> "$GITHUB_OUTPUT"
+            echo "::notice::Windows code signing skipped (no AZURE_TRUSTED_SIGNING_* secrets); shipping unsigned."
+            exit 0
+          fi
+          # Tauri merges this fragment over tauri.conf.json and runs the command
+          # on each artifact, replacing %1 with the file path.
+          printf '{ "bundle": { "windows": { "signCommand": "trusted-signing-cli -e %s -a %s -c %s %%1" } } }' \
+            "$TS_ENDPOINT" "$TS_ACCOUNT" "$TS_PROFILE" > crates/murmur-app/.winsign.conf.json
+          echo "tauri_args=--config .winsign.conf.json" >> "$GITHUB_OUTPUT"
+          echo "::notice::Windows code signing enabled via Azure Trusted Signing."
+
+      - name: Install trusted-signing-cli
+        if: steps.winsign.outputs.tauri_args != ''
+        run: cargo install trusted-signing-cli --locked
+
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -93,10 +124,17 @@ jobs:
           # (it resolves to an empty string, which the signer accepts).
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          # Azure auth for trusted-signing-cli (DefaultAzureCredential). Absent =>
+          # the signCommand never runs, so these have no effect.
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
         with:
           projectPath: crates/murmur-app
           tagName: v${{ needs.prepare.outputs.version }}
           releaseName: "Murmur v${{ needs.prepare.outputs.version }}"
+          # Empty unless Trusted Signing secrets are configured (see the step above).
+          args: ${{ steps.winsign.outputs.tauri_args }}
           releaseBody: |
             Fast, private, on-device dictation for Windows and Linux.
 
