@@ -2,12 +2,14 @@
 // and can be reopened from the Settings "What's New" button.
 
 const WHATS_NEW = [
-  ['Codebase vocabulary',
-    "Point Murmur at your project folders and it learns your identifiers, so symbols like calculateTotalRevenue transcribe correctly. Add several folders; it re-indexes automatically when your code changes. Settings → Codebase Vocabulary."],
-  ['Echo cancellation',
-    "The microphone no longer picks up audio from your own speakers — videos, music, and calls are filtered out. On by default."],
-  ['Linux builds',
-    "Murmur now ships as a .deb and an AppImage, and types directly into apps on X11."],
+  ['Ask for help by voice',
+    "A new Help tab answers questions about Murmur. Type or dictate what you need and it finds the most relevant section instantly, entirely on-device and offline. Open it from the Help tab."],
+  ['A fresh new look',
+    "The app and the floating pill share a redesigned interface, and the dashboard now draws live charts of your words per day, your day streak, and your top apps."],
+  ['Lower memory use',
+    "Murmur now hands inference memory back to your system between phrases instead of holding it for the whole session, so it sits much lighter in the background."],
+  ['Reliable echo cancellation',
+    "On audio setups where echo cancellation could cut the microphone to silence, Murmur detects it and falls back to the raw mic, so dictation always works. Toggle it in Settings."],
 ];
 
 function renderWhatsNew() {
