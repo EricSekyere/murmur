@@ -1,28 +1,31 @@
-// What's New: highlights of recent features. Auto-opens once per app version,
-// and can be reopened from the Settings "What's New" button.
+// What's New: highlights of the current release. Auto-opens once per app
+// version, and can be reopened from the Settings "What's New" button.
+//
+// The highlights come from js/whatsnew.data.js (window.WHATS_NEW_DATA), which
+// the release build regenerates from the release's commits (see
+// scripts/release.sh). This file only renders them.
 
-const WHATS_NEW = [
-  ['Ask for help by voice',
-    "A new Help tab answers questions about Murmur. Type or dictate what you need and it finds the most relevant section instantly, entirely on-device and offline. Open it from the Help tab."],
-  ['A fresh new look',
-    "The app and the floating pill share a redesigned interface, and the dashboard now draws live charts of your words per day, your day streak, and your top apps."],
-  ['Lower memory use',
-    "Murmur now hands inference memory back to your system between phrases instead of holding it for the whole session, so it sits much lighter in the background."],
-  ['Reliable echo cancellation',
-    "On audio setups where echo cancellation could cut the microphone to silence, Murmur detects it and falls back to the raw mic, so dictation always works. Toggle it in Settings."],
-];
+function whatsNewItems() {
+  const data = window.WHATS_NEW_DATA;
+  if (data && Array.isArray(data.items) && data.items.length) return data.items;
+  // Fallback when the generated data file is absent (e.g. a dev build).
+  return [{ title: 'Thanks for using Murmur', body: 'See the release notes on GitHub for the full list of changes.' }];
+}
 
 function renderWhatsNew() {
   whatsNewBody.innerHTML = '';
-  WHATS_NEW.forEach(([title, desc]) => {
+  whatsNewItems().forEach((item) => {
+    const title = item.title || '';
+    const body = item.body || '';
     const row = document.createElement('div');
     row.className = 'whatsnew__item';
     const bullet = document.createElement('span');
     bullet.textContent = '›';
     const text = document.createElement('span');
     const b = document.createElement('b');
-    b.textContent = `${title}. `;
-    text.append(b, document.createTextNode(desc));
+    b.textContent = body ? `${title}. ` : title;
+    text.append(b);
+    if (body) text.append(document.createTextNode(body));
     row.append(bullet, text);
     whatsNewBody.appendChild(row);
   });

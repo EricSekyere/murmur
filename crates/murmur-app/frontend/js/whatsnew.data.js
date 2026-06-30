@@ -1,0 +1,17 @@
+// What's New highlights for the in-app dialog.
+//
+// The release build regenerates this file from the release's Conventional
+// Commits (see scripts/release.sh), so it always reflects the shipped version
+// with no hand-editing. This committed copy is the development fallback; to
+// change what users see, write a user-facing feat/perf commit subject, not this
+// file. whatsnew.js reads window.WHATS_NEW_DATA.items ({title, body}; body
+// optional).
+window.WHATS_NEW_DATA = {
+  version: "0.5.x",
+  items: [
+    { title: "Ask for help by voice", body: "A new Help tab answers questions about Murmur. Type or dictate what you need and it finds the most relevant section instantly, entirely on-device and offline." },
+    { title: "A fresh new look", body: "The app and the floating pill share a redesigned interface, and the dashboard now draws live charts of your words per day, your day streak, and your top apps." },
+    { title: "Lower memory use", body: "Murmur hands inference memory back to your system between phrases instead of holding it for the whole session, so it sits much lighter in the background." },
+    { title: "Reliable echo cancellation", body: "On audio setups where echo cancellation could cut the microphone to silence, Murmur detects it and falls back to the raw mic, so dictation always works." }
+  ]
+};
