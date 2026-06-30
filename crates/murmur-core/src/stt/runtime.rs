@@ -286,3 +286,28 @@ pub fn init_ort() -> Result<()> {
         }
     }
 }
+
+/// Apply the low-memory ORT session options shared by every in-process model
+/// (Parakeet, Silero VAD, the Help embedder). Call on a fresh builder before
+/// `commit_*`.
+///
+/// Disables two ORT defaults that bloat the resident set of a long-lived app
+/// running short, bursty inferences:
+/// - the CPU memory **arena**, which keeps each session's peak inference
+///   activations reserved for the session's whole lifetime and never returns
+///   them to the OS, so the app stays pinned at its busiest size even while
+///   idle between utterances;
+/// - the memory-**pattern** planner, which pre-reserves one contiguous
+///   activation buffer sized for static shapes — wasted on our
+///   variable-length audio inputs.
+///
+/// The trade is a little more per-inference allocation for a markedly smaller
+/// idle resident set, which suits a dictation tool that sits idle between
+/// phrases.
+pub fn apply_low_memory(
+    builder: ort::session::builder::SessionBuilder,
+) -> ort::Result<ort::session::builder::SessionBuilder> {
+    builder
+        .with_memory_pattern(false)?
+        .with_execution_providers([ort::ep::CPU::default().with_arena_allocator(false).build()])
+}

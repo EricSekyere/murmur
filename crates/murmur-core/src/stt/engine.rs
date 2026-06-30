@@ -175,7 +175,16 @@ impl SttEngine {
             // provider (DirectML) is a net loss here — its first inference spends
             // ~40s compiling shaders every launch, and the TDT/LSTM decoder
             // ping-pongs tensors host<->device. Use CPU on every platform.
-            let config: Option<parakeet_rs::ExecutionConfig> = None;
+            //
+            // Hook the session builder to drop ORT's CPU memory arena and
+            // memory-pattern planner: Parakeet's encoder/decoder are the app's
+            // largest consumers, and the arena otherwise pins their peak
+            // activations in the resident set for the whole run (see
+            // `runtime::apply_low_memory`).
+            let config = Some(
+                parakeet_rs::ExecutionConfig::default()
+                    .with_custom_configure(super::runtime::apply_low_memory),
+            );
 
             tracing::info!("Loading Parakeet model from {}...", model_dir);
 
