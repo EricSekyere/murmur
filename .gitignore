@@ -40,3 +40,6 @@ crates/murmur-app/.tauri-signing-key.key
 
 UPDATER_SETUP.local.md
 crates/murmur-app/.tauri-signing-key.key.pub
+
+# CI-generated Windows signing config fragment (Trusted Signing)
+crates/murmur-app/.winsign.conf.json

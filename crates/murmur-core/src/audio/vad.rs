@@ -79,8 +79,11 @@ impl VoiceActivityDetector {
             crate::stt::runtime::init_ort()
                 .map_err(|e| anyhow::anyhow!("ORT init failed for VAD: {}", e))?;
 
-            let session = ort::session::Session::builder()
-                .map_err(|e| anyhow::anyhow!("Failed to build VAD session: {}", e))?
+            let builder = ort::session::Session::builder()
+                .map_err(|e| anyhow::anyhow!("Failed to build VAD session: {}", e))?;
+            let builder = crate::stt::runtime::apply_low_memory(builder)
+                .map_err(|e| anyhow::anyhow!("Failed to configure VAD session: {}", e))?;
+            let session = builder
                 .commit_from_file(model_path)
                 .map_err(|e| anyhow::anyhow!("Failed to load VAD model: {}", e))?;
 
