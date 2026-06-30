@@ -79,8 +79,10 @@ impl OnnxEmbedder {
         let path = model_path()?;
         crate::stt::runtime::init_ort()
             .map_err(|e| anyhow::anyhow!("ORT init failed for Help embedder: {e}"))?;
-        let session = Session::builder()
-            .context("build embedder session")?
+        let builder = Session::builder().context("build embedder session")?;
+        let builder =
+            crate::stt::runtime::apply_low_memory(builder).context("configure embedder session")?;
+        let session = builder
             .commit_from_file(&path)
             .with_context(|| format!("load embedder model from {}", path.display()))?;
         let tokenizer = Tokenizer::from_bytes(include_bytes!("model/tokenizer.json"))
