@@ -3,8 +3,8 @@
 ## 1.0 Executive Summary
 
 **Product Name:** Murmur
-**Status:** Shipping on Windows (v0.3.6). See Section 1.5 for what is built versus still planned.
-**Date:** Originally drafted February 18, 2026; last reviewed June 2026.
+**Status:** Shipping on Windows and Linux (v0.5.1). See Section 1.5 for what is built versus still planned.
+**Date:** Originally drafted February 18, 2026; last reviewed July 2026.
 
 **Objective:** Build an open-source, privacy-first, cross-platform voice-to-text desktop tool designed for developers and general users. Murmur will accurately transcribe technical jargon, integrate natively with AI coding agents (Cursor, Claude Code, Gemini, etc.), map spoken directory references to real file paths, and work equally well for non-coding tasks like documentation, email, and chat.
 
@@ -23,11 +23,11 @@ Murmur will enable developers to compose prompts for AI agents, write documentat
 
 ---
 
-## 1.5 Current Implementation Status (v0.3.6)
+## 1.5 Current Implementation Status (v0.5.1)
 
 This PRD was written as a forward-looking plan. The product has since shipped on Windows, but it took a different path than the original phases: dictation quality and live-preview UX were prioritized, while the heavier "code intelligence" and per-agent integration epics have not been built. This section is the source of truth for what exists today; the phase plans further down are kept for historical context and remaining direction.
 
-### Shipped (Windows, v0.3.6)
+### Shipped (Windows + Linux, v0.5.1)
 - **Dictation.** Global-hotkey activation with toggle, push-to-talk, and double-tap modes. CPAL audio capture with Silero VAD (via ONNX Runtime).
 - **STT.** whisper-rs (whisper.cpp) with base.en, small.en, medium.en, and large-v3-turbo, plus NVIDIA Parakeet TDT 0.6B v2 (ONNX). Default is small.en. GPU acceleration via CUDA on Windows; model switching in settings.
 - **Output.** Direct Unicode typing into the focused application (Windows SendInput), with clipboard-and-paste available as an explicit output mode. The default path never routes through the clipboard, so prior clipboard contents cannot leak.
@@ -40,9 +40,11 @@ This PRD was written as a forward-looking plan. The product has since shipped on
 - **App shell.** Tauri v2 system tray, dashboard, and first-run onboarding; sound feedback; TOML config with atomic writes, validation, corrupt-config recovery, and migration from the former "Voitex" name.
 - **Distribution.** Signed auto-update (tauri-plugin-updater, minisign) and a GitHub release pipeline (tauri-action) producing the Windows build.
 
-### Recently built (on the `feat/codebase-vocabulary` branch, pending release)
-- **Codebase-derived vocabulary** (Section 5.6). A gitignore-aware indexer extracts identifiers from the active project(s) and biases the Whisper decoder toward them, so symbols like `IndexerSettings` transcribe correctly. Extraction is AST-accurate via tree-sitter (Rust, Python, JS, TS/TSX, Go, Java) with a lexical regex fallback for other languages. Multiple project roots, a file watcher for live re-index, a settings UI, and the `murmur index` CLI are wired in.
-- **Claude/Cursor MCP server** (`murmur mcp`, Section 5.4 / Epic 3.3). A stdio Model Context Protocol server (rmcp) exposes the local transcription history through `get_recent_transcripts` and `search_transcripts` tools. Read-only and fully local: the client spawns the process and talks over stdin/stdout.
+### Shipped since v0.3.6
+- **Codebase-derived vocabulary** (Section 5.6), in the `murmur-core` `indexer`/`treesitter` features. A gitignore-aware indexer extracts identifiers from the active project(s) and biases the Whisper decoder toward them, so symbols like `IndexerSettings` transcribe correctly. Extraction is AST-accurate via tree-sitter (Rust, Python, JS, TS/TSX, Go, Java) with a lexical regex fallback for other languages. Multiple project roots, a file watcher for live re-index, a settings UI, and the `murmur index` CLI are wired in.
+- **Claude/Cursor MCP server** (`murmur mcp`, Section 5.4 / Epic 3.3), now its own `murmur-mcp` crate. A stdio Model Context Protocol server (rmcp) exposes the local transcription history through `get_recent_transcripts` and `search_transcripts` tools. Read-only and fully local: the client spawns the process and talks over stdin/stdout.
+- **Local Help retrieval.** A Help tab answers questions about Murmur by semantic search over bundled help articles via a small on-device ONNX embedder (reusing the ORT runtime the STT path loads). Fully offline.
+- **Usage dashboard and auto-learned dictionary.** A local dashboard charts words-per-day, day streaks, and top apps; corrections feed an auto-learned vocabulary. Lower idle memory: inference arenas are released between phrases.
 
 ### Not yet built (still aspirational in this document)
 - **Directory and path mapping** from spoken references (Section 5.5).
@@ -52,11 +54,11 @@ This PRD was written as a forward-looking plan. The product has since shipped on
 
 ### Platform status
 - **Windows (x64)** is the released, signed, auto-updating platform.
+- **Linux (x64)** ships `.deb` and `.AppImage` bundles from the release pipeline and is compile-gated on every PR (see `.github/workflows/ci.yml`). Not yet signed.
 - **macOS** has platform-conditional code and a build target in the tree but is not yet signed or notarized, so it is not shipped (blocked on an Apple Developer account).
-- **Linux** remains a stretch goal.
 
 ### CLI surface
-`murmur listen`, `murmur config`, and `murmur models` (with stdout and clipboard output). The agent-oriented CLI surface from the plan (mcp-server, websocket) is not implemented.
+`murmur listen`, `murmur config`, `murmur models` (with stdout and clipboard output), `murmur index` (codebase vocabulary), and `murmur mcp` (stdio MCP server, plus `murmur mcp install` to register with Cursor / Claude). The WebSocket agent API from the plan is not implemented.
 
 ---
 
@@ -428,7 +430,7 @@ All dependencies must be compatible with **MIT or Apache 2.0**. No GPL dependenc
 - Transcription history (last 20 entries)
 - **Deliverable:** Polished tray app users can interact with
 
-**Phase 2 Exit Criteria:** (status as of v0.3.6)
+**Phase 2 Exit Criteria:** (status as of v0.5.1)
 - [x] Voice commands work reliably
 - [x] Custom vocabulary from the codebase: tree-sitter (with lexical fallback) auto-extraction, on top of the manual user list
 - [x] Project file index built and kept up to date (gitignore-aware walk + notify file watcher, multiple roots)
@@ -523,7 +525,7 @@ All dependencies must be compatible with **MIT or Apache 2.0**. No GPL dependenc
 - GitHub repository setup with CI/CD (cross-platform builds)
 - **Deliverable:** Ready for open-source launch
 
-**Phase 4 Exit Criteria:** (status as of v0.3.6)
+**Phase 4 Exit Criteria:** (status as of v0.5.1)
 - [~] Streaming transcription and GPU acceleration shipped (CUDA on Windows); Apple Silicon latency not yet measured or shipped
 - [~] Installer and auto-update shipped for Windows; macOS installer pending signing/notarization
 - [~] Documentation in progress (README and release notes; full user/developer docs partial)
