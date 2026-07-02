@@ -234,8 +234,7 @@ fn extract_dll(archive_bytes: &[u8], dest_dir: &Path) -> Result<()> {
             let dest = dest_dir.join(DLL_FILENAME);
             let mut out = std::fs::File::create(&dest)
                 .with_context(|| format!("Failed to create {}", dest.display()))?;
-            std::io::copy(&mut entry, &mut out)
-                .context("Failed to extract DLL from archive")?;
+            std::io::copy(&mut entry, &mut out).context("Failed to extract DLL from archive")?;
             tracing::info!("Extracted {}", path.display());
             return Ok(());
         }
