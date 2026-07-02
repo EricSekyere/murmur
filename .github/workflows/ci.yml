@@ -1,0 +1,136 @@
+name: CI
+
+# Enforces the quality bar from CLAUDE.md on every push and PR: formatting,
+# clippy (-D warnings), tests, a feature-gate regression check, an advisory
+# audit, and a license/ban gate. Runs on the two shipping platforms so a
+# Windows- or Linux-breaking change is caught here, not at release time.
+on:
+  push:
+    branches: [main, production]
+  pull_request:
+  workflow_dispatch:
+
+# A newer push to the same ref supersedes an in-flight run.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  fmt:
+    name: Format
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --all --check
+
+  # Feature-gate regression check on the core library. Cheap: with every
+  # optional feature off there is no cpal/enigo/whisper/ORT to build, so this
+  # needs no native toolchain. Guards the "compiles with --no-default-features"
+  # invariant that CLAUDE.md's test matrix requires.
+  feature-gates:
+    name: Feature gates (core, no-default-features)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Clippy (no default features)
+        run: cargo clippy -p murmur-core --no-default-features --all-targets -- -D warnings
+      - name: Test (no default features)
+        run: cargo test -p murmur-core --no-default-features
+
+  # Full-feature clippy + tests on both shipping platforms. The app crate's
+  # default feature set is `full` (audio + stt + vad + parakeet + keyboard +
+  # indexer + treesitter + help), so a plain --workspace build exercises every
+  # non-GPU feature-gated path. We deliberately do NOT use --all-features: it
+  # would enable `cuda`, which needs a CUDA toolkit that hosted runners lack.
+  build-and-test:
+    name: Build & test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, windows-2022]
+    runs-on: ${{ matrix.os }}
+    env:
+      # Windows: setting CMAKE_GENERATOR to any value stops cmake-rs from
+      # stripping /O2 from whisper.cpp; Ninja avoids CMake's VS-instance
+      # detection failing on hosted runners. AVX2 covers every CPU since ~2013.
+      CMAKE_GENERATOR: Ninja
+      CFLAGS: /DNDEBUG /arch:AVX2
+      CXXFLAGS: /DNDEBUG /arch:AVX2
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target"
+
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev \
+            librsvg2-dev libasound2-dev libxdo-dev \
+            libx11-dev libxtst-dev libxi-dev libxcb1-dev \
+            cmake clang libclang-dev pkg-config
+
+      # whisper-rs uses bindgen (libclang); the runner usually ships LLVM, but
+      # install it if missing and export the path so the build never fails on
+      # "libclang.dll not found".
+      - name: Ensure LLVM/libclang (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "C:\Program Files\LLVM\bin\libclang.dll")) {
+            choco install llvm --no-progress -y
+          }
+          "LIBCLANG_PATH=C:\Program Files\LLVM\bin" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      # Put cl.exe and the MSVC headers/libs on PATH for the Ninja build.
+      - name: Set up MSVC environment (Windows)
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Ensure Ninja (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          if (-not (Get-Command ninja -ErrorAction SilentlyContinue)) {
+            choco install ninja --no-progress -y
+          }
+
+      - name: Clippy (full features)
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Test (full features)
+        run: cargo test --workspace
+
+  # Advisory + license + ban gate via cargo-deny (deny.toml). Its advisory check
+  # queries the same RustSec database as `cargo audit`, so this satisfies the
+  # audit requirement with a single, centrally-documented ignore-list; the
+  # license check mechanizes the MIT/Apache-only, no-GPL rule.
+  deny:
+    name: Advisory, license & ban gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check advisories bans licenses sources
