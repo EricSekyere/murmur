@@ -33,10 +33,10 @@ jobs:
           # the last release.
           fetch-depth: 0
 
-      - name: Derive version and notes from Conventional Commits
+      - name: Derive version, notes, and What's New from Conventional Commits
         id: calc
         shell: bash
-        run: bash scripts/release.sh release-notes.md
+        run: bash scripts/release.sh release-notes.md whatsnew.data.js
 
       - name: Summarize decision
         shell: bash
@@ -47,12 +47,14 @@ jobs:
             echo "::notice::No releasable commits since the last tag; skipping."
           fi
 
-      - name: Upload release notes
+      - name: Upload release metadata
         if: steps.calc.outputs.release == 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: release-notes
-          path: release-notes.md
+          name: release-meta
+          path: |
+            release-notes.md
+            whatsnew.data.js
           if-no-files-found: error
 
   release-windows:
@@ -148,10 +150,14 @@ jobs:
         if: steps.winsign.outputs.tauri_args != ''
         run: cargo install trusted-signing-cli --locked
 
-      - name: Download release notes
+      - name: Download release metadata
         uses: actions/download-artifact@v4
         with:
-          name: release-notes
+          name: release-meta
+
+      - name: Stage What's New into the frontend
+        shell: bash
+        run: cp whatsnew.data.js crates/murmur-app/frontend/js/whatsnew.data.js
 
       - name: Load release notes
         id: notes
@@ -217,6 +223,15 @@ jobs:
           sed -i -E "0,/^version = \"[0-9]+\.[0-9]+\.[0-9]+\"/s//version = \"$v\"/" Cargo.toml
           sed -i -E "0,/(\"version\"[[:space:]]*:[[:space:]]*\")[0-9]+\.[0-9]+\.[0-9]+/s//\1$v/" crates/murmur-app/tauri.conf.json
           cargo update --workspace
+
+      - name: Download release metadata
+        uses: actions/download-artifact@v4
+        with:
+          name: release-meta
+
+      - name: Stage What's New into the frontend
+        shell: bash
+        run: cp whatsnew.data.js crates/murmur-app/frontend/js/whatsnew.data.js
 
       - uses: tauri-apps/tauri-action@v0
         env:
