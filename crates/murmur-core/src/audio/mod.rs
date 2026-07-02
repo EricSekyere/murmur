@@ -1,5 +1,6 @@
 #[cfg(feature = "audio")]
 pub mod capture;
+pub(crate) mod dsp;
 pub mod silence;
 pub mod vad;
 #[cfg(all(feature = "audio", windows))]
@@ -31,7 +32,6 @@ impl AudioBuffer {
 
     /// Build from raw multi-channel audio at a native rate, downmixing and
     /// resampling to 16 kHz mono.
-    #[cfg(feature = "audio")]
     pub fn from_raw(raw: &[f32], native_rate: u32, native_channels: u16) -> Self {
         let mono = if native_channels > 1 {
             let ch = native_channels as usize;
@@ -44,7 +44,7 @@ impl AudioBuffer {
 
         let target_rate = Self::SAMPLE_RATE;
         let resampled = if native_rate != target_rate {
-            capture::resample(&mono, native_rate, target_rate)
+            dsp::resample(&mono, native_rate, target_rate)
         } else {
             mono
         };

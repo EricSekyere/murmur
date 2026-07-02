@@ -389,7 +389,7 @@ impl DictationSession {
         let resampled: Vec<f32> = if self.native_rate == 16_000 {
             mono_samples.to_vec()
         } else {
-            crate::audio::capture::resample(mono_samples, self.native_rate, 16_000)
+            crate::audio::dsp::resample(mono_samples, self.native_rate, 16_000)
         };
 
         self.vad_pending.extend_from_slice(&resampled);
