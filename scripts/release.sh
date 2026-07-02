@@ -20,7 +20,23 @@
 set -euo pipefail
 
 notes_file="${1:-release-notes.md}"
+# Optional: emit the bundled in-app "What's New" data (window.WHATS_NEW_DATA)
+# here. The release build copies it into the frontend so the dialog always
+# reflects the release without hand-editing whatsnew.js.
+whatsnew_file="${2:-}"
 repo_url="https://github.com/EricSekyere/murmur"
+
+# Uppercase the first character (commit descriptions are usually lowercased).
+cap() { printf '%s%s' "$(printf '%s' "${1:0:1}" | tr '[:lower:]' '[:upper:]')" "${1:1}"; }
+
+# Escape a string for a JSON/JS double-quoted literal. The file is loaded as an
+# external script (not inline HTML), so only `\` and `"` need escaping; commit
+# subjects are single-line, so there are no newlines to handle. sed (not bash
+# replacement) because bash's `${//}` backslash handling is version-dependent.
+# Backslashes first, then quotes, so the quote-escape's own `\` is not doubled.
+json_esc() {
+  printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'
+}
 
 last_tag="$(git describe --tags --abbrev=0 --match 'v*' 2>/dev/null || true)"
 if [ -n "$last_tag" ]; then
@@ -38,6 +54,9 @@ has_patch=0
 feats=""
 fixes=""
 perfs=""
+# User-facing highlights for the in-app dialog: features and improvements only
+# (every fix would be too noisy for a "What's New").
+highlights=()
 
 while IFS= read -r hash; do
   [ -n "$hash" ] || continue
@@ -58,9 +77,9 @@ while IFS= read -r hash; do
   desc="${subject#*: }"
   short="${hash:0:7}"
   case "$type" in
-  feat) has_feat=1 && feats+="- ${desc} (${short})"$'\n' ;;
+  feat) has_feat=1 && feats+="- ${desc} (${short})"$'\n' && highlights+=("$(cap "$desc")") ;;
   fix) has_patch=1 && fixes+="- ${desc} (${short})"$'\n' ;;
-  perf) has_patch=1 && perfs+="- ${desc} (${short})"$'\n' ;;
+  perf) has_patch=1 && perfs+="- ${desc} (${short})"$'\n' && highlights+=("$(cap "$desc")") ;;
   esac
 done < <(git log --no-merges --format=%H "$range")
 
@@ -126,6 +145,25 @@ fi
 Models download automatically on first launch. Installed copies update themselves.
 INSTALL
 } >"$notes_file"
+
+# Generate the in-app "What's New" data, one bullet per feature/improvement.
+# Title quality follows commit-subject quality, so write user-facing feat/perf
+# subjects. A fixes-only release falls back to a generic line.
+if [ -n "$whatsnew_file" ]; then
+  {
+    printf 'window.WHATS_NEW_DATA = {"version":"%s","items":[' "$version"
+    if [ "${#highlights[@]}" -eq 0 ]; then
+      printf '{"title":"Bug fixes and improvements","body":""}'
+    else
+      sep=""
+      for h in "${highlights[@]}"; do
+        printf '%s{"title":"%s","body":""}' "$sep" "$(json_esc "$h")"
+        sep=","
+      done
+    fi
+    printf ']};\n'
+  } >"$whatsnew_file"
+fi
 
 echo "version=${version}"
 echo "bump=${level}"

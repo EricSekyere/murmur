@@ -1,26 +1,31 @@
-// What's New: highlights of recent features. Auto-opens once per app version,
-// and can be reopened from the Settings "What's New" button.
+// What's New: highlights of the current release. Auto-opens once per app
+// version, and can be reopened from the Settings "What's New" button.
+//
+// The highlights come from js/whatsnew.data.js (window.WHATS_NEW_DATA), which
+// the release build regenerates from the release's commits (see
+// scripts/release.sh). This file only renders them.
 
-const WHATS_NEW = [
-  ['Codebase vocabulary',
-    "Point Murmur at your project folders and it learns your identifiers, so symbols like calculateTotalRevenue transcribe correctly. Add several folders; it re-indexes automatically when your code changes. Settings → Codebase Vocabulary."],
-  ['Echo cancellation',
-    "The microphone no longer picks up audio from your own speakers — videos, music, and calls are filtered out. On by default."],
-  ['Linux builds',
-    "Murmur now ships as a .deb and an AppImage, and types directly into apps on X11."],
-];
+function whatsNewItems() {
+  const data = window.WHATS_NEW_DATA;
+  if (data && Array.isArray(data.items) && data.items.length) return data.items;
+  // Fallback when the generated data file is absent (e.g. a dev build).
+  return [{ title: 'Thanks for using Murmur', body: 'See the release notes on GitHub for the full list of changes.' }];
+}
 
 function renderWhatsNew() {
   whatsNewBody.innerHTML = '';
-  WHATS_NEW.forEach(([title, desc]) => {
+  whatsNewItems().forEach((item) => {
+    const title = item.title || '';
+    const body = item.body || '';
     const row = document.createElement('div');
     row.className = 'whatsnew__item';
     const bullet = document.createElement('span');
     bullet.textContent = '›';
     const text = document.createElement('span');
     const b = document.createElement('b');
-    b.textContent = `${title}. `;
-    text.append(b, document.createTextNode(desc));
+    b.textContent = body ? `${title}. ` : title;
+    text.append(b);
+    if (body) text.append(document.createTextNode(body));
     row.append(bullet, text);
     whatsNewBody.appendChild(row);
   });
