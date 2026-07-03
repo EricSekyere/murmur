@@ -133,6 +133,67 @@ else
   fail=$((fail + 1))
 fi
 
+# --- Case 8: `Whats-New: skip` keeps the commit's own subject out ---
+repo="$(new_repo case8)"
+git -C "$repo" commit -q --allow-empty -m 'feat: internal refactor subject
+
+Whats-New: skip'
+run_script "$repo"
+assert_not_contains "$repo/whatsnew.data.js" 'Internal refactor subject' \
+  'skip suppresses the commit subject'
+assert_not_contains "$repo/whatsnew.data.js" '"title":"Skip"' \
+  'skip itself is not a bullet'
+assert_contains "$repo/whatsnew.data.js" 'Bug fixes and improvements' \
+  'release with everything skipped falls back to the generic line'
+
+# --- Case 9: Whats-New-Skip retracts an earlier commit's subject ---
+repo="$(new_repo case9)"
+git -C "$repo" commit -q --allow-empty -m 'feat: clunky squash subject'
+target="$(git -C "$repo" rev-parse HEAD)"
+git -C "$repo" commit -q --allow-empty -m "chore: curate release notes
+
+Whats-New-Skip: ${target:0:7}
+Whats-New: Nice curated bullet | Something readable."
+out="$(cd "$repo" && bash "$SCRIPT" notes.md whatsnew.data.js)"
+assert_not_contains "$repo/whatsnew.data.js" 'Clunky squash subject' \
+  'a 7-char Whats-New-Skip prefix retracts the subject'
+assert_contains "$repo/whatsnew.data.js" '"title":"Nice curated bullet"' \
+  'the curating commit adds its own bullets'
+assert_contains "$repo/notes.md" 'clunky squash subject' \
+  'GitHub notes still list the retracted commit'
+if printf '%s' "$out" | grep -q 'release=true'; then
+  echo 'PASS: retracted feat still gates the release'
+  pass=$((pass + 1))
+else
+  echo 'FAIL: retracted feat still gates the release'
+  echo "  output: $out"
+  fail=$((fail + 1))
+fi
+
+# --- Case 10: Whats-New-Skip also retracts the target's trailers ---
+repo="$(new_repo case10)"
+git -C "$repo" commit -q --allow-empty -m 'feat: something
+
+Whats-New: Regretted wording'
+target="$(git -C "$repo" rev-parse HEAD)"
+git -C "$repo" commit -q --allow-empty -m "chore: retract
+
+Whats-New-Skip: ${target}"
+run_script "$repo"
+assert_not_contains "$repo/whatsnew.data.js" 'Regretted wording' \
+  'a full-hash skip retracts curated trailers too'
+
+# --- Case 11: too-short skip values are ignored ---
+repo="$(new_repo case11)"
+git -C "$repo" commit -q --allow-empty -m 'feat: keep me visible'
+target="$(git -C "$repo" rev-parse HEAD)"
+git -C "$repo" commit -q --allow-empty -m "chore: sloppy retract
+
+Whats-New-Skip: ${target:0:6}"
+run_script "$repo"
+assert_contains "$repo/whatsnew.data.js" '"title":"Keep me visible"' \
+  'skip values under 7 chars are ignored'
+
 echo
 echo "passed=$pass failed=$fail"
 [ "$fail" -eq 0 ]

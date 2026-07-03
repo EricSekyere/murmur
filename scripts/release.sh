@@ -19,6 +19,10 @@
 # are the curated source for the dialog and replace the commit's subject there;
 # without one, feat/perf subjects are used as before. Trailers never affect the
 # version bump. A squash commit can carry several trailers, one per highlight.
+# `Whats-New: skip` keeps the commit's own subject out of the dialog, and
+# `Whats-New-Skip: <7+ hash chars>` on any commit retracts everything an
+# already-pushed commit contributed. Skips affect only the dialog, never the
+# GitHub notes or the bump.
 #
 # Usage:  scripts/release.sh [notes-output-file]   (default: release-notes.md)
 # Prints `version=`, `bump=`, `release=` to stdout; also appends them to
@@ -61,6 +65,22 @@ else
 fi
 IFS=. read -r major minor patch <<<"$base"
 
+# After-the-fact retraction: `Whats-New-Skip: <hash>` on any commit in the
+# range removes everything the referenced commit contributed to the dialog
+# (subject and trailers), for copy that can no longer be amended into history.
+# At least 7 hash characters; shorter values are ignored with a warning. Skips
+# never touch the GitHub notes or the version bump.
+skip_prefixes=()
+while IFS= read -r line; do
+  line="$(trim "$line")"
+  [ -n "$line" ] || continue
+  if [ "${#line}" -lt 7 ]; then
+    echo "warning: ignoring Whats-New-Skip '${line}' (need at least 7 hash characters)" >&2
+    continue
+  fi
+  skip_prefixes+=("${line,,}")
+done <<<"$(git log --no-merges --format='%(trailers:key=Whats-New-Skip,valueonly,unfold)' "$range")"
+
 has_break=0
 has_feat=0
 has_patch=0
@@ -89,19 +109,31 @@ while IFS= read -r hash; do
     has_break=1
   fi
 
-  had_trailer=0
-  while IFS= read -r line; do
-    line="$(trim "$line")"
-    [ -n "$line" ] || continue
-    had_trailer=1
-    if [[ "$line" == *"|"* ]]; then
-      hl_titles+=("$(cap "$(trim "${line%%|*}")")")
-      hl_bodies+=("$(trim "${line#*|}")")
-    else
-      hl_titles+=("$(cap "$line")")
-      hl_bodies+=("")
+  suppressed=0
+  for p in "${skip_prefixes[@]}"; do
+    if [[ "$hash" == "$p"* ]]; then
+      suppressed=1
     fi
-  done <<<"$(git show -s --format='%(trailers:key=Whats-New,valueonly,unfold)' "$hash")"
+  done
+
+  # `Whats-New: skip` is not a bullet, but still marks the commit as curated
+  # so its subject stays out of the dialog.
+  had_trailer=0
+  if [ "$suppressed" -eq 0 ]; then
+    while IFS= read -r line; do
+      line="$(trim "$line")"
+      [ -n "$line" ] || continue
+      had_trailer=1
+      [ "${line,,}" = "skip" ] && continue
+      if [[ "$line" == *"|"* ]]; then
+        hl_titles+=("$(cap "$(trim "${line%%|*}")")")
+        hl_bodies+=("$(trim "${line#*|}")")
+      else
+        hl_titles+=("$(cap "$line")")
+        hl_bodies+=("")
+      fi
+    done <<<"$(git show -s --format='%(trailers:key=Whats-New,valueonly,unfold)' "$hash")"
+  fi
 
   desc="${subject#*: }"
   short="${hash:0:7}"
@@ -109,7 +141,7 @@ while IFS= read -r hash; do
   feat)
     has_feat=1
     feats+="- ${desc} (${short})"$'\n'
-    if [ "$had_trailer" -eq 0 ]; then
+    if [ "$suppressed" -eq 0 ] && [ "$had_trailer" -eq 0 ]; then
       hl_titles+=("$(cap "$desc")")
       hl_bodies+=("")
     fi
@@ -118,7 +150,7 @@ while IFS= read -r hash; do
   perf)
     has_patch=1
     perfs+="- ${desc} (${short})"$'\n'
-    if [ "$had_trailer" -eq 0 ]; then
+    if [ "$suppressed" -eq 0 ] && [ "$had_trailer" -eq 0 ]; then
       hl_titles+=("$(cap "$desc")")
       hl_bodies+=("")
     fi
