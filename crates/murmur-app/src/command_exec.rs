@@ -1,5 +1,5 @@
-//! Turns a routed voice-command outcome into a guarded action (Phase 1 of
-//! docs/command-mode-design.md): native grammar matches dispatch straight to
+//! Turns a routed voice-command outcome into a guarded action: native
+//! grammar matches dispatch straight to
 //! [`NativeActions`]; tool calls pass through the [`PermissionStore`] gate
 //! and only auto-run when policy and risk tier both allow it.
 //!

@@ -1,5 +1,5 @@
-// Command mode UI (Phase 0 of docs/command-mode-design.md): the visible
-// mode badge and the physical-confirm dialog. The dialog is the security
+// Command mode UI: the visible mode badge and the physical-confirm dialog.
+// The dialog is the security
 // gate for gated actions: it echoes the parsed tool and arguments so the
 // user can see exactly what the ASR produced, and confirmation only ever
 // happens through a real click or keypress here, never by voice. Loaded

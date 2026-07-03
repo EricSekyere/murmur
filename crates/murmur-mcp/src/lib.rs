@@ -9,7 +9,7 @@
 //! - [`install`] writes the server into a client's config so setup is one step.
 //! - [`ActionBackend`] is the reverse direction: an MCP client that spawns
 //!   allowlisted stdio servers and exposes their tools as voice-command
-//!   actions (Phase 2 of docs/command-mode-design.md).
+//!   actions.
 //!
 //! Everything is local: MCP peers are child processes speaking JSON-RPC over
 //! stdin/stdout. No network, no telemetry.

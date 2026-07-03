@@ -46,7 +46,7 @@ pub fn instruction(mode: RewriteMode) -> &'static str {
     }
 }
 
-/// Placeholder for roadmap feature 7's on-device context injection.
+/// Placeholder for on-device context injection.
 ///
 /// App integration will capture the active-app name, the current selection,
 /// and recent clipboard text (all locally, never uploaded) and this function

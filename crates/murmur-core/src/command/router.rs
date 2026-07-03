@@ -1,4 +1,4 @@
-//! Voice-to-action router (docs/command-mode-design.md, Section 4): Tier 1
+//! Voice-to-action router: Tier 1
 //! deterministic grammar first, then Tier 2 embedding intent classification
 //! (optional), then Tier 3 grammar-constrained LLM tool selection.
 

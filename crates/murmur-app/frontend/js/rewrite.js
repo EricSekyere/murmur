@@ -1,4 +1,4 @@
-// Command Mode selection rewrite (roadmap feature 2): pick a style, click,
+// Command Mode selection rewrite: pick a style, click,
 // and the backend copies the selection from the previously focused app,
 // rewrites it with the local LLM, and pastes the result over the selection.
 // Loaded after dom.js (invoke) and ui.js (showToast).

@@ -1,6 +1,7 @@
-//! Meeting summary (roadmap feature 6, gated on `llm`).
+//! Meeting summary (gated on `llm`).
 //!
-//! Meeting mode has no summary model of its own: it reuses feature 1's local
+//! Meeting mode has no summary model of its own: it reuses the rewrite
+//! pipeline's local
 //! LLM through [`crate::llm::rewrite`] with [`RewriteMode::Summarize`]. Feed it
 //! the speaker-labeled transcript from [`crate::meeting::assembly`].
 

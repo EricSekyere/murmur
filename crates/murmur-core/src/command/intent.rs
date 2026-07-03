@@ -1,6 +1,6 @@
-//! Tier 2 embedding intent classifier (docs/command-mode-design.md,
-//! Section 4): on a Tier 1 grammar miss, match the utterance against
-//! registered intents by cosine similarity over sentence embeddings, catching
+//! Tier 2 embedding intent classifier: on a Tier 1 grammar miss, match the
+//! utterance against registered intents by cosine similarity over sentence
+//! embeddings, catching
 //! paraphrases the deterministic grammar cannot ("make it quieter" versus
 //! "set volume to 40").
 //!

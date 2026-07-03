@@ -1,5 +1,5 @@
-//! Native desktop actions behind voice commands (Phase 1 of
-//! docs/command-mode-design.md): app/URL launch, window focus, keystrokes.
+//! Native desktop actions behind voice commands: app/URL launch, window
+//! focus, keystrokes.
 //!
 //! The [`NativeActions`] trait keeps the executor's dispatch logic testable
 //! with a mock; [`SystemActions`] is the real OS-backed implementation.
@@ -282,8 +282,8 @@ mod platform {
         Ok(())
     }
 
-    /// Wayland window control needs per-compositor support (design doc,
-    /// Section 3); no native focus off Windows yet.
+    /// Wayland window control needs per-compositor support; no native focus
+    /// off Windows yet.
     pub(super) fn focus_window(_query: &str) -> Result<()> {
         tracing::warn!("window focus by voice is not supported on this platform yet");
         bail!("window focus is not supported on this platform yet");

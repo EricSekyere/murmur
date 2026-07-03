@@ -1,4 +1,4 @@
-//! Local speaker-diarization backend (roadmap feature 6).
+//! Local speaker-diarization backend.
 //!
 //! Wraps parakeet-rs's NVIDIA Sortformer v2 streaming diarizer. It runs on the
 //! same ORT runtime the Parakeet STT path already initializes, so this adds no

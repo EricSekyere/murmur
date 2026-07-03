@@ -4,8 +4,7 @@
 mod audio_worker;
 mod calibration;
 mod caption;
-// Public: the command-mode executor is exercised by the UI layer as it lands
-// (docs/command-mode-design.md, Phase 1).
+// Public: the command-mode executor is exercised by the UI layer.
 pub mod command_exec;
 mod command_mode;
 mod commands;
@@ -121,8 +120,8 @@ pub fn run() -> anyhow::Result<()> {
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(move |app, shortcut, event| {
                     // The command-mode hotkey is a separate activation channel
-                    // from dictation (docs/command-mode-design.md, Section 5).
-                    // Pressed only, so the key release does not re-toggle.
+                    // from dictation. Pressed only, so the key release does
+                    // not re-toggle.
                     if command_shortcut.as_ref() == Some(shortcut) {
                         if event.state == tauri_plugin_global_shortcut::ShortcutState::Pressed {
                             command_mode::toggle_mode(app);

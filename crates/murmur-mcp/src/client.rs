@@ -1,8 +1,7 @@
 //! MCP client: discovers and calls tools on external stdio MCP servers, so the
-//! existing MCP server ecosystem becomes Murmur's voice-command action surface
-//! (Phase 2 of docs/command-mode-design.md).
+//! existing MCP server ecosystem becomes Murmur's voice-command action surface.
 //!
-//! Security model (design doc Section 5):
+//! Security model:
 //! - Servers are default-denied: [`ActionBackend`] only connects to names on
 //!   its allowlist, so a server added to the user's config (or planted there)
 //!   gets no connection until explicitly allowed.

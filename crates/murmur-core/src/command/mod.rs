@@ -1,5 +1,4 @@
-//! Voice-to-action command mode: the safety spine (Phase 0 of
-//! docs/command-mode-design.md).
+//! Voice-to-action command mode: the safety spine.
 //!
 //! A [`Tool`] describes an invokable action with an intrinsic [`RiskTier`];
 //! the [`PermissionStore`] holds the user's per-tool policy. The pure

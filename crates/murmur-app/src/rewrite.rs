@@ -1,4 +1,4 @@
-//! Command Mode selection rewrite (roadmap feature 2): capture the selected
+//! Command Mode selection rewrite: capture the selected
 //! text in the target app via a clipboard round-trip, rewrite it with the
 //! local LLM, and paste the result over the selection.
 //!

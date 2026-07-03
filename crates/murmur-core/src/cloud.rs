@@ -1,5 +1,5 @@
-//! Opt-in BYO-key cloud rewrite backend (roadmap feature 10, command-mode
-//! phase 5). Strictly off by default, three gates deep: the `cloud` cargo
+//! Opt-in BYO-key cloud rewrite backend. Strictly off by default, three
+//! gates deep: the `cloud` cargo
 //! feature is off, [`CloudConfig::enabled`] defaults to false, and even with
 //! both on, no request leaves the device unless the user has exported
 //! [`CLOUD_API_KEY_ENV`]. Every gate is checked before any HTTP client is

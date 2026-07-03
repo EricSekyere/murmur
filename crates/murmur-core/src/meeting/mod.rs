@@ -1,4 +1,4 @@
-//! Meeting mode (roadmap feature 6): local speaker diarization plus a pure,
+//! Meeting mode: local speaker diarization plus a pure,
 //! testable assembly step that fuses a timestamped transcript with speaker
 //! segments into a "Speaker N: ..." transcript, plus an optional local-LLM
 //! summary.

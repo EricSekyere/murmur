@@ -224,7 +224,7 @@ pub struct Settings {
     #[serde(default)]
     pub indexer: IndexerSettings,
 
-    /// Opt-in BYO-key cloud rewrite backend (roadmap feature 10). None or a
+    /// Opt-in BYO-key cloud rewrite backend. None or a
     /// disabled table means fully local operation, the default. The API key is
     /// never stored here: it is read from the MURMUR_CLOUD_API_KEY environment
     /// variable at call time (a platform keyring later). While a cloud rewrite

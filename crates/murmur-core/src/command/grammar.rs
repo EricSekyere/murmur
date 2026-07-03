@@ -1,5 +1,5 @@
-//! Tier 1 deterministic template grammar (docs/command-mode-design.md,
-//! Section 4): a hand-rolled hassil/Talon-style matcher, no regex.
+//! Tier 1 deterministic template grammar: a hand-rolled hassil/Talon-style
+//! matcher, no regex.
 //!
 //! Pattern syntax: literal words, alternatives `(open|launch)`, optional
 //! groups `[the]`, free-text slots `{name}`, choice slots

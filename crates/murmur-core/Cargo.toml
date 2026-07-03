@@ -30,7 +30,7 @@ vulkan = ["stt", "whisper-rs/vulkan"]
 vad = ["audio", "dep:ort", "dep:zip", "dep:flate2", "dep:tar"]
 # Parakeet STT backend via ONNX Runtime (also needs ort directly for init_from)
 parakeet = ["dep:parakeet-rs", "dep:ort", "dep:zip", "dep:flate2", "dep:tar"]
-# Local speaker diarization via NVIDIA Sortformer v2 (roadmap feature 6). Runs
+# Local speaker diarization via NVIDIA Sortformer v2. Runs
 # on the same ORT runtime the Parakeet STT path already loads (parakeet-rs's
 # `sortformer` module is pure Rust over `ort` + ndarray + rustfft), so it adds
 # no new native library — it just reuses the `parakeet` ONNX stack. Deliberately
@@ -38,7 +38,7 @@ parakeet = ["dep:parakeet-rs", "dep:ort", "dep:zip", "dep:flate2", "dep:tar"]
 diarization = ["parakeet", "parakeet-rs/sortformer"]
 # Keystroke simulation
 keyboard = ["dep:enigo"]
-# Opt-in BYO-key cloud rewrite backend (roadmap feature 10). Strictly off by
+# Opt-in BYO-key cloud rewrite backend. Strictly off by
 # default and deliberately NOT part of `full`: enabling it only compiles the
 # code; a request additionally requires the config opt-in and the
 # MURMUR_CLOUD_API_KEY environment variable at call time.

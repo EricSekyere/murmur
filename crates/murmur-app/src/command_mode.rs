@@ -1,7 +1,6 @@
-//! Command-mode wiring for the desktop app (Phase 0 of
-//! docs/command-mode-design.md): the mode toggle behind its own global
-//! hotkey, the transcript-to-action Tauri commands, and the pending-action
-//! store behind the physical-confirm gate.
+//! Command-mode wiring for the desktop app: the mode toggle behind its own
+//! global hotkey, the transcript-to-action Tauri commands, and the
+//! pending-action store behind the physical-confirm gate.
 //!
 //! Safety spine, restated: [`run_command`] can produce a `Pending` action
 //! but never runs it. Only [`confirm_pending`], invoked by a real click or
