@@ -92,14 +92,41 @@ if [[ "$OSTYPE" == msys* || "$OSTYPE" == cygwin* || "$OSTYPE" == win* ]]; then
     export CXXFLAGS="${CXXFLAGS:-} /DNDEBUG /arch:AVX2"
     yellow "Native C/C++ deps: generator='$CMAKE_GENERATOR', extra flags: /DNDEBUG /arch:AVX2"
 
-    # CUDA (optional): build whisper with GPU acceleration when the toolkit
-    # is installed. whisper-rs-sys reads CUDA_PATH; cmake reads CUDAARCHS.
+    # GPU backend selection. Default: auto-detect CUDA (fastest on NVIDIA).
+    # Set MURMUR_GPU=vulkan to build the cross-vendor Vulkan backend instead
+    # (AMD/Intel/NVIDIA), or MURMUR_GPU=cpu to force CPU. CUDA and Vulkan are
+    # mutually exclusive — only one whisper GPU backend is compiled per build.
+    MURMUR_GPU="${MURMUR_GPU:-auto}"
     CUDA_ROOT=""
-    for cuda_dir in "/c/Program Files/NVIDIA GPU Computing Toolkit/CUDA"/v*; do
-        if [[ -f "$cuda_dir/bin/nvcc.exe" ]]; then
-            CUDA_ROOT="$cuda_dir"
+    if [[ "$MURMUR_GPU" == "vulkan" ]]; then
+        if has_cmd glslc && [[ -n "${VULKAN_SDK:-}" ]]; then
+            CARGO_FEATURE_ARGS+=(--features vulkan)
+            yellow "Vulkan SDK found ($VULKAN_SDK) — building whisper with Vulkan acceleration"
+            # The vulkan-shaders-gen ExternalProject nests build paths deep
+            # enough to overflow MSBuild's MAX_PATH (FileTracker error FTK1011)
+            # when the repo sits more than a few directories down. A subst'd
+            # drive root shortens every path and reuses the same target/ cache.
+            yellow "Note: if the whisper build fails with 'FTK1011' (path too long),"
+            yellow "      build via a short path:  subst X: \"$ROOT\" && cd X:/ && ./build.sh"
+        else
+            red "MURMUR_GPU=vulkan but the Vulkan SDK was not found (need VULKAN_SDK + glslc on PATH)"
+            echo "  Install from https://vulkan.lunarg.com and re-run."
+            FAIL=1
         fi
-    done
+    elif [[ "$MURMUR_GPU" == "cpu" ]]; then
+        yellow "MURMUR_GPU=cpu — whisper will run on CPU (no GPU backend compiled)"
+    fi
+
+    # CUDA (default when MURMUR_GPU is auto/cuda): build whisper with GPU
+    # acceleration when the toolkit is installed. whisper-rs-sys reads
+    # CUDA_PATH; cmake reads CUDAARCHS.
+    if [[ "$MURMUR_GPU" == "auto" || "$MURMUR_GPU" == "cuda" ]]; then
+        for cuda_dir in "/c/Program Files/NVIDIA GPU Computing Toolkit/CUDA"/v*; do
+            if [[ -f "$cuda_dir/bin/nvcc.exe" ]]; then
+                CUDA_ROOT="$cuda_dir"
+            fi
+        done
+    fi
     if [[ -n "$CUDA_ROOT" ]]; then
         export PATH="$CUDA_ROOT/bin:$PATH"
         CUDA_ROOT_WIN="$(cygpath -w "$CUDA_ROOT" 2>/dev/null || echo "$CUDA_ROOT")"

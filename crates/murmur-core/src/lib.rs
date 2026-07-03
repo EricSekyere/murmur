@@ -1,4 +1,6 @@
 pub mod audio;
+pub mod cloud;
+pub mod command;
 pub mod config;
 pub mod dictation;
 #[cfg(feature = "help")]
@@ -8,6 +10,8 @@ pub mod hotkey;
 #[cfg(feature = "indexer")]
 pub mod indexer;
 pub mod integrity;
+pub mod llm;
+pub mod meeting;
 pub mod output;
 pub mod stt;
 pub mod voice_commands;

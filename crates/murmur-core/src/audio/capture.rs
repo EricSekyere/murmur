@@ -9,6 +9,12 @@ use std::sync::{Arc, Mutex};
 #[cfg(windows)]
 static AEC_STATE: std::sync::atomic::AtomicI8 = std::sync::atomic::AtomicI8::new(0);
 
+/// Per-run health of the Linux echo-cancel path, mirroring `AEC_STATE`:
+/// 0 = unprobed, 1 = working, -1 = unavailable (missing pactl/parec, or the
+/// server refused the module) — don't re-spawn subprocesses every session.
+#[cfg(target_os = "linux")]
+static PULSE_AEC_STATE: std::sync::atomic::AtomicI8 = std::sync::atomic::AtomicI8::new(0);
+
 /// Manages microphone capture via CPAL.
 ///
 /// Enumerates the device's supported configs, picks the best one,
@@ -19,6 +25,9 @@ pub struct AudioCapture {
     /// Active Windows voice-capture session (echo cancellation), when used.
     #[cfg(windows)]
     voice: Option<super::wasapi::WasapiVoiceCapture>,
+    /// Active Linux echo-cancelled capture (PulseAudio/PipeWire), when used.
+    #[cfg(target_os = "linux")]
+    voice: Option<super::pulse_aec::PulseAecCapture>,
     native_rate: u32,
     native_channels: u16,
 }
@@ -29,7 +38,7 @@ impl AudioCapture {
         Ok(Self {
             buffer: Arc::new(Mutex::new(Vec::new())),
             stream: None,
-            #[cfg(windows)]
+            #[cfg(any(windows, target_os = "linux"))]
             voice: None,
             native_rate: AudioBuffer::SAMPLE_RATE,
             native_channels: 1,
@@ -41,7 +50,7 @@ impl AudioCapture {
     /// raw CPAL microphone.
     pub fn start(&mut self, preferred_device: Option<&str>, echo_cancellation: bool) -> Result<()> {
         self.stream = None;
-        #[cfg(windows)]
+        #[cfg(any(windows, target_os = "linux"))]
         {
             self.voice = None;
         }
@@ -58,9 +67,10 @@ impl AudioCapture {
     }
 
     /// Try the OS echo-cancelling capture path. Returns `Some(())` on success.
-    /// Linux and macOS have no implementation yet (they return `None`, so the
-    /// caller falls back to the raw mic). Plan: PipeWire/Pulse echo-cancel on
-    /// Linux, the VoiceProcessingIO AudioUnit on macOS.
+    /// Windows uses the WASAPI Communications AEC; Linux loads PulseAudio/
+    /// PipeWire `module-echo-cancel` and captures its cancelled source. macOS
+    /// has no implementation yet (returns `None`, so the caller falls back to
+    /// the raw mic). Plan: the VoiceProcessingIO AudioUnit on macOS.
     fn try_start_voice_capture(&mut self) -> Option<()> {
         #[cfg(windows)]
         {
@@ -121,7 +131,68 @@ impl AudioCapture {
                 }
             }
         }
-        #[cfg(not(windows))]
+        #[cfg(target_os = "linux")]
+        {
+            use std::sync::atomic::Ordering;
+            // Mono at the fixed parec rate; same 60 s hard cap as the raw path.
+            const MAX_SAMPLES: usize = 60 * super::pulse_aec::RATE as usize;
+            // This run already proved the pulse AEC path unusable.
+            if PULSE_AEC_STATE.load(Ordering::Relaxed) < 0 {
+                return None;
+            }
+            if let Ok(mut buf) = self.buffer.lock() {
+                buf.clear();
+                let want = 30 * super::pulse_aec::RATE as usize;
+                let cap = buf.capacity();
+                if cap < want {
+                    buf.reserve(want - cap);
+                }
+            }
+            match super::pulse_aec::open(Arc::clone(&self.buffer), MAX_SAMPLES) {
+                Ok(mut cap) => {
+                    // First session this run: parec exits immediately when the
+                    // source or server is unusable, so a short liveness check
+                    // catches that. Silence is NOT treated as failure here (a
+                    // muted mic is legitimate), unlike the Windows AEC probe
+                    // which guards a known emit-zeros bug.
+                    if PULSE_AEC_STATE.load(Ordering::Relaxed) == 0 {
+                        std::thread::sleep(std::time::Duration::from_millis(250));
+                        if cap.is_alive() {
+                            PULSE_AEC_STATE.store(1, Ordering::Relaxed);
+                        } else {
+                            PULSE_AEC_STATE.store(-1, Ordering::Relaxed);
+                            tracing::warn!(
+                                "Echo-cancelled capture exited immediately; using the raw microphone instead"
+                            );
+                            if let Ok(mut b) = self.buffer.lock() {
+                                b.clear();
+                            }
+                            return None;
+                        }
+                    }
+                    self.native_rate = super::pulse_aec::RATE;
+                    self.native_channels = super::pulse_aec::CHANNELS;
+                    self.voice = Some(cap);
+                    tracing::info!(
+                        "Voice capture (echo cancellation) active: {}Hz, {} channel(s)",
+                        super::pulse_aec::RATE,
+                        super::pulse_aec::CHANNELS
+                    );
+                    Some(())
+                }
+                Err(e) => {
+                    // Missing pactl/parec or a refused module load will not fix
+                    // itself this run; remember so later sessions skip the
+                    // subprocess round-trips.
+                    PULSE_AEC_STATE.store(-1, Ordering::Relaxed);
+                    tracing::warn!(
+                        "Echo-cancelled capture unavailable ({e}); using raw microphone"
+                    );
+                    None
+                }
+            }
+        }
+        #[cfg(not(any(windows, target_os = "linux")))]
         {
             None
         }
@@ -189,7 +260,7 @@ impl AudioCapture {
     /// Stop recording and return the captured audio buffer (16 kHz mono).
     pub fn stop(&mut self) -> Result<AudioBuffer> {
         self.stream = None;
-        #[cfg(windows)]
+        #[cfg(any(windows, target_os = "linux"))]
         {
             self.voice = None;
         }
@@ -250,7 +321,7 @@ impl AudioCapture {
 
     /// Check if currently recording.
     pub fn is_recording(&self) -> bool {
-        #[cfg(windows)]
+        #[cfg(any(windows, target_os = "linux"))]
         if self.voice.is_some() {
             return true;
         }
@@ -262,11 +333,11 @@ impl AudioCapture {
     /// skip the gain boost the raw mic needs: the voice stream is already
     /// AGC-leveled by the OS, so boosting it just re-amplifies idle noise.
     pub fn echo_cancellation_active(&self) -> bool {
-        #[cfg(windows)]
+        #[cfg(any(windows, target_os = "linux"))]
         {
             self.voice.is_some()
         }
-        #[cfg(not(windows))]
+        #[cfg(not(any(windows, target_os = "linux")))]
         {
             false
         }

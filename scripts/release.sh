@@ -14,6 +14,16 @@
 # Only feat/fix/perf/breaking gate a release. A range of only chore/docs/ci/etc.
 # yields release=false, matching the old "promoting docs never re-releases".
 #
+# In-app "What's New" copy: any commit may carry one or more trailers of the
+# form `Whats-New: Title | optional body` (body after the first `|`). Trailers
+# are the curated source for the dialog and replace the commit's subject there;
+# without one, feat/perf subjects are used as before. Trailers never affect the
+# version bump. A squash commit can carry several trailers, one per highlight.
+# `Whats-New: skip` keeps the commit's own subject out of the dialog, and
+# `Whats-New-Skip: <7+ hash chars>` on any commit retracts everything an
+# already-pushed commit contributed. Skips affect only the dialog, never the
+# GitHub notes or the bump.
+#
 # Usage:  scripts/release.sh [notes-output-file]   (default: release-notes.md)
 # Prints `version=`, `bump=`, `release=` to stdout; also appends them to
 # $GITHUB_OUTPUT when set (CI). Run it locally to preview the next release.
@@ -31,11 +41,18 @@ cap() { printf '%s%s' "$(printf '%s' "${1:0:1}" | tr '[:lower:]' '[:upper:]')" "
 
 # Escape a string for a JSON/JS double-quoted literal. The file is loaded as an
 # external script (not inline HTML), so only `\` and `"` need escaping; commit
-# subjects are single-line, so there are no newlines to handle. sed (not bash
-# replacement) because bash's `${//}` backslash handling is version-dependent.
-# Backslashes first, then quotes, so the quote-escape's own `\` is not doubled.
+# subjects and unfolded trailer values are single-line, so there are no newlines
+# to handle. sed (not bash replacement) because bash's `${//}` backslash
+# handling is version-dependent. Backslashes first, then quotes, so the
+# quote-escape's own `\` is not doubled.
 json_esc() {
   printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'
+}
+
+trim() {
+  local s="$1"
+  s="${s#"${s%%[![:space:]]*}"}"
+  printf '%s' "${s%"${s##*[![:space:]]}"}"
 }
 
 last_tag="$(git describe --tags --abbrev=0 --match 'v*' 2>/dev/null || true)"
@@ -48,15 +65,33 @@ else
 fi
 IFS=. read -r major minor patch <<<"$base"
 
+# After-the-fact retraction: `Whats-New-Skip: <hash>` on any commit in the
+# range removes everything the referenced commit contributed to the dialog
+# (subject and trailers), for copy that can no longer be amended into history.
+# At least 7 hash characters; shorter values are ignored with a warning. Skips
+# never touch the GitHub notes or the version bump.
+skip_prefixes=()
+while IFS= read -r line; do
+  line="$(trim "$line")"
+  [ -n "$line" ] || continue
+  if [ "${#line}" -lt 7 ]; then
+    echo "warning: ignoring Whats-New-Skip '${line}' (need at least 7 hash characters)" >&2
+    continue
+  fi
+  skip_prefixes+=("${line,,}")
+done <<<"$(git log --no-merges --format='%(trailers:key=Whats-New-Skip,valueonly,unfold)' "$range")"
+
 has_break=0
 has_feat=0
 has_patch=0
 feats=""
 fixes=""
 perfs=""
-# User-facing highlights for the in-app dialog: features and improvements only
-# (every fix would be too noisy for a "What's New").
-highlights=()
+# User-facing highlights for the in-app dialog. Curated `Whats-New:` trailers
+# win; otherwise feat/perf subjects (every untagged fix would be too noisy for
+# a "What's New").
+hl_titles=()
+hl_bodies=()
 
 while IFS= read -r hash; do
   [ -n "$hash" ] || continue
@@ -74,12 +109,52 @@ while IFS= read -r hash; do
     has_break=1
   fi
 
+  suppressed=0
+  for p in "${skip_prefixes[@]}"; do
+    if [[ "$hash" == "$p"* ]]; then
+      suppressed=1
+    fi
+  done
+
+  # `Whats-New: skip` is not a bullet, but still marks the commit as curated
+  # so its subject stays out of the dialog.
+  had_trailer=0
+  if [ "$suppressed" -eq 0 ]; then
+    while IFS= read -r line; do
+      line="$(trim "$line")"
+      [ -n "$line" ] || continue
+      had_trailer=1
+      [ "${line,,}" = "skip" ] && continue
+      if [[ "$line" == *"|"* ]]; then
+        hl_titles+=("$(cap "$(trim "${line%%|*}")")")
+        hl_bodies+=("$(trim "${line#*|}")")
+      else
+        hl_titles+=("$(cap "$line")")
+        hl_bodies+=("")
+      fi
+    done <<<"$(git show -s --format='%(trailers:key=Whats-New,valueonly,unfold)' "$hash")"
+  fi
+
   desc="${subject#*: }"
   short="${hash:0:7}"
   case "$type" in
-  feat) has_feat=1 && feats+="- ${desc} (${short})"$'\n' && highlights+=("$(cap "$desc")") ;;
+  feat)
+    has_feat=1
+    feats+="- ${desc} (${short})"$'\n'
+    if [ "$suppressed" -eq 0 ] && [ "$had_trailer" -eq 0 ]; then
+      hl_titles+=("$(cap "$desc")")
+      hl_bodies+=("")
+    fi
+    ;;
   fix) has_patch=1 && fixes+="- ${desc} (${short})"$'\n' ;;
-  perf) has_patch=1 && perfs+="- ${desc} (${short})"$'\n' && highlights+=("$(cap "$desc")") ;;
+  perf)
+    has_patch=1
+    perfs+="- ${desc} (${short})"$'\n'
+    if [ "$suppressed" -eq 0 ] && [ "$had_trailer" -eq 0 ]; then
+      hl_titles+=("$(cap "$desc")")
+      hl_bodies+=("")
+    fi
+    ;;
   esac
 done < <(git log --no-merges --format=%H "$range")
 
@@ -146,18 +221,19 @@ Models download automatically on first launch. Installed copies update themselve
 INSTALL
 } >"$notes_file"
 
-# Generate the in-app "What's New" data, one bullet per feature/improvement.
-# Title quality follows commit-subject quality, so write user-facing feat/perf
-# subjects. A fixes-only release falls back to a generic line.
+# Generate the in-app "What's New" data, one bullet per highlight. Copy quality
+# follows commit quality: add `Whats-New: Title | body` trailers for curated
+# bullets, or at least write user-facing feat/perf subjects. A release with
+# neither falls back to a generic line.
 if [ -n "$whatsnew_file" ]; then
   {
     printf 'window.WHATS_NEW_DATA = {"version":"%s","items":[' "$version"
-    if [ "${#highlights[@]}" -eq 0 ]; then
-      printf '{"title":"Bug fixes and improvements","body":""}'
+    if [ "${#hl_titles[@]}" -eq 0 ]; then
+      printf '{"title":"Bug fixes and improvements","body":"This update focuses on stability and polish. The full list of changes is in the release notes on GitHub."}'
     else
       sep=""
-      for h in "${highlights[@]}"; do
-        printf '%s{"title":"%s","body":""}' "$sep" "$(json_esc "$h")"
+      for i in "${!hl_titles[@]}"; do
+        printf '%s{"title":"%s","body":"%s"}' "$sep" "$(json_esc "${hl_titles[$i]}")" "$(json_esc "${hl_bodies[$i]}")"
         sep=","
       done
     fi

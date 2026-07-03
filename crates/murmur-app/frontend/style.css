@@ -399,6 +399,16 @@ header {
 
 .badge--dev[hidden] { display: none; }
 
+/* Command mode: an always-visible mode indicator, deliberately distinct
+   from the idle/recording states (command-mode design, Section 5). */
+.badge--command {
+  background: var(--color-processing-dim);
+  color: var(--color-processing);
+  border-color: rgba(251, 191, 36, 0.25);
+}
+
+.badge--command[hidden] { display: none; }
+
 /* ─── Hero / Mic Controls ───────────────────────────────────────────────── */
 .hero {
   display: flex;
