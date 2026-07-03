@@ -19,7 +19,12 @@ const CAPTION_HEIGHT: i32 = 64;
 
 /// Where to anchor a session's caption: the target window, plus the focused
 /// input's screen rect captured at session start (when we could find one).
+///
+/// Both fields are read only by the Windows anchoring path; on other platforms
+/// the caption is not yet anchored to the focused input, so allow them to sit
+/// unused there rather than diverge the struct per platform.
 #[derive(Clone, Copy)]
+#[cfg_attr(not(windows), allow(dead_code))]
 pub(crate) struct CaptionAnchor {
     pub hwnd: usize,
     /// Focused-input rect (left, top, right, bottom) in physical screen pixels.

@@ -4,10 +4,11 @@ Voice-to-text desktop tool for developers. See `prd.md` for full requirements an
 
 ## Project Structure
 
-- **Cargo workspace** with three crates:
+- **Cargo workspace** with four crates:
   - `crates/murmur-core` — shared library (audio, STT, output, config, hotkeys)
   - `crates/murmur-cli` — CLI binary using clap
   - `crates/murmur-app` — Tauri v2 desktop app (system tray + popup)
+  - `crates/murmur-mcp` — MCP server exposing transcription history to Claude/Cursor
 
 ## Tech Stack
 

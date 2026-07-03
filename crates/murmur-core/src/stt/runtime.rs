@@ -228,16 +228,15 @@ fn extract_dll(archive_bytes: &[u8], dest_dir: &Path) -> Result<()> {
             .context("Failed to read entry path")?
             .into_owned();
 
-        if let Some(name) = path.file_name() {
-            if name.to_str() == Some(DLL_FILENAME) {
-                let dest = dest_dir.join(DLL_FILENAME);
-                let mut out = std::fs::File::create(&dest)
-                    .with_context(|| format!("Failed to create {}", dest.display()))?;
-                std::io::copy(&mut entry, &mut out)
-                    .context("Failed to extract DLL from archive")?;
-                tracing::info!("Extracted {}", path.display());
-                return Ok(());
-            }
+        if let Some(name) = path.file_name()
+            && name.to_str() == Some(DLL_FILENAME)
+        {
+            let dest = dest_dir.join(DLL_FILENAME);
+            let mut out = std::fs::File::create(&dest)
+                .with_context(|| format!("Failed to create {}", dest.display()))?;
+            std::io::copy(&mut entry, &mut out).context("Failed to extract DLL from archive")?;
+            tracing::info!("Extracted {}", path.display());
+            return Ok(());
         }
     }
 
