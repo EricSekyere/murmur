@@ -24,6 +24,7 @@ settingsToggle.addEventListener('click', async () => {
       languageSelect.value = status.language;
     }
     translateToggle.checked = !!status.translate_to_english;
+    translatedCaptionToggle.checked = !!status.show_translated_caption;
     applyMultilingualState(!!status.model_multilingual);
     if (status.phrase_pause_secs != null) {
       phrasePauseRange.value = status.phrase_pause_secs;
@@ -278,6 +279,7 @@ transcriptionProfileSelect.addEventListener('change', async () => {
 function applyMultilingualState(multilingual) {
   languageSelect.disabled = !multilingual;
   translateToggle.disabled = !multilingual;
+  translatedCaptionToggle.disabled = !multilingual;
   if (languageHint) {
     languageHint.textContent = multilingual
       ? 'Auto-detect, or pick a language. Powered by the multilingual model.'
@@ -301,6 +303,17 @@ translateToggle.addEventListener('change', async () => {
     await invoke('update_settings', { translate_to_english: enabled });
   } catch (err) {
     translateToggle.checked = !enabled;
+    showToast(`Failed: ${err}`, 'error');
+  }
+});
+
+translatedCaptionToggle.addEventListener('change', async () => {
+  const enabled = translatedCaptionToggle.checked;
+  try {
+    await invoke('update_settings', { show_translated_caption: enabled });
+    showToast(enabled ? 'Translated captions on' : 'Translated captions off', 'success');
+  } catch (err) {
+    translatedCaptionToggle.checked = !enabled;
     showToast(`Failed: ${err}`, 'error');
   }
 });
@@ -632,6 +645,45 @@ function renderModelList(models) {
   for (const m of models) {
     modelList.appendChild(buildModelCard(m));
   }
+  updateGpuHint(models).catch(() => {});
+}
+
+// The compiled whisper GPU backend never changes at runtime; fetch it once.
+let gpuBackendPromise = null;
+function gpuBackend() {
+  if (!gpuBackendPromise) {
+    gpuBackendPromise = invoke('get_status')
+      .then((s) => s.gpu_backend || 'none')
+      .catch(() => 'none');
+  }
+  return gpuBackendPromise;
+}
+
+/** Explain under the model list whether the GPU is in use: only Whisper models
+ *  run on the GPU, so with Parakeet active a GPU build sits idle. */
+async function updateGpuHint(models) {
+  const hint = document.getElementById('gpu-backend-hint');
+  if (!hint) return;
+  const backend = await gpuBackend();
+  if (backend !== 'vulkan' && backend !== 'cuda') {
+    hint.hidden = true;
+    return;
+  }
+  const label = backend === 'vulkan' ? 'Vulkan' : 'CUDA';
+  const active = models.find((m) => m.active);
+  if (active && active.backend === 'whisper') {
+    hint.textContent =
+      `${label} GPU acceleration is active for this Whisper model.` +
+      (backend === 'vulkan'
+        ? ' The first phrase after launch can take a few extra seconds while GPU shaders compile once.'
+        : '');
+  } else {
+    const name = active ? active.name : 'The current model';
+    hint.textContent =
+      `This build accelerates Whisper models on your GPU (${label}). ` +
+      `${name} runs on the CPU; pick a Whisper model to use the GPU.`;
+  }
+  hint.hidden = false;
 }
 
 function buildModelCard(m) {

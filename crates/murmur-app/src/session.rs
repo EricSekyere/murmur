@@ -210,7 +210,14 @@ fn streaming_worker(app: &tauri::AppHandle, generation: u64) {
     // Resolve any per-app profile for the foreground app up front, so its
     // overrides apply for the whole session.
     let target_app = current_app_name();
-    let (output_mode, sound_feedback, live_preview, caption_at_window) = {
+    let (
+        output_mode,
+        sound_feedback,
+        live_preview,
+        caption_at_window,
+        show_translated_caption,
+        translate_to_english,
+    ) = {
         let settings = state.settings.lock().unwrap_or_else(|e| e.into_inner());
         let profile = target_app
             .as_deref()
@@ -234,6 +241,8 @@ fn streaming_worker(app: &tauri::AppHandle, generation: u64) {
             settings.sound_feedback,
             settings.live_preview,
             settings.caption_position == "window",
+            settings.show_translated_caption,
+            settings.translate_to_english,
         )
     };
 
@@ -301,12 +310,27 @@ fn streaming_worker(app: &tauri::AppHandle, generation: u64) {
     // fixed ~30s mel-encoder cost per call and would run 6-7x per phrase,
     // starving the final decode (the root cause of slow Whisper dictation), so
     // skip preview for it. Parakeet and GPU-accelerated Whisper stay previewed.
-    let engine_can_preview = state
-        .engine
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .as_ref()
-        .is_some_and(|e| e.supports_realtime_preview());
+    let (engine_can_preview, multilingual_model) = {
+        let guard = state.engine.lock().unwrap_or_else(|e| e.into_inner());
+        let engine = guard.as_ref();
+        (
+            engine.is_some_and(|e| e.supports_realtime_preview()),
+            engine
+                .and_then(|e| e.model())
+                .is_some_and(|m| m.is_multilingual()),
+        )
+    };
+    // Live translated captions: with the opt-in on and the whisper translate
+    // task actually running, each delivered phrase's English rendering replaces
+    // the roaming caption instead of clearing it (see deliver_text). This is
+    // the only live feedback when the backend is too slow to preview.
+    let translated_caption = crate::caption::translated_caption_active(
+        show_translated_caption,
+        translate_to_english,
+        multilingual_model,
+    )
+    .then_some(caption_target)
+    .flatten();
     // Live preview runs on its own thread so interim decodes never stall the
     // delivery of finished phrases. `None` when the feature is off or the
     // backend is too slow to preview without delaying delivery.
@@ -323,6 +347,7 @@ fn streaming_worker(app: &tauri::AppHandle, generation: u64) {
                     &state,
                     &buffer,
                     output_mode,
+                    translated_caption,
                     #[cfg(windows)]
                     previous_hwnd,
                     &mut stats,
@@ -369,16 +394,26 @@ fn streaming_worker(app: &tauri::AppHandle, generation: u64) {
         let _ = handle.join();
     }
 
-    finish_streaming(app, &state, &stats, sound_feedback, generation);
+    finish_streaming(
+        app,
+        &state,
+        &stats,
+        sound_feedback,
+        translated_caption.is_some(),
+        generation,
+    );
 }
 
 /// Transcribe one phrase and deliver the result. Phrases that arrive after
 /// a manual stop are still delivered — the speech already happened.
+/// `translated_caption` carries the caption anchor when the delivered phrase's
+/// translated text should be shown in the roaming caption.
 fn handle_phrase(
     app: &tauri::AppHandle,
     state: &AppState,
     buffer: &murmur_core::audio::AudioBuffer,
     output_mode: OutputMode,
+    translated_caption: Option<crate::caption::CaptionAnchor>,
     #[cfg(windows)] previous_hwnd: usize,
     stats: &mut SessionStats,
 ) {
@@ -409,6 +444,24 @@ fn handle_phrase(
             }
             return;
         }
+        // Command mode: a spoken phrase here is a command, not dictation.
+        // Route the transcript to the action executor instead of typing it.
+        // The frontend invokes run_command and shows the physical-confirm
+        // dialog for gated actions; there is no voice path to confirmation
+        // (design Section 5). Command mode is its own activation channel,
+        // toggled by a distinct hotkey and shown by a visible badge.
+        if state
+            .command_mode
+            .load(std::sync::atomic::Ordering::Acquire)
+        {
+            crate::caption::hide(app);
+            let _ = app.emit("command-transcript", serde_json::json!({ "text": &text }));
+            let still_recording = *state.recording.lock().unwrap_or_else(|e| e.into_inner());
+            if still_recording {
+                emit_recording_state(app, true, false);
+            }
+            return;
+        }
         // Literal escape ("literally <command>"): deliver the words verbatim.
         let literal = {
             let settings = state.settings.lock().unwrap_or_else(|e| e.into_inner());
@@ -421,6 +474,7 @@ fn handle_phrase(
                 &literal_text,
                 output_mode,
                 processing_time_ms,
+                translated_caption,
                 #[cfg(windows)]
                 previous_hwnd,
             );
@@ -440,18 +494,22 @@ fn handle_phrase(
                         delivered,
                         output_mode,
                         processing_time_ms,
+                        translated_caption,
                         #[cfg(windows)]
                         previous_hwnd,
                     );
                 }
-                command => execute_command(app, state, command),
+                command => {
+                    // A command isn't phrase text, so there is nothing to caption.
+                    crate::caption::hide(app);
+                    execute_command(app, state, command);
+                }
             }
         }
+    } else {
+        // Nothing was delivered; clear any lingering interim caption.
+        crate::caption::hide(app);
     }
-
-    // The phrase has landed in the target, so clear the roaming caption; the
-    // next phrase's first partial will bring it back.
-    crate::caption::hide(app);
 
     let still_recording = *state.recording.lock().unwrap_or_else(|e| e.into_inner());
     if still_recording {
@@ -467,6 +525,7 @@ fn deliver_text(
     text: &str,
     output_mode: OutputMode,
     processing_time_ms: u64,
+    translated_caption: Option<crate::caption::CaptionAnchor>,
     #[cfg(windows)] previous_hwnd: usize,
 ) {
     deliver_output(
@@ -503,6 +562,14 @@ fn deliver_text(
         "streaming-phrase",
         serde_json::json!({ "text": text, "processing_time_ms": processing_time_ms }),
     );
+
+    // The phrase has landed in the target. Normally the caption clears until
+    // the next phrase's first partial; with translated captions active it
+    // instead shows the final English rendering for a reading-time hold.
+    match &translated_caption {
+        Some(anchor) => crate::caption::show_final(app, anchor, text),
+        None => crate::caption::hide(app),
+    }
 }
 
 /// Append a delivered phrase to the persistent history and save it. Best
@@ -637,6 +704,7 @@ fn finish_streaming(
     state: &AppState,
     stats: &SessionStats,
     sound_feedback: bool,
+    keep_final_caption: bool,
     generation: u64,
 ) {
     // A superseded worker (the user already stopped and restarted) must not play
@@ -663,6 +731,11 @@ fn finish_streaming(
         .session_dev_mode
         .lock()
         .unwrap_or_else(|e| e.into_inner()) = None;
-    crate::caption::hide(app);
+    // With translated captions on, the last phrase usually finishes decoding
+    // just before the session ends; let it live out its reading hold (the
+    // caption page blanks itself) instead of yanking it away here.
+    if !keep_final_caption {
+        crate::caption::hide(app);
+    }
     let _ = app.emit("streaming-done", serde_json::json!({}));
 }

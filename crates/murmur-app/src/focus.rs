@@ -37,8 +37,9 @@ pub(crate) fn output_text(
 /// return false so the caller diverts to the clipboard instead of typing into
 /// whatever window is now live. The live-tracked fallback applies only when no
 /// start window was captured (dictation triggered from Murmur's own UI).
+/// Also used by the selection rewrite to focus its copy/paste target.
 #[cfg(windows)]
-fn ensure_external_target(previous_hwnd: usize, last_external_hwnd: usize) -> bool {
+pub(crate) fn ensure_external_target(previous_hwnd: usize, last_external_hwnd: usize) -> bool {
     let current_fg = foreground_window();
     let current_is_external = current_fg != 0 && !is_own_window(current_fg);
 

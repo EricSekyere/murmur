@@ -1,7 +1,10 @@
-//! Stdio MCP server exposing Murmur's local transcription history through two
-//! read-only tools: `get_recent_transcripts` and `search_transcripts`. The
-//! client spawns the host process and speaks JSON-RPC over stdin/stdout, so
-//! nothing leaves the machine. The server never mutates the history log.
+//! Stdio MCP server exposing Murmur's local transcription history through
+//! read-only tools: `get_recent_transcripts`, `search_transcripts`, and
+//! `wait_for_next_dictation`. The client spawns the host process and speaks
+//! JSON-RPC over stdin/stdout, so nothing leaves the machine. The server never
+//! mutates the history log and never starts a recording: the app owns capture
+//! (the user's push-to-talk hotkey); this server only observes the transcripts
+//! the app delivers.
 
 use anyhow::Result;
 use murmur_core::config::Settings;
@@ -14,6 +17,8 @@ use rmcp::{
     transport::stdio,
 };
 use serde::{Deserialize, Serialize};
+
+use crate::wait;
 
 const DEFAULT_LIMIT: usize = 20;
 const MAX_LIMIT: usize = 100;
@@ -32,6 +37,33 @@ struct SearchRequest {
     /// Maximum number of matches to return (default 20, max 100).
     #[serde(default)]
     limit: Option<usize>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct WaitRequest {
+    /// Seconds to wait for the next dictation before giving up (default 30, max 300).
+    #[serde(default)]
+    timeout_secs: Option<u64>,
+}
+
+/// Result shape for `wait_for_next_dictation`, tagged so an agent can branch
+/// on `status` without parsing prose.
+#[derive(Serialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+enum WaitOutcome {
+    Received {
+        text: String,
+        timestamp_ms: u64,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        app: Option<String>,
+    },
+    TimedOut {
+        waited_secs: u64,
+        message: &'static str,
+    },
+    HistoryDisabled {
+        message: &'static str,
+    },
 }
 
 /// Stable JSON shape returned per transcript, decoupled from the on-disk
@@ -86,6 +118,55 @@ impl MurmurMcp {
     ) -> Result<CallToolResult, McpError> {
         history_json(&req.query, req.limit)
     }
+
+    #[tool(
+        description = "Wait for the next phrase the user dictates through Murmur and return its text. \
+                       Read-only: this never starts recording. The user must trigger capture themselves \
+                       with Murmur's push-to-talk hotkey; this tool only watches for the resulting \
+                       transcript. Use it to ask the user a question and receive their spoken \
+                       answer mid-task. Returns status 'received' with the transcript, or \
+                       'timed_out' if the user did not dictate within timeout_secs."
+    )]
+    async fn wait_for_next_dictation(
+        &self,
+        Parameters(req): Parameters<WaitRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        if !history_enabled() {
+            return outcome_json(&WaitOutcome::HistoryDisabled {
+                message: "Murmur's save-history setting is off, so new dictations cannot be \
+                          observed. Ask the user to enable saving history in Murmur settings.",
+            });
+        }
+        let waited_secs = wait::clamp_timeout(req.timeout_secs);
+        let path = History::default_path()
+            .map_err(|e| McpError::internal_error(format!("history path: {e}"), None))?;
+        // Newest entry only: the baseline and each poll just need the head of
+        // the newest-first log.
+        let load = || History::load(&path).search("", 1);
+        let baseline_ms = load().first().map(|e| e.timestamp_ms);
+        tracing::debug!(waited_secs, ?baseline_ms, "waiting for next dictation");
+        let found =
+            wait::wait_for_new_entry(baseline_ms, wait::polls_for(waited_secs), load, || {
+                tokio::time::sleep(wait::POLL_INTERVAL)
+            })
+            .await;
+        let outcome = match found {
+            Some(entry) => {
+                tracing::debug!(timestamp_ms = entry.timestamp_ms, "new dictation observed");
+                WaitOutcome::Received {
+                    text: entry.text,
+                    timestamp_ms: entry.timestamp_ms,
+                    app: entry.app,
+                }
+            }
+            None => WaitOutcome::TimedOut {
+                waited_secs,
+                message: "No new dictation appeared within the timeout. Ask the user to speak \
+                          using Murmur's hotkey, then call this tool again.",
+            },
+        };
+        outcome_json(&outcome)
+    }
 }
 
 #[tool_handler(router = self.tool_router)]
@@ -94,7 +175,9 @@ impl ServerHandler for MurmurMcp {
         let mut info = ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
             .with_instructions(
                 "Murmur exposes your local voice-to-text history. Call get_recent_transcripts \
-                 to see what was just dictated, or search_transcripts to find a past phrase.",
+                 to see what was just dictated, search_transcripts to find a past phrase, or \
+                 wait_for_next_dictation to receive the next phrase the user speaks (the user \
+                 starts recording with their own hotkey; the server never records).",
             );
         info.server_info = Implementation::new("murmur", env!("CARGO_PKG_VERSION"));
         info
@@ -118,6 +201,13 @@ fn history_json(query: &str, limit: Option<usize>) -> Result<CallToolResult, Mcp
         .map(TranscriptOut::from)
         .collect();
     let json = serde_json::to_string_pretty(&entries)
+        .map_err(|e| McpError::internal_error(format!("serialize: {e}"), None))?;
+    Ok(CallToolResult::success(vec![Content::text(json)]))
+}
+
+/// Serialize a wait outcome as the tool's pretty-JSON payload.
+fn outcome_json(outcome: &WaitOutcome) -> Result<CallToolResult, McpError> {
+    let json = serde_json::to_string_pretty(outcome)
         .map_err(|e| McpError::internal_error(format!("serialize: {e}"), None))?;
     Ok(CallToolResult::success(vec![Content::text(json)]))
 }

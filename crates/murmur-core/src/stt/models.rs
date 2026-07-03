@@ -5,8 +5,10 @@ use sha2::{Digest, Sha256};
 use std::path::PathBuf;
 
 const WHISPER_BASE_URL: &str = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main";
-const PARAKEET_BASE_URL: &str =
+const PARAKEET_V2_BASE_URL: &str =
     "https://huggingface.co/istupakov/parakeet-tdt-0.6b-v2-onnx/resolve/main";
+const PARAKEET_V3_BASE_URL: &str =
+    "https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx/resolve/main";
 
 /// STT backend type.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -50,6 +52,7 @@ pub enum SttModel {
     WhisperLargeV3Turbo,
     // Parakeet models (via parakeet-rs, ONNX format)
     ParakeetTdt06bV2,
+    ParakeetTdt06bV3,
 }
 
 impl SttModel {
@@ -61,6 +64,7 @@ impl SttModel {
             Self::WhisperMediumEn => "Whisper Medium (English)",
             Self::WhisperLargeV3Turbo => "Whisper Large v3 Turbo",
             Self::ParakeetTdt06bV2 => "Parakeet TDT 0.6B v2",
+            Self::ParakeetTdt06bV3 => "Parakeet TDT 0.6B v3",
         }
     }
 
@@ -72,6 +76,7 @@ impl SttModel {
             Self::WhisperMediumEn => "medium.en",
             Self::WhisperLargeV3Turbo => "large-v3-turbo",
             Self::ParakeetTdt06bV2 => "parakeet-tdt-0.6b-v2",
+            Self::ParakeetTdt06bV3 => "parakeet-tdt-0.6b-v3",
         }
     }
 
@@ -83,6 +88,7 @@ impl SttModel {
             Self::WhisperMediumEn => "whisper-medium-en",
             Self::WhisperLargeV3Turbo => "whisper-large-v3-turbo",
             Self::ParakeetTdt06bV2 => "parakeet-tdt-06b-v2",
+            Self::ParakeetTdt06bV3 => "parakeet-tdt-06b-v3",
         }
     }
 
@@ -93,15 +99,17 @@ impl SttModel {
             | Self::WhisperSmallEn
             | Self::WhisperMediumEn
             | Self::WhisperLargeV3Turbo => Backend::Whisper,
-            Self::ParakeetTdt06bV2 => Backend::Parakeet,
+            Self::ParakeetTdt06bV2 | Self::ParakeetTdt06bV3 => Backend::Parakeet,
         }
     }
 
-    /// Whether the model can transcribe languages other than English and
-    /// translate to English. Only the multilingual Whisper checkpoints can;
-    /// the `.en` models and Parakeet are English-only.
+    /// Whether the model can transcribe languages other than English.
+    /// The `.en` Whisper models and Parakeet v2 are English-only. Whisper
+    /// Large v3 Turbo also honors the translate-to-English toggle; Parakeet
+    /// v3 covers 25 European languages with automatic detection but always
+    /// transcribes in the spoken language.
     pub fn is_multilingual(&self) -> bool {
-        matches!(self, Self::WhisperLargeV3Turbo)
+        matches!(self, Self::WhisperLargeV3Turbo | Self::ParakeetTdt06bV3)
     }
 
     /// Approximate total download size in MB.
@@ -112,6 +120,7 @@ impl SttModel {
             Self::WhisperMediumEn => 1533,
             Self::WhisperLargeV3Turbo => 1624,
             Self::ParakeetTdt06bV2 => 661,
+            Self::ParakeetTdt06bV3 => 670,
         }
     }
 
@@ -123,6 +132,7 @@ impl SttModel {
             Self::WhisperMediumEn => "Higher accuracy, slower. Needs 4 GB+ RAM",
             Self::WhisperLargeV3Turbo => "Best Whisper accuracy, slowest. Needs 6 GB+ RAM",
             Self::ParakeetTdt06bV2 => "Best accuracy, native punctuation & capitalization",
+            Self::ParakeetTdt06bV3 => "Best accuracy, 25 languages with auto-detect",
         }
     }
 
@@ -134,6 +144,7 @@ impl SttModel {
             Self::WhisperMediumEn => 3500,
             Self::WhisperLargeV3Turbo => 5000,
             Self::ParakeetTdt06bV2 => 1500,
+            Self::ParakeetTdt06bV3 => 1600,
         }
     }
 
@@ -145,6 +156,7 @@ impl SttModel {
             Self::WhisperMediumEn,
             Self::WhisperLargeV3Turbo,
             Self::ParakeetTdt06bV2,
+            Self::ParakeetTdt06bV3,
         ]
     }
 
@@ -157,12 +169,14 @@ impl SttModel {
             "whisper-medium-en" => Some(Self::WhisperMediumEn),
             "whisper-large-v3-turbo" => Some(Self::WhisperLargeV3Turbo),
             "parakeet-tdt-06b-v2" => Some(Self::ParakeetTdt06bV2),
+            "parakeet-tdt-06b-v3" => Some(Self::ParakeetTdt06bV3),
             // Legacy short names (backward compat)
             "base-en" | "base.en" => Some(Self::WhisperBaseEn),
             "small-en" | "small.en" => Some(Self::WhisperSmallEn),
             "medium-en" | "medium.en" => Some(Self::WhisperMediumEn),
             "large-v3-turbo" | "large-v3-turbo.en" => Some(Self::WhisperLargeV3Turbo),
             "parakeet-tdt-0.6b-v2" => Some(Self::ParakeetTdt06bV2),
+            "parakeet-tdt-0.6b-v3" => Some(Self::ParakeetTdt06bV3),
             _ => None,
         }
     }
@@ -209,14 +223,40 @@ impl SttModel {
                     sha256: "ec182b70dd42113aff6c5372c75cac58c952443eb22322f57bbd7f53977d497d",
                 },
             ],
+            Self::ParakeetTdt06bV3 => vec![
+                // Pinned to istupakov/parakeet-tdt-0.6b-v3-onnx @ main. To
+                // re-pin: the ONNX files are LFS, so their SHA256 is the
+                // `oid sha256:` in the pointer at <repo>/raw/main/<file>
+                // (also `lfs.oid` in /api/models/<repo>/tree/main);
+                // vocab.txt is not LFS, hash its raw bytes directly.
+                ModelFile {
+                    remote_name: "encoder-model.int8.onnx",
+                    local_name: "encoder-model.onnx",
+                    sha256: "6139d2fa7e1b086097b277c7149725edbab89cc7c7ae64b23c741be4055aff09",
+                },
+                ModelFile {
+                    remote_name: "decoder_joint-model.int8.onnx",
+                    local_name: "decoder_joint-model.onnx",
+                    sha256: "eea7483ee3d1a30375daedc8ed83e3960c91b098812127a0d99d1c8977667a70",
+                },
+                ModelFile {
+                    remote_name: "vocab.txt",
+                    local_name: "vocab.txt",
+                    sha256: "d58544679ea4bc6ac563d1f545eb7d474bd6cfa467f0a6e2c1dc1c7d37e3c35d",
+                },
+            ],
         }
     }
 
     /// Base download URL for this model's files.
     fn base_url(&self) -> &str {
-        match self.backend() {
-            Backend::Whisper => WHISPER_BASE_URL,
-            Backend::Parakeet => PARAKEET_BASE_URL,
+        match self {
+            Self::WhisperBaseEn
+            | Self::WhisperSmallEn
+            | Self::WhisperMediumEn
+            | Self::WhisperLargeV3Turbo => WHISPER_BASE_URL,
+            Self::ParakeetTdt06bV2 => PARAKEET_V2_BASE_URL,
+            Self::ParakeetTdt06bV3 => PARAKEET_V3_BASE_URL,
         }
     }
 }
@@ -465,4 +505,78 @@ async fn verify_download(temp_path: &std::path::Path, file: &ModelFile, hash: &s
     }
     tracing::info!("Checksum verified for {}", file.local_name);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parakeet_v3_round_trips_id_and_short_name() {
+        let m = SttModel::ParakeetTdt06bV3;
+        assert_eq!(m.id(), "parakeet-tdt-06b-v3");
+        assert_eq!(m.short_name(), "parakeet-tdt-0.6b-v3");
+        assert_eq!(SttModel::from_name(m.id()), Some(m));
+        assert_eq!(SttModel::from_name(m.short_name()), Some(m));
+    }
+
+    #[test]
+    fn parakeet_v3_uses_parakeet_backend_and_is_listed() {
+        assert_eq!(SttModel::ParakeetTdt06bV3.backend(), Backend::Parakeet);
+        assert!(SttModel::all().contains(&SttModel::ParakeetTdt06bV3));
+    }
+
+    #[test]
+    fn parakeet_v3_is_multilingual_v2_stays_english_only() {
+        assert!(SttModel::ParakeetTdt06bV3.is_multilingual());
+        assert!(!SttModel::ParakeetTdt06bV2.is_multilingual());
+    }
+
+    #[test]
+    fn parakeet_v3_lists_expected_files() {
+        let files = SttModel::ParakeetTdt06bV3.model_files();
+        let remote: Vec<_> = files.iter().map(|f| f.remote_name).collect();
+        let local: Vec<_> = files.iter().map(|f| f.local_name).collect();
+        assert_eq!(
+            remote,
+            [
+                "encoder-model.int8.onnx",
+                "decoder_joint-model.int8.onnx",
+                "vocab.txt"
+            ]
+        );
+        assert_eq!(
+            local,
+            [
+                "encoder-model.onnx",
+                "decoder_joint-model.onnx",
+                "vocab.txt"
+            ]
+        );
+    }
+
+    #[test]
+    fn parakeet_v3_pins_a_full_sha256_for_every_file() {
+        for f in SttModel::ParakeetTdt06bV3.model_files() {
+            assert_eq!(f.sha256.len(), 64, "{}: pin is not 64 chars", f.remote_name);
+            assert!(
+                f.sha256.chars().all(|c| c.is_ascii_hexdigit()),
+                "{}: pin is not hex",
+                f.remote_name
+            );
+        }
+    }
+
+    #[test]
+    fn parakeet_v3_downloads_from_the_v3_repo() {
+        assert!(SttModel::ParakeetTdt06bV3.base_url().contains("v3-onnx"));
+        assert!(SttModel::ParakeetTdt06bV2.base_url().contains("v2-onnx"));
+    }
+
+    #[test]
+    fn parakeet_v3_serde_round_trips() {
+        let json = serde_json::to_string(&SttModel::ParakeetTdt06bV3).expect("serialize");
+        let back: SttModel = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(back, SttModel::ParakeetTdt06bV3);
+    }
 }

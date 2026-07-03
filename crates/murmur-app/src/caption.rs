@@ -62,7 +62,45 @@ unsafe extern "system" {
     fn GetDpiForWindow(hwnd: usize) -> u32;
 }
 
+/// Whether the live caption should show final translated phrases: the user
+/// opted in, translate-to-English is on, and the active model actually honors
+/// the translate task (English-only models ignore it and output verbatim).
+pub(crate) fn translated_caption_active(
+    show_translated_caption: bool,
+    translate_to_english: bool,
+    multilingual_model: bool,
+) -> bool {
+    show_translated_caption && translate_to_english && multilingual_model
+}
+
+/// Reading-time hold for a final translated caption. Interim partials refresh
+/// every ~0.7s so the page's short default suffices for them, but a final
+/// phrase gets exactly one showing and must stay up long enough to read.
+const FINAL_CAPTION_BASE_MS: u64 = 2_000;
+const FINAL_CAPTION_PER_CHAR_MS: u64 = 50;
+const FINAL_CAPTION_MAX_MS: u64 = 7_000;
+
+fn final_caption_hold_ms(text: &str) -> u64 {
+    (FINAL_CAPTION_BASE_MS + FINAL_CAPTION_PER_CHAR_MS * text.chars().count() as u64)
+        .min(FINAL_CAPTION_MAX_MS)
+}
+
+/// Show interim (live preview) text; the page hides it quickly if no newer
+/// partial replaces it.
 pub(crate) fn show(app: &tauri::AppHandle, anchor: &CaptionAnchor, text: &str) {
+    present(app, anchor, serde_json::Value::String(text.to_string()));
+}
+
+/// Show a delivered phrase's translated text with a reading-time hold.
+pub(crate) fn show_final(app: &tauri::AppHandle, anchor: &CaptionAnchor, text: &str) {
+    present(
+        app,
+        anchor,
+        serde_json::json!({ "text": text, "hold_ms": final_caption_hold_ms(text) }),
+    );
+}
+
+fn present(app: &tauri::AppHandle, anchor: &CaptionAnchor, payload: serde_json::Value) {
     let Some(win) = app.get_webview_window("caption") else {
         return;
     };
@@ -82,7 +120,7 @@ pub(crate) fn show(app: &tauri::AppHandle, anchor: &CaptionAnchor, text: &str) {
     #[cfg(not(windows))]
     let _ = anchor;
 
-    let _ = win.emit("caption-text", text);
+    let _ = win.emit("caption-text", payload);
     let _ = win.set_always_on_top(true);
     let _ = win.show();
 }
@@ -223,4 +261,37 @@ fn center_in_window(hwnd: usize, left: i32, top: i32, right: i32, bottom: i32) -
     let cx = (left + right) / 2;
     let cy = (top + bottom) / 2;
     cx >= wr.left && cx <= wr.right && cy >= wr.top && cy <= wr.bottom
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn translated_caption_requires_all_three_conditions() {
+        assert!(translated_caption_active(true, true, true));
+        assert!(!translated_caption_active(false, true, true));
+        assert!(!translated_caption_active(true, false, true));
+        assert!(!translated_caption_active(true, true, false));
+        assert!(!translated_caption_active(false, false, false));
+    }
+
+    #[test]
+    fn final_caption_hold_scales_with_length_and_caps() {
+        assert_eq!(final_caption_hold_ms(""), FINAL_CAPTION_BASE_MS);
+        assert!(final_caption_hold_ms("hola") < final_caption_hold_ms(&"palabra ".repeat(10)));
+        assert_eq!(
+            final_caption_hold_ms(&"x".repeat(1_000)),
+            FINAL_CAPTION_MAX_MS
+        );
+    }
+
+    #[test]
+    fn final_caption_hold_counts_chars_not_bytes() {
+        // Multibyte text must get the same reading budget as ASCII of equal length.
+        assert_eq!(
+            final_caption_hold_ms("こんにちは"),
+            final_caption_hold_ms("hello")
+        );
+    }
 }

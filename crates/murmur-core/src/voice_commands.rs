@@ -38,7 +38,8 @@ pub enum VoiceCommand {
 
 /// Lowercase, trimmed, and stripped of trailing sentence punctuation, so
 /// matching ignores case, surrounding whitespace, and a trailing "." or "?".
-fn normalize(phrase: &str) -> String {
+/// Shared with the command-mode grammar so both matchers hear the same words.
+pub(crate) fn normalize(phrase: &str) -> String {
     phrase
         .trim()
         .trim_end_matches(['.', '!', '?', ','])

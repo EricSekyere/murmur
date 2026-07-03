@@ -902,7 +902,9 @@ fn apply_case(kind: &str, words: &[String]) -> String {
     }
 }
 
-fn capitalize(s: &str) -> String {
+/// Uppercase the first character. `pub(crate)` so `command::formatters` can
+/// reuse it instead of duplicating the Unicode-aware first-char logic.
+pub(crate) fn capitalize(s: &str) -> String {
     let mut chars = s.chars();
     match chars.next() {
         None => String::new(),

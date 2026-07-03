@@ -73,11 +73,23 @@ pub(crate) struct AppState {
     /// Set when a change arrives mid-scan; the running scan picks it up and
     /// re-runs once instead of being lost.
     pub index_pending: AtomicBool,
+    /// True while voice-to-action command mode is active. Toggled by the
+    /// command-mode hotkey, a separate activation channel from dictation.
+    pub command_mode: AtomicBool,
+    /// Command-mode routing/execution context plus the single pending action
+    /// awaiting physical confirmation. Async mutex because execution awaits
+    /// the tool backend while holding it.
+    pub command: tokio::sync::Mutex<crate::command_mode::CommandState>,
     /// Local Help retrieval engine, built in the background at startup once the
     /// embedder model is downloaded. `None` until ready (or if the build fails);
     /// `help_search` then returns no hits rather than erroring.
     #[cfg(feature = "full")]
     pub help: Arc<Mutex<Option<murmur_core::help::HelpEngine>>>,
+    /// Local LLM engine for Command Mode selection rewrites, loaded lazily on
+    /// first use (the model holds about 1 GB resident) and reused. Std mutex:
+    /// only locked inside spawn_blocking, held across an inference.
+    #[cfg(feature = "llm")]
+    pub llm: Arc<Mutex<Option<murmur_core::llm::LlmEngine>>>,
 }
 
 #[derive(serde::Serialize, Clone)]

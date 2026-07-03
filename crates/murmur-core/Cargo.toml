@@ -14,16 +14,35 @@ full = ["audio", "stt", "vad", "keyboard", "parakeet", "indexer", "treesitter", 
 audio = ["dep:cpal"]
 # Speech-to-text via whisper.cpp (requires cmake + libclang)
 stt = ["dep:whisper-rs"]
+# Local LLM runtime via llama.cpp (requires cmake + libclang, mirrors stt).
+# CPU only; GPU backends stay off until exposed deliberately.
+llm = ["dep:llama-cpp-2"]
 # CUDA GPU acceleration for whisper.cpp (requires CUDA toolkit + nvcc at
 # build time, NVIDIA driver + CUDA runtime DLLs at run time)
 cuda = ["stt", "whisper-rs/cuda"]
+# Vulkan GPU acceleration for whisper.cpp: cross-vendor alternative to CUDA
+# (any Vulkan 1.2+ GPU — AMD, Intel, NVIDIA). Requires the Vulkan SDK (glslc
+# for shader compilation) at build time and a Vulkan driver at run time.
+# Mutually exclusive with `cuda` in practice: pick one GPU backend per build.
+vulkan = ["stt", "whisper-rs/vulkan"]
 # Voice activity detection via ONNX Runtime. Requires `audio` for the
 # in-tree resampler used to feed Silero v5 at its required 16 kHz.
 vad = ["audio", "dep:ort", "dep:zip", "dep:flate2", "dep:tar"]
 # Parakeet STT backend via ONNX Runtime (also needs ort directly for init_from)
 parakeet = ["dep:parakeet-rs", "dep:ort", "dep:zip", "dep:flate2", "dep:tar"]
+# Local speaker diarization via NVIDIA Sortformer v2. Runs
+# on the same ORT runtime the Parakeet STT path already loads (parakeet-rs's
+# `sortformer` module is pure Rust over `ort` + ndarray + rustfft), so it adds
+# no new native library — it just reuses the `parakeet` ONNX stack. Deliberately
+# opt-in and NOT part of `full`: the meeting workflow is a distinct mode.
+diarization = ["parakeet", "parakeet-rs/sortformer"]
 # Keystroke simulation
 keyboard = ["dep:enigo"]
+# Opt-in BYO-key cloud rewrite backend. Strictly off by
+# default and deliberately NOT part of `full`: enabling it only compiles the
+# code; a request additionally requires the config opt-in and the
+# MURMUR_CLOUD_API_KEY environment variable at call time.
+cloud = ["reqwest/json"]
 # Local Help retrieval: semantic search over bundled help articles via a small
 # ONNX sentence embedder (reuses the ORT runtime the STT path already loads).
 help = ["dep:ort", "dep:tokenizers", "dep:zip", "dep:flate2", "dep:tar"]
@@ -48,6 +67,13 @@ cpal = { version = "0.15", optional = true }
 
 # STT (optional — needs cmake + libclang to build whisper.cpp)
 whisper-rs = { version = "0.15", optional = true }
+
+# Local LLM (optional — builds llama.cpp via cmake, same native pattern as
+# whisper-rs). Exact pin: upstream says it does not follow semver meaningfully;
+# re-test on every bump. default-features off keeps the build CPU-only and
+# drops OpenMP; `common` builds llama.cpp's `common/` helper library, which
+# carries the GBNF grammar sampler used for constrained tool selection.
+llama-cpp-2 = { version = "=0.1.150", optional = true, default-features = false, features = ["common"] }
 
 # VAD (optional — needs ONNX Runtime, load-dynamic avoids MSVC STL version issues)
 ort = { version = "2.0.0-rc.11", optional = true, features = ["load-dynamic"] }
@@ -91,6 +117,7 @@ tracing.workspace = true
 
 # Error handling
 anyhow.workspace = true
+thiserror = "2"
 
 # Utilities
 dirs = "6"

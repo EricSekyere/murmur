@@ -50,6 +50,7 @@ const transcriptionProfileSelect = document.getElementById('transcription-profil
 const languageSelect     = document.getElementById('language-select');
 const languageHint       = document.getElementById('language-hint');
 const translateToggle    = document.getElementById('translate-toggle');
+const translatedCaptionToggle = document.getElementById('translated-caption-toggle');
 const audioDeviceSelect  = document.getElementById('audio-device-select');
 const phrasePauseRange   = document.getElementById('phrase-pause-range');
 const phrasePauseValue   = document.getElementById('phrase-pause-value');

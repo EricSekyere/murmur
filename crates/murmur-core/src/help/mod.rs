@@ -144,25 +144,9 @@ fn push_section(heading: &str, body: &str, out: &mut Vec<Section>) {
     }
 }
 
-/// Cosine similarity of two equal-length vectors. Returns 0.0 on a length
-/// mismatch or a zero-magnitude vector rather than NaN.
-pub fn cosine(a: &[f32], b: &[f32]) -> f32 {
-    if a.len() != b.len() || a.is_empty() {
-        return 0.0;
-    }
-    let mut dot = 0.0f32;
-    let mut norm_a = 0.0f32;
-    let mut norm_b = 0.0f32;
-    for (x, y) in a.iter().zip(b) {
-        dot += x * y;
-        norm_a += x * x;
-        norm_b += y * y;
-    }
-    if norm_a == 0.0 || norm_b == 0.0 {
-        return 0.0;
-    }
-    dot / (norm_a.sqrt() * norm_b.sqrt())
-}
+// One cosine implementation serves Help search and the Tier 2 intent
+// classifier; re-exported here to keep the `help::cosine` path stable.
+pub use crate::command::cosine;
 
 /// In-memory help index: embedded sections searched by brute-force cosine. The
 /// corpus is tiny (dozens of sections), so a flat scan is microseconds and needs

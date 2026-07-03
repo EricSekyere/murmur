@@ -29,6 +29,22 @@ Smaller models are faster but less accurate; larger models are the reverse. On a
 machine without a GPU, prefer Parakeet or a small Whisper model for low latency.
 The medium and large Whisper models are really only practical with a GPU.
 
+## GPU acceleration
+
+Some builds of Murmur run Whisper models on your graphics card: CUDA builds use
+NVIDIA GPUs, and Vulkan builds work on any modern GPU (NVIDIA, AMD, or Intel).
+When a GPU build is running, Settings shows a note under the STT Model list
+naming the backend.
+
+Only Whisper models use the GPU. Parakeet always runs on the CPU, so with
+Parakeet selected the GPU backend sits idle. To put your graphics card to work,
+pick a Whisper model; the GPU is what makes the medium and large variants fast
+enough for real-time dictation.
+
+On Vulkan builds, the first phrase after launching the app can take a few extra
+seconds while GPU shaders compile. That happens once per launch; every phrase
+after it is fast.
+
 ## Languages
 
 English only models (the Whisper .en models and Parakeet) always transcribe
