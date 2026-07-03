@@ -35,6 +35,21 @@ enum Commands {
         model: Option<String>,
     },
 
+    /// Transcribe a WAV file and print the text to stdout.
+    ///
+    /// Non-interactive: reads the file, resamples to 16 kHz mono, runs STT,
+    /// and prints the transcript. Useful for batch processing and for
+    /// verifying an STT backend (e.g. a GPU build) end to end.
+    Transcribe {
+        /// Path to a WAV file. Any sample rate / channel count is accepted
+        /// (it is resampled to 16 kHz mono before inference).
+        path: PathBuf,
+
+        /// STT model to use (e.g. whisper-base-en). Defaults to the configured model.
+        #[arg(long, short)]
+        model: Option<String>,
+    },
+
     /// Manage configuration.
     Config {
         /// Show the current configuration.
@@ -146,6 +161,7 @@ async fn main() -> Result<()> {
             clipboard,
             model,
         } => cmd_listen(stdout, clipboard, model).await?,
+        Commands::Transcribe { path, model } => cmd_transcribe(path, model).await?,
         Commands::Config {
             show,
             reset,
@@ -460,6 +476,85 @@ async fn cmd_listen(stdout: bool, clipboard: bool, model_name: Option<String>) -
 
 fn output_text(text: &str, mode: OutputMode) -> Result<()> {
     murmur_core::output::dispatch_output(text, mode)
+}
+
+/// Decode a WAV file to interleaved f32 samples in [-1, 1], plus its native
+/// sample rate and channel count. Handles both float and integer PCM.
+fn read_wav(path: &std::path::Path) -> Result<(Vec<f32>, u32, u16)> {
+    let reader = hound::WavReader::open(path)
+        .with_context(|| format!("Failed to open WAV file {}", path.display()))?;
+    let spec = reader.spec();
+    let samples: Vec<f32> = match spec.sample_format {
+        hound::SampleFormat::Float => reader
+            .into_samples::<f32>()
+            .collect::<std::result::Result<Vec<f32>, _>>()
+            .context("Failed to read float WAV samples")?,
+        hound::SampleFormat::Int => {
+            // Full-scale magnitude for the sample width, so any bit depth
+            // (16/24/32-bit PCM) normalizes to [-1, 1].
+            let scale = (1i64 << (spec.bits_per_sample - 1)) as f32;
+            reader
+                .into_samples::<i32>()
+                .map(|s| s.map(|v| v as f32 / scale))
+                .collect::<std::result::Result<Vec<f32>, _>>()
+                .context("Failed to read integer WAV samples")?
+        }
+    };
+    Ok((samples, spec.sample_rate, spec.channels))
+}
+
+/// Transcribe a WAV file offline and print the text to stdout.
+async fn cmd_transcribe(path: PathBuf, model_name: Option<String>) -> Result<()> {
+    let settings = Settings::load(&Settings::default_path()?)?;
+
+    let model = match model_name {
+        Some(name) => SttModel::from_name(&name).ok_or_else(|| {
+            let available: Vec<&str> = SttModel::all().iter().map(|m| m.id()).collect();
+            anyhow::anyhow!(
+                "Unknown model '{}'. Available: {}",
+                name,
+                available.join(", ")
+            )
+        })?,
+        None => settings.model,
+    };
+
+    let model_mgr = ModelManager::new(ModelManager::default_dir()?);
+    if !model_mgr.is_downloaded(model) {
+        tracing::info!("Model {} not found, downloading...", model.name());
+        model_mgr.download(model).await?;
+    }
+    let model_path = model_mgr.model_path(model);
+
+    let (raw, rate, channels) = read_wav(&path)?;
+    let buffer = murmur_core::audio::AudioBuffer::from_raw(&raw, rate, channels);
+    tracing::info!(
+        "Loaded {} ({} Hz, {} ch) -> {} samples at 16 kHz",
+        path.display(),
+        rate,
+        channels,
+        buffer.samples.len()
+    );
+
+    let mut engine = match model.backend() {
+        Backend::Whisper => murmur_core::stt::engine::SttEngine::new_whisper(
+            model_path.to_str().context("Invalid model path")?,
+            0,
+        )?,
+        Backend::Parakeet => murmur_core::stt::engine::SttEngine::new_parakeet(
+            model_path.to_str().context("Invalid model path")?,
+        )?,
+    };
+
+    let result = engine.transcribe(&buffer.samples)?;
+    tracing::info!(
+        "Transcribed {} samples in {}ms with {}",
+        buffer.samples.len(),
+        result.processing_time_ms,
+        model.name()
+    );
+    println!("{}", result.text);
+    Ok(())
 }
 
 fn cmd_config(show: bool, reset: bool, hotkey: Option<String>) -> Result<()> {

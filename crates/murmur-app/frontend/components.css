@@ -873,6 +873,109 @@
   margin-top: 14px;
 }
 
+/* Command confirm overlay: the physical-confirm gate for voice actions.
+   Sits above every other overlay so the safety prompt is never covered. */
+.cmdconfirm {
+  position: fixed;
+  inset: 0;
+  z-index: 1100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(4px);
+}
+
+.cmdconfirm[hidden] {
+  display: none;
+}
+
+.cmdconfirm__card {
+  width: min(480px, 92vw);
+  max-height: 80vh;
+  overflow-y: auto;
+  background: var(--color-surface-solid);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  padding: 24px;
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.5);
+}
+
+.cmdconfirm__title {
+  margin: 0 0 8px;
+  font-size: 1.15rem;
+  color: var(--color-text);
+}
+
+.cmdconfirm__intro {
+  margin: 0 0 16px;
+  color: var(--color-text-secondary);
+  font-size: 0.86rem;
+  line-height: 1.45;
+}
+
+.cmdconfirm__details {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 8px 16px;
+  margin: 0 0 16px;
+  font-size: 0.86rem;
+}
+
+.cmdconfirm__details dt {
+  padding-top: 2px;
+  color: var(--color-text-muted);
+  font-size: 0.68rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+}
+
+.cmdconfirm__details dd {
+  margin: 0;
+  min-width: 0;
+  color: var(--color-text);
+}
+
+.cmdconfirm__details code {
+  font-family: var(--font-mono);
+}
+
+/* The argument echo scrolls inside its own box; long ASR output must never
+   push the buttons off-screen. */
+.cmdconfirm__args {
+  margin: 0;
+  max-height: 200px;
+  overflow: auto;
+  padding: 8px;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.cmdconfirm__warning {
+  margin: 0 0 16px;
+  color: var(--color-error-text);
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+
+.cmdconfirm__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+/* The confirm gate is keyboard-driven: make focus unmistakable. */
+.cmdconfirm__actions button:focus-visible {
+  outline: 2px solid var(--color-accent-light);
+  outline-offset: 2px;
+}
+
 /* Select Dropdown */
 .settings-select {
   background: var(--color-surface-raised);
@@ -1783,5 +1886,25 @@ footer {
   font-size: 0.66rem;
   font-family: var(--font-mono);
   color: var(--color-text-muted);
+}
+
+/* ─── Rewrite Selection (Command Mode) ──────────────────────────────────────
+   Mode picker + action button in one quiet row under the transcription
+   panel; the hint doubles as the live status line while a rewrite runs.
+   ──────────────────────────────────────────────────────────────────────────── */
+#rewrite-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.rewrite-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.rewrite-controls .settings-select {
+  flex: 0 1 200px;
 }
 

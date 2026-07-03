@@ -54,6 +54,7 @@
         </div>
 
         <span id="status-badge" class="badge badge--idle" role="status" aria-live="polite">Idle</span>
+        <span id="command-mode-badge" class="badge badge--command" role="status" aria-live="polite" hidden>Command mode</span>
 
         <nav class="nav" aria-label="Main navigation">
           <button class="nav__item nav__item--active" data-view="home">
@@ -183,6 +184,27 @@
             <div id="transcription-output" class="transcription-output">
               <span class="placeholder">Press the mic or hit your hotkey to begin.</span>
             </div>
+          </section>
+
+          <!-- Rewrite selection (Command Mode): select text anywhere, pick a
+               style, and the local LLM replaces the selection in place. -->
+          <section id="rewrite-section">
+            <div class="section-header">
+              <h2>Rewrite Selection</h2>
+            </div>
+            <div class="rewrite-controls">
+              <select id="rewrite-mode-select" class="settings-select" aria-label="Rewrite style">
+                <option value="clean_up">Clean up</option>
+                <option value="formal">Formal tone</option>
+                <option value="casual">Casual tone</option>
+                <option value="bullet_list">Bullet list</option>
+                <option value="summarize">Summarize</option>
+              </select>
+              <button id="rewrite-selection-btn" class="btn-small" type="button">Rewrite selection</button>
+            </div>
+            <span class="settings-hint" id="rewrite-status" role="status" aria-live="polite">
+              Select text in any app, pick a style, then rewrite. Runs fully on-device.
+            </span>
           </section>
 
           <!-- History -->
@@ -439,6 +461,16 @@
                     <span class="toggle-switch__slider"></span>
                   </label>
                 </div>
+                <div class="settings-row">
+                  <div class="settings-row__text">
+                    <label class="settings-label" for="translated-caption-toggle">Translated Captions</label>
+                    <span class="settings-hint">Show each phrase's English translation in the live caption. Needs Translate to English and the window caption position. Fully on-device.</span>
+                  </div>
+                  <label class="toggle-switch">
+                    <input type="checkbox" id="translated-caption-toggle">
+                    <span class="toggle-switch__slider"></span>
+                  </label>
+                </div>
               </div>
 
               <!-- Audio Device -->
@@ -662,6 +694,7 @@
               <div class="settings-group">
                 <label class="settings-label">STT Model</label>
                 <div id="model-list" class="model-list"></div>
+                <span class="settings-hint" id="gpu-backend-hint" hidden></span>
               </div>
 
               <!-- Developer Mode -->
@@ -863,6 +896,33 @@
       </div>
     </div>
 
+    <!-- Command confirm overlay: the physical-confirm gate for voice actions.
+         A gated action only ever runs through this dialog's buttons (click or
+         keyboard); there is no voice path to confirmation. -->
+    <div id="command-confirm" class="cmdconfirm" hidden>
+      <div class="cmdconfirm__card" role="dialog" aria-modal="true"
+           aria-labelledby="command-confirm-title" aria-describedby="command-confirm-intro">
+        <h2 class="cmdconfirm__title" id="command-confirm-title">Confirm this action</h2>
+        <p class="cmdconfirm__intro" id="command-confirm-intro">
+          Murmur heard a command that needs your approval. Check that the
+          action and its details match what you said before running it.
+        </p>
+        <dl class="cmdconfirm__details">
+          <dt>Action</dt>
+          <dd><code id="command-confirm-tool"></code></dd>
+          <dt>Arguments</dt>
+          <dd><pre class="cmdconfirm__args"><code id="command-confirm-args"></code></pre></dd>
+        </dl>
+        <p class="cmdconfirm__warning" id="command-confirm-warning" hidden>
+          This action cannot be undone.
+        </p>
+        <div class="cmdconfirm__actions">
+          <button type="button" class="btn-small" id="command-cancel-btn">Cancel</button>
+          <button type="button" class="model-card__btn cmdconfirm__confirm" id="command-confirm-btn">Run action</button>
+        </div>
+      </div>
+    </div>
+
     <!-- What's New overlay -->
     <div id="whats-new" class="whatsnew" hidden>
       <div class="whatsnew__card">
@@ -887,6 +947,8 @@
   <script src="js/updater.js"></script>
   <script src="js/whatsnew.data.js"></script>
   <script src="js/whatsnew.js"></script>
+  <script src="js/commandmode.js"></script>
+  <script src="js/rewrite.js"></script>
   <script src="js/main.js"></script>
   <script src="js/dashboard.js"></script>
   <script src="js/onboarding.js"></script>

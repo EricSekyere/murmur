@@ -4,11 +4,17 @@
 mod audio_worker;
 mod calibration;
 mod caption;
+// Public: the command-mode executor is exercised by the UI layer as it lands
+// (docs/command-mode-design.md, Phase 1).
+pub mod command_exec;
+mod command_mode;
 mod commands;
 mod focus;
 mod input;
 mod model_setup;
+pub mod native_actions;
 mod preview;
+mod rewrite;
 mod session;
 mod sound;
 mod state;
@@ -85,6 +91,10 @@ pub fn run() -> anyhow::Result<()> {
     let engine: Arc<Mutex<Option<SttEngine>>> = Arc::new(Mutex::new(None));
     let engine_for_setup = Arc::clone(&engine);
 
+    let command_state =
+        command_mode::CommandState::new().context("initializing command mode context")?;
+    let command_shortcut = command_mode::hotkey_shortcut();
+
     tauri::Builder::default()
         // Must be the first plugin: a second launch hands off to the running
         // instance and exits, so two copies can never run at once. Multiple
@@ -109,7 +119,16 @@ pub fn run() -> anyhow::Result<()> {
         .plugin(tauri_plugin_dialog::init())
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
-                .with_handler(move |app, _shortcut, event| {
+                .with_handler(move |app, shortcut, event| {
+                    // The command-mode hotkey is a separate activation channel
+                    // from dictation (docs/command-mode-design.md, Section 5).
+                    // Pressed only, so the key release does not re-toggle.
+                    if command_shortcut.as_ref() == Some(shortcut) {
+                        if event.state == tauri_plugin_global_shortcut::ShortcutState::Pressed {
+                            command_mode::toggle_mode(app);
+                        }
+                        return;
+                    }
                     input::handle_hotkey_event(app, event.state);
                 })
                 .build(),
@@ -138,8 +157,12 @@ pub fn run() -> anyhow::Result<()> {
             codebase_watcher: Mutex::new(None),
             indexing: std::sync::atomic::AtomicBool::new(false),
             index_pending: std::sync::atomic::AtomicBool::new(false),
+            command_mode: std::sync::atomic::AtomicBool::new(false),
+            command: tokio::sync::Mutex::new(command_state),
             #[cfg(feature = "full")]
             help: Arc::new(Mutex::new(None)),
+            #[cfg(feature = "llm")]
+            llm: Arc::new(Mutex::new(None)),
         })
         .on_window_event(|window, event| {
             // Hide the main window on close so the tray can re-show it.
@@ -173,6 +196,10 @@ pub fn run() -> anyhow::Result<()> {
             commands::mcp_install,
             commands::get_usage_stats,
             commands::learn_vocabulary,
+            command_mode::run_command,
+            command_mode::confirm_pending,
+            command_mode::cancel_pending,
+            rewrite::rewrite_selection,
             #[cfg(feature = "full")]
             commands::help_search,
             #[cfg(feature = "full")]
@@ -246,6 +273,7 @@ fn setup_app(
 
     build_tray(app)?;
     register_hotkey(app, hotkey);
+    command_mode::register_hotkey(app);
     configure_widget(app, show_widget_on_start);
 
     // The roaming caption is display-only: make it click-through so it never

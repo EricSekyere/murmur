@@ -243,3 +243,82 @@ jobs:
           projectPath: crates/murmur-app
           tagName: v${{ needs.prepare.outputs.version }}
           args: --bundles deb,appimage
+
+  # Runs after Windows so the GitHub release already exists; builds a universal
+  # (Apple Silicon + Intel) bundle and uploads the .app/.dmg to it. Signing and
+  # notarization are inert until the Apple Developer secrets exist: with
+  # APPLE_SIGNING_IDENTITY unset, tauri-action builds an unsigned bundle exactly
+  # like the other platforms. Once the APPLE_* secrets are set, tauri-action
+  # imports the Developer ID certificate into a temporary keychain, codesigns the
+  # .app with the hardened runtime, submits it to Apple's notary service, and
+  # staples the ticket — clearing Gatekeeper's "unidentified developer" block.
+  # Signing needs an Apple Developer account ($99/yr); until then this job still
+  # ships a working (unsigned) macOS build.
+  release-macos:
+    needs: [prepare, release-windows]
+    if: needs.prepare.outputs.release == 'true'
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target"
+
+      # macOS ships BSD sed (no `0,/re/` address, and a different -i syntax), so
+      # stamp the version with perl instead — portable and first-match-only per
+      # file. Mirrors the Windows/Linux "Set release version" step.
+      - name: Set release version
+        shell: bash
+        env:
+          V: ${{ needs.prepare.outputs.version }}
+        run: |
+          perl -i -pe 'if (!$d && /^version = "\d+\.\d+\.\d+"/) { s/\d+\.\d+\.\d+/$ENV{V}/; $d=1 }' Cargo.toml
+          perl -i -pe 'if (!$d && /"version"\s*:\s*"\d+\.\d+\.\d+"/) { s/\d+\.\d+\.\d+/$ENV{V}/; $d=1 }' crates/murmur-app/tauri.conf.json
+          cargo update --workspace
+
+      - name: Download release metadata
+        uses: actions/download-artifact@v4
+        with:
+          name: release-meta
+
+      - name: Stage What's New into the frontend
+        shell: bash
+        run: cp whatsnew.data.js crates/murmur-app/frontend/js/whatsnew.data.js
+
+      - name: Report macOS signing status
+        shell: bash
+        run: |
+          if [ -z "${{ secrets.APPLE_SIGNING_IDENTITY }}" ]; then
+            echo "::notice::macOS signing/notarization skipped (no APPLE_* secrets); shipping an unsigned universal bundle."
+          else
+            echo "::notice::macOS signing + notarization enabled via Apple Developer ID."
+          fi
+
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          # Apple Developer ID signing. Inert when unset: tauri-action only signs
+          # when APPLE_SIGNING_IDENTITY is non-empty. KEYCHAIN_PASSWORD lets it
+          # import APPLE_CERTIFICATE (a base64-encoded .p12) into a temp keychain.
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+          # Notarization (Apple ID method). Only runs when all three are present;
+          # required for a Developer ID build to pass Gatekeeper off the store.
+          # For App Store Connect API-key auth instead, swap these for
+          # APPLE_API_ISSUER / APPLE_API_KEY / APPLE_API_KEY_PATH.
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        with:
+          projectPath: crates/murmur-app
+          tagName: v${{ needs.prepare.outputs.version }}
+          args: --target universal-apple-darwin

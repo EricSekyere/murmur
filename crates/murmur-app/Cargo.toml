@@ -13,6 +13,11 @@ vad = ["murmur-core/vad"]
 # CUDA GPU acceleration for whisper (build.sh enables this automatically
 # when the CUDA toolkit is installed)
 cuda = ["murmur-core/cuda"]
+vulkan = ["murmur-core/vulkan"]
+# Local LLM for Command Mode selection rewrites. Deliberately NOT part of
+# `full`: it compiles llama.cpp (cmake + libclang). Without it the app still
+# builds and rewrite_selection reports the LLM as unavailable.
+llm = ["murmur-core/llm"]
 
 [lib]
 name = "murmur_app_lib"
@@ -44,12 +49,22 @@ cpal = "0.15"
 unicode-segmentation = "1"
 notify = "6"
 notify-debouncer-mini = "0.4"
+# Key chords for native voice commands (native_actions::send_keys); same
+# version as murmur-core's keyboard feature, so no new tree entry.
+enigo = "0.6"
+# Selection capture for Command Mode rewrites (rewrite.rs); same version as
+# murmur-core's clipboard output, so no new tree entry.
+arboard = "3"
 
 # UI Automation: locate the focused input so the live caption anchors by the
-# text field, not the window bottom. Used by caption::focused_input_rect.
+# text field, not the window bottom (caption::focused_input_rect). Shell +
+# WindowsAndMessaging: launch and window focus for native voice commands
+# (native_actions).
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.58", features = [
     "Win32_Foundation",
     "Win32_System_Com",
     "Win32_UI_Accessibility",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
 ] }

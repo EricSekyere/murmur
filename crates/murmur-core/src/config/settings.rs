@@ -1,3 +1,5 @@
+use crate::cloud::CloudConfig;
+use crate::llm::RewriteMode;
 use crate::output::OutputMode;
 use crate::stt::models::SttModel;
 use crate::voice_commands::Snippet;
@@ -18,6 +20,10 @@ pub struct AppProfile {
     /// Developer-mode override for this app (None = use the global toggle).
     #[serde(default)]
     pub developer_mode: Option<bool>,
+    /// LLM rewrite mode for text delivered into this app (None = fall back to
+    /// the global `default_rewrite_mode`).
+    #[serde(default)]
+    pub rewrite_mode: Option<RewriteMode>,
 }
 
 /// Transcription filtering profile.
@@ -176,10 +182,22 @@ pub struct Settings {
     #[serde(default)]
     pub translate_to_english: bool,
 
+    /// Show each delivered phrase's English translation in the live caption.
+    /// Only takes effect while translate_to_english runs on a multilingual
+    /// model; fully on-device (reuses the whisper translate output).
+    #[serde(default)]
+    pub show_translated_caption: bool,
+
     /// Per-app overrides applied when the foreground app matches at session
     /// start. The first matching profile wins.
     #[serde(default)]
     pub app_profiles: Vec<AppProfile>,
+
+    /// LLM rewrite mode used when no app profile overrides it (None = deliver
+    /// text without an LLM rewrite). Only takes effect when the LLM runtime is
+    /// built in and its model is available.
+    #[serde(default)]
+    pub default_rewrite_mode: Option<RewriteMode>,
 
     /// Where the live preview caption appears: "pill" (under the floating
     /// pill) or "window" (near the bottom of the active window).
@@ -205,6 +223,15 @@ pub struct Settings {
     /// Codebase-derived vocabulary settings (off by default).
     #[serde(default)]
     pub indexer: IndexerSettings,
+
+    /// Opt-in BYO-key cloud rewrite backend (roadmap feature 10). None or a
+    /// disabled table means fully local operation, the default. The API key is
+    /// never stored here: it is read from the MURMUR_CLOUD_API_KEY environment
+    /// variable at call time (a platform keyring later). While a cloud rewrite
+    /// is active the UI must show a visible "speech leaving device" indicator;
+    /// that indicator is the app layer's responsibility, not core's.
+    #[serde(default)]
+    pub cloud: Option<CloudConfig>,
 
     /// Last app version whose "What's New" highlights the user dismissed, so the
     /// panel only auto-opens once per update.
@@ -401,12 +428,15 @@ impl Default for Settings {
             snippets: Vec::new(),
             language: default_language(),
             translate_to_english: false,
+            show_translated_caption: false,
             app_profiles: Vec::new(),
+            default_rewrite_mode: None,
             caption_position: default_caption_position(),
             save_history: true,
             clean_speech: true,
             echo_cancellation: true,
             indexer: IndexerSettings::default(),
+            cloud: None,
             whats_new_seen_version: None,
         }
     }
@@ -569,6 +599,17 @@ impl Settings {
         self.indexer.project_roots.truncate(MAX_INDEX_ROOTS);
     }
 
+    /// Effective LLM rewrite mode for the foreground process: the first
+    /// matching profile's mode if set, otherwise the global default. None
+    /// means deliver text without an LLM rewrite.
+    pub fn rewrite_mode_for(&self, process_name: &str) -> Option<RewriteMode> {
+        self.app_profiles
+            .iter()
+            .find(|p| p.matches(process_name))
+            .and_then(|p| p.rewrite_mode)
+            .or(self.default_rewrite_mode)
+    }
+
     /// Validate settings values.
     pub fn validate(&self) -> Result<()> {
         if !(VAD_THRESHOLD_MIN..=VAD_THRESHOLD_MAX).contains(&self.vad_threshold) {
@@ -669,6 +710,16 @@ mod tests {
             app: app.to_string(),
             output_mode: None,
             developer_mode: Some(true),
+            rewrite_mode: None,
+        }
+    }
+
+    fn rewrite_profile(app: &str, mode: Option<RewriteMode>) -> AppProfile {
+        AppProfile {
+            app: app.to_string(),
+            output_mode: None,
+            developer_mode: None,
+            rewrite_mode: mode,
         }
     }
 
@@ -696,5 +747,135 @@ mod tests {
     #[test]
     fn app_profile_blank_pattern_never_matches() {
         assert!(!profile("  ").matches("anything.exe"));
+    }
+
+    #[test]
+    fn rewrite_mode_round_trips_through_toml() {
+        let settings = Settings {
+            default_rewrite_mode: Some(RewriteMode::CleanUp),
+            app_profiles: vec![rewrite_profile("slack", Some(RewriteMode::Casual))],
+            ..Settings::default()
+        };
+        let toml_str = toml::to_string_pretty(&settings).unwrap();
+        let reloaded: Settings = toml::from_str(&toml_str).unwrap();
+        assert_eq!(reloaded.default_rewrite_mode, Some(RewriteMode::CleanUp));
+        assert_eq!(
+            reloaded.app_profiles[0].rewrite_mode,
+            Some(RewriteMode::Casual)
+        );
+    }
+
+    #[test]
+    fn old_config_without_rewrite_fields_still_loads() {
+        // A pre-rewrite config: no default_rewrite_mode, no per-profile
+        // rewrite_mode. Must load with both defaulting to None.
+        let old = r#"
+            hotkey = "ctrl+shift+space"
+
+            [[app_profiles]]
+            app = "code"
+            developer_mode = true
+        "#;
+        let settings: Settings = toml::from_str(old).unwrap();
+        assert_eq!(settings.default_rewrite_mode, None);
+        assert_eq!(settings.app_profiles[0].rewrite_mode, None);
+        assert_eq!(settings.app_profiles[0].developer_mode, Some(true));
+    }
+
+    #[test]
+    fn old_config_without_translated_caption_field_loads_disabled() {
+        let old = r#"hotkey = "ctrl+shift+space""#;
+        let settings: Settings = toml::from_str(old).unwrap();
+        assert!(!settings.show_translated_caption);
+    }
+
+    #[test]
+    fn translated_caption_setting_round_trips_through_toml() {
+        let settings = Settings {
+            show_translated_caption: true,
+            ..Settings::default()
+        };
+        let text = toml::to_string_pretty(&settings).unwrap();
+        let reloaded: Settings = toml::from_str(&text).unwrap();
+        assert!(reloaded.show_translated_caption);
+    }
+
+    #[test]
+    fn old_config_without_cloud_field_loads_with_cloud_none() {
+        let old = r#"hotkey = "ctrl+shift+space""#;
+        let settings: Settings = toml::from_str(old).unwrap();
+        assert!(settings.cloud.is_none());
+        // Defaults also carry no cloud table, so a fresh config stays local-only.
+        assert!(Settings::default().cloud.is_none());
+    }
+
+    #[test]
+    fn cloud_config_round_trips_through_settings_toml() {
+        let settings = Settings {
+            cloud: Some(CloudConfig {
+                enabled: false,
+                base_url: "https://api.example.com/v1".to_string(),
+                model: "gpt-4o-mini".to_string(),
+            }),
+            ..Settings::default()
+        };
+        let text = toml::to_string_pretty(&settings).unwrap();
+        let reloaded: Settings = toml::from_str(&text).unwrap();
+        assert_eq!(reloaded.cloud, settings.cloud);
+    }
+
+    #[test]
+    fn cloud_table_without_enabled_flag_stays_disabled() {
+        let cfg = r#"
+            hotkey = "ctrl+shift+space"
+
+            [cloud]
+            base_url = "https://api.example.com/v1"
+            model = "gpt-4o-mini"
+        "#;
+        let settings: Settings = toml::from_str(cfg).unwrap();
+        let cloud = settings.cloud.expect("cloud table should parse");
+        assert!(!cloud.enabled, "enabled must default to false");
+    }
+
+    #[test]
+    fn profile_rewrite_mode_wins_over_global_default() {
+        let settings = Settings {
+            default_rewrite_mode: Some(RewriteMode::CleanUp),
+            app_profiles: vec![rewrite_profile("code", Some(RewriteMode::Formal))],
+            ..Settings::default()
+        };
+        assert_eq!(
+            settings.rewrite_mode_for("Code.exe"),
+            Some(RewriteMode::Formal)
+        );
+    }
+
+    #[test]
+    fn profile_without_rewrite_mode_falls_back_to_global_default() {
+        let settings = Settings {
+            default_rewrite_mode: Some(RewriteMode::BulletList),
+            app_profiles: vec![rewrite_profile("code", None)],
+            ..Settings::default()
+        };
+        assert_eq!(
+            settings.rewrite_mode_for("Code.exe"),
+            Some(RewriteMode::BulletList)
+        );
+        // No matching profile at all also falls back to the global default.
+        assert_eq!(
+            settings.rewrite_mode_for("slack.exe"),
+            Some(RewriteMode::BulletList)
+        );
+    }
+
+    #[test]
+    fn no_profile_mode_and_no_default_yields_none() {
+        let settings = Settings {
+            app_profiles: vec![rewrite_profile("code", None)],
+            ..Settings::default()
+        };
+        assert_eq!(settings.rewrite_mode_for("Code.exe"), None);
+        assert_eq!(settings.rewrite_mode_for("unmatched.exe"), None);
     }
 }

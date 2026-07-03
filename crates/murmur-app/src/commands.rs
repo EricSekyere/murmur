@@ -74,7 +74,13 @@ pub(crate) fn get_status(state: State<'_, AppState>) -> serde_json::Value {
         "snippets": settings.snippets,
         "language": settings.language,
         "translate_to_english": settings.translate_to_english,
+        "show_translated_caption": settings.show_translated_caption,
         "model_multilingual": settings.model.is_multilingual(),
+        // Compile-time whisper GPU backend, so the UI can say which (if any)
+        // this build accelerates Whisper with. Parakeet always runs on CPU.
+        "gpu_backend": if cfg!(feature = "vulkan") { "vulkan" }
+            else if cfg!(feature = "cuda") { "cuda" }
+            else { "none" },
         "app_profiles": settings.app_profiles,
         "caption_position": settings.caption_position,
         "save_history": settings.save_history,
@@ -93,6 +99,10 @@ pub(crate) fn get_status(state: State<'_, AppState>) -> serde_json::Value {
             .len(),
         "app_version": env!("CARGO_PKG_VERSION"),
         "whats_new_seen": settings.whats_new_seen_version,
+        "command_mode": state
+            .command_mode
+            .load(std::sync::atomic::Ordering::Acquire),
+        "command_hotkey": crate::command_mode::COMMAND_MODE_HOTKEY,
     })
 }
 
@@ -344,6 +354,7 @@ pub(crate) fn update_settings(
     snippets: Option<Vec<Snippet>>,
     language: Option<String>,
     translate_to_english: Option<bool>,
+    show_translated_caption: Option<bool>,
     app_profiles: Option<Vec<AppProfile>>,
     caption_position: Option<String>,
     save_history: Option<bool>,
@@ -449,6 +460,9 @@ pub(crate) fn update_settings(
     if let Some(tr) = translate_to_english {
         settings.translate_to_english = tr;
     }
+    if let Some(stc) = show_translated_caption {
+        settings.show_translated_caption = stc;
+    }
     if let Some(profiles) = app_profiles {
         // Trim the pattern, drop entries with no pattern or no override.
         settings.app_profiles = profiles
@@ -457,9 +471,13 @@ pub(crate) fn update_settings(
                 app: p.app.trim().to_lowercase(),
                 output_mode: p.output_mode,
                 developer_mode: p.developer_mode,
+                rewrite_mode: p.rewrite_mode,
             })
             .filter(|p| {
-                !p.app.is_empty() && (p.output_mode.is_some() || p.developer_mode.is_some())
+                !p.app.is_empty()
+                    && (p.output_mode.is_some()
+                        || p.developer_mode.is_some()
+                        || p.rewrite_mode.is_some())
             })
             .collect();
     }
