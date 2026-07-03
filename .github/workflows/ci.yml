@@ -133,6 +133,16 @@ jobs:
       - name: Test (full features)
         run: cargo test --workspace
 
+  # The release pipeline's version bump, notes, and What's New derivation is
+  # plain bash (scripts/release.sh); exercise it here so a regression is caught
+  # on PR, not when a release ships with wrong notes. Needs only git + bash.
+  release-script:
+    name: Release script tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: bash scripts/release.test.sh
+
   # Advisory + license + ban gate via cargo-deny (deny.toml). Its advisory check
   # queries the same RustSec database as `cargo audit`, so this satisfies the
   # audit requirement with a single, centrally-documented ignore-list; the
