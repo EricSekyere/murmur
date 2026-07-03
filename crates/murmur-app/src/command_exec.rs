@@ -71,6 +71,13 @@ pub enum ExecOutcome {
 const CMD_LAUNCH: &str = "native.launch";
 const CMD_FOCUS: &str = "native.focus";
 const CMD_PRESS: &str = "native.press";
+const CMD_PASTE: &str = "native.paste";
+
+/// The paste chord "paste" sends, in [`NativeActions::send_keys`] syntax.
+#[cfg(target_os = "macos")]
+const PASTE_KEYS: &str = "command v";
+#[cfg(not(target_os = "macos"))]
+const PASTE_KEYS: &str = "control v";
 
 /// The Phase 1 spoken command set backed by native actions.
 ///
@@ -84,6 +91,7 @@ pub fn starter_grammar() -> Result<Grammar> {
         (CMD_FOCUS, "(switch|go) to [the] {query}"),
         (CMD_FOCUS, "focus [on] [the] {query}"),
         (CMD_PRESS, "(press|hit) {keys}"),
+        (CMD_PASTE, "paste [from] [my|the] [clipboard]"),
     ] {
         grammar
             .add(id, pattern)
@@ -187,6 +195,7 @@ impl<A: NativeActions> Executor<A> {
                 .actions
                 .focus_window(required_slot(matched, "query")?)?,
             CMD_PRESS => self.actions.send_keys(required_slot(matched, "keys")?)?,
+            CMD_PASTE => self.actions.send_keys(PASTE_KEYS)?,
             other => {
                 tracing::warn!(command_id = %other, "no native action mapped for command");
                 return Ok(ExecOutcome::NoAction);
@@ -476,6 +485,20 @@ mod tests {
             exec.actions.calls(),
             vec![("send_keys", "control shift p".to_string())]
         );
+    }
+
+    #[tokio::test]
+    async fn paste_command_sends_paste_chord() {
+        for phrase in ["paste", "paste clipboard", "paste from my clipboard"] {
+            let exec = executor_with(vec![], &[]);
+            let outcome = run_phrase(&exec, phrase).await;
+            assert_eq!(outcome, ExecOutcome::Executed(Value::Null));
+            assert_eq!(
+                exec.actions.calls(),
+                vec![("send_keys", PASTE_KEYS.to_string())],
+                "phrase {phrase:?}"
+            );
+        }
     }
 
     #[tokio::test]
