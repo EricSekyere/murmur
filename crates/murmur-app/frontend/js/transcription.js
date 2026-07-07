@@ -90,14 +90,19 @@ function renderHistory() {
   }
 }
 
+// The icon node is captured once: querying it per click loses it when a
+// second click lands inside the "✓" window (the svg is detached then).
+const copyTranscriptionIcon = copyTranscription.querySelector('svg');
+let copyRestoreTimer = null;
 copyTranscription.addEventListener('click', () => {
   if (!lastTranscription || !navigator.clipboard) return;
-  const svgEl = copyTranscription.querySelector('svg');
   navigator.clipboard.writeText(lastTranscription).then(() => {
     copyTranscription.innerHTML = '✓';
-    setTimeout(() => {
+    if (copyRestoreTimer) clearTimeout(copyRestoreTimer);
+    copyRestoreTimer = setTimeout(() => {
+      copyRestoreTimer = null;
       copyTranscription.innerHTML = '';
-      if (svgEl) copyTranscription.appendChild(svgEl);
+      if (copyTranscriptionIcon) copyTranscription.appendChild(copyTranscriptionIcon);
     }, 1200);
   }).catch(err => console.warn('Copy transcription failed:', err));
 });
@@ -239,7 +244,9 @@ listen('streaming-phrase', (event) => {
     }
   }
 
-  applyState('recording');
+  // Phrases can arrive after the user stopped (final flush); only refresh the
+  // recording view if we are still in it, or a stopped session re-arms.
+  if (uiState === 'recording') applyState('recording');
 });
 
 listen('voice-command', (event) => {
@@ -256,7 +263,7 @@ listen('voice-command', (event) => {
     sessionPhrases.pop();
   }
   renderSessionTranscript();
-  applyState('recording');
+  if (uiState === 'recording') applyState('recording');
 });
 
 listen('streaming-done', () => {
