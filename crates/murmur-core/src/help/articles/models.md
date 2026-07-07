@@ -15,7 +15,7 @@ best choice for most people. It is English only and is about 661 MB to download.
 Whisper models are also available. Base (English) is the smallest and fastest but
 least accurate. Small (English) is a good balance. Medium (English) is more
 accurate but needs about 4 GB of RAM. Large v3 Turbo is the most accurate Whisper
-option, the heaviest, and the only multilingual model.
+option, the heaviest, and the only model that can translate to English.
 
 ## Switching models
 
@@ -47,23 +47,27 @@ after it is fast.
 
 ## Languages
 
-English only models (the Whisper .en models and Parakeet) always transcribe
-English. To dictate another language, switch to the multilingual model (Large v3
-Turbo) and set your Speech Language in Settings, or leave it on Auto-detect.
-Murmur ships language options for Spanish, French, German, and many more.
+English only models (the Whisper .en models and Parakeet v2) always transcribe
+English. Two models understand other languages: Whisper Large v3 Turbo honors
+the Speech Language setting (or Auto-detect), and Parakeet v3 covers 25
+European languages with automatic detection. Parakeet v3 always detects the
+language itself, so the Speech Language setting has no effect on it. Murmur
+ships language options for Spanish, French, German, and many more.
 
 ## Translate to English
 
 Turn on Translate to English to speak any supported language and have English
-typed out. This works only on the multilingual model. With an English-only model
-selected, the translate toggle has no effect.
+typed out. This works only on Whisper Large v3 Turbo. English-only models and
+Parakeet v3 ignore the toggle; Parakeet v3 always transcribes in the language
+you spoke.
 
 ## Model and language mismatch
 
-If you set a non-English language or turn on translation while an English-only
-model is selected, Murmur warns you. The English models cannot transcribe other
-languages, so non-English speech would otherwise come out as garbled English.
-Switch to Large v3 Turbo to fix it.
+If a language or translation setting will not do what it says on the active
+model, Murmur warns you. English-only models cannot transcribe other languages
+(non-English speech would come out as garbled English), and Parakeet v3
+ignores a forced Speech Language and the translate toggle. Switch to Large v3
+Turbo for translation or a forced language.
 
 ## Where models are stored and verified
 

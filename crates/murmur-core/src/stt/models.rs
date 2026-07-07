@@ -118,6 +118,19 @@ impl SttModel {
         matches!(self, Self::WhisperLargeV3Turbo | Self::ParakeetTdt06bV3)
     }
 
+    /// Whether the model honors the translate-to-English toggle. Parakeet v3
+    /// is multilingual but always transcribes in the spoken language; the
+    /// engine never applies translation on the Parakeet path.
+    pub fn supports_translation(&self) -> bool {
+        matches!(self, Self::WhisperLargeV3Turbo)
+    }
+
+    /// Whether a forced Speech Language is applied. Parakeet v3 detects the
+    /// spoken language automatically and ignores the setting.
+    pub fn supports_forced_language(&self) -> bool {
+        matches!(self, Self::WhisperLargeV3Turbo)
+    }
+
     /// Approximate total download size in MB.
     pub fn size_mb(&self) -> u32 {
         match self {
@@ -591,6 +604,18 @@ mod tests {
     fn parakeet_v3_is_multilingual_v2_stays_english_only() {
         assert!(SttModel::ParakeetTdt06bV3.is_multilingual());
         assert!(!SttModel::ParakeetTdt06bV2.is_multilingual());
+    }
+
+    #[test]
+    fn only_whisper_turbo_supports_translation_and_forced_language() {
+        // Parakeet v3 is multilingual but the engine ignores set_language and
+        // set_translate on the Parakeet path; the capability split keeps the
+        // settings UI from silently no-opping (it warns instead).
+        for model in SttModel::all() {
+            let is_turbo = *model == SttModel::WhisperLargeV3Turbo;
+            assert_eq!(model.supports_translation(), is_turbo, "{model:?}");
+            assert_eq!(model.supports_forced_language(), is_turbo, "{model:?}");
+        }
     }
 
     #[test]
