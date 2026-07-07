@@ -134,7 +134,7 @@ pub(crate) async fn pick_project_folder(app: tauri::AppHandle) -> Option<String>
 /// Enable/disable codebase vocabulary and optionally set the project root, then
 /// persist and re-index (or clear) in the background. The result count is
 /// reported via the `codebase-index` event.
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub(crate) fn set_codebase_vocabulary(
     app: tauri::AppHandle,
     state: State<'_, AppState>,
@@ -259,7 +259,7 @@ pub(crate) fn list_models(state: State<'_, AppState>) -> Result<Vec<ModelInfo>, 
         .collect())
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub(crate) async fn change_model(
     app: tauri::AppHandle,
     state: State<'_, AppState>,
@@ -332,7 +332,12 @@ pub(crate) fn set_developer_mode(state: State<'_, AppState>, enabled: bool) -> R
 }
 
 /// Update one or more settings fields and persist to config.
-#[tauri::command]
+///
+/// `rename_all = "snake_case"`: Tauri looks invoke args up by the camelCase of
+/// the Rust name by default, and a missing key deserializes an `Option` as
+/// `None` instead of erroring — so without this every multi-word field sent
+/// with snake_case keys from JS silently saved nothing.
+#[tauri::command(rename_all = "snake_case")]
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn update_settings(
     app: tauri::AppHandle,
@@ -578,20 +583,38 @@ fn emit_settings_warnings(app: &tauri::AppHandle, messages: Vec<String>) {
     }
 }
 
-/// Warning when language/translate needs a multilingual model but the active
-/// one is English-only (else non-English speech decodes as garbled English).
+/// Warning when language/translate settings won't do what they say on the
+/// active model: English-only models decode other languages as garbled
+/// English, and Parakeet v3, while multilingual, ignores both the translate
+/// toggle and a forced Speech Language (it auto-detects and always
+/// transcribes in the spoken language).
 fn language_model_warning(settings: &Settings) -> Option<String> {
-    if settings.model.is_multilingual() {
-        return None;
-    }
+    let model = settings.model;
     let non_english = crate::transcribe::is_non_english_language(&settings.language);
-    (settings.translate_to_english || non_english).then(|| {
-        format!(
-            "The {} model only transcribes English. Switch to a multilingual model \
-             (Large v3 Turbo) to dictate in other languages or to translate.",
-            settings.model.name()
-        )
-    })
+    if !model.is_multilingual() {
+        return (settings.translate_to_english || non_english).then(|| {
+            format!(
+                "The {} model only transcribes English. Switch to a multilingual model \
+                 (Large v3 Turbo) to dictate in other languages or to translate.",
+                model.name()
+            )
+        });
+    }
+    if settings.translate_to_english && !model.supports_translation() {
+        return Some(format!(
+            "{} always transcribes in the spoken language; switch to Large v3 Turbo \
+             to translate to English.",
+            model.name()
+        ));
+    }
+    if non_english && !model.supports_forced_language() {
+        return Some(format!(
+            "{} detects the spoken language automatically; the Speech Language \
+             setting has no effect on it.",
+            model.name()
+        ));
+    }
+    None
 }
 
 fn parse_output_mode(mode_str: &str) -> Result<OutputMode, String> {
@@ -603,6 +626,53 @@ fn parse_output_mode(mode_str: &str) -> Result<OutputMode, String> {
         // Legacy configs: stdout makes no sense for the desktop app.
         "stdout" => Ok(OutputMode::Auto),
         _ => Err(format!("Unknown output mode: {}", mode_str)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn settings_with(model: SttModel, language: &str, translate: bool) -> Settings {
+        Settings {
+            model,
+            language: language.to_string(),
+            translate_to_english: translate,
+            ..Settings::default()
+        }
+    }
+
+    #[test]
+    fn parakeet_v3_with_translate_warns_translation_unsupported() {
+        let settings = settings_with(SttModel::ParakeetTdt06bV3, "auto", true);
+        let warning = language_model_warning(&settings).expect("must warn");
+        assert!(warning.contains("always transcribes in the spoken language"));
+    }
+
+    #[test]
+    fn parakeet_v3_with_forced_language_warns_setting_is_ignored() {
+        let settings = settings_with(SttModel::ParakeetTdt06bV3, "fr", false);
+        let warning = language_model_warning(&settings).expect("must warn");
+        assert!(warning.contains("has no effect"));
+    }
+
+    #[test]
+    fn parakeet_v3_defaults_are_clean() {
+        let settings = settings_with(SttModel::ParakeetTdt06bV3, "auto", false);
+        assert_eq!(language_model_warning(&settings), None);
+    }
+
+    #[test]
+    fn whisper_turbo_translate_and_language_are_clean() {
+        let settings = settings_with(SttModel::WhisperLargeV3Turbo, "de", true);
+        assert_eq!(language_model_warning(&settings), None);
+    }
+
+    #[test]
+    fn english_only_models_still_warn() {
+        let settings = settings_with(SttModel::ParakeetTdt06bV2, "auto", true);
+        let warning = language_model_warning(&settings).expect("must warn");
+        assert!(warning.contains("only transcribes English"));
     }
 }
 

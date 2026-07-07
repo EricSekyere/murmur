@@ -6,18 +6,32 @@ use std::sync::OnceLock;
 const ORT_VERSION: &str = "1.23.0";
 
 /// Pinned SHA256 of the ONNX Runtime release archive for this platform. These
-/// are immutable GitHub release assets, so the hashes are stable. Targets we do
-/// not ship yet stay empty (the download is accepted with a warning) until a
-/// real archive is verified for them. Keep these in step with `download_url()`.
+/// are immutable GitHub release assets, so the hashes are stable. Every target
+/// `download_url()` can fetch is pinned so the checksum gate never degrades to
+/// a warning; keep these in step with `download_url()` and re-pin on every
+/// ORT_VERSION bump.
 #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
 const ORT_ARCHIVE_SHA256: &str = "72c23470310ec79a7d42d27fe9d257e6c98540c73fa5a1db1f67f538c6c16f2f";
+
+#[cfg(all(target_os = "windows", target_arch = "aarch64"))]
+const ORT_ARCHIVE_SHA256: &str = "097352d00a398097db2db7a33ea015cf725cac5d5b95b48bf8eff0cd154d3621";
+
+// The osx-universal2 archive covers both Apple Silicon and Intel.
+#[cfg(target_os = "macos")]
+const ORT_ARCHIVE_SHA256: &str = "5e4365fb4a05aef353f6232b9a1848f37e608c421c9227e9224572205c0cfc08";
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 const ORT_ARCHIVE_SHA256: &str = "b6deea7f2e22c10c043019f294a0ea4d2a6c0ae52a009c34847640db75ec5580";
 
+#[cfg(all(target_os = "linux", target_arch = "aarch64"))]
+const ORT_ARCHIVE_SHA256: &str = "0b9f47d140411d938e47915824d8daaa424df95a88b5f1fc843172a75168f7a0";
+
 #[cfg(not(any(
     all(target_os = "windows", target_arch = "x86_64"),
-    all(target_os = "linux", target_arch = "x86_64")
+    all(target_os = "windows", target_arch = "aarch64"),
+    target_os = "macos",
+    all(target_os = "linux", target_arch = "x86_64"),
+    all(target_os = "linux", target_arch = "aarch64")
 )))]
 const ORT_ARCHIVE_SHA256: &str = "";
 
@@ -197,10 +211,14 @@ fn extract_dll(archive_bytes: &[u8], dest_dir: &Path) -> Result<()> {
         // The DLL is at <prefix>/lib/onnxruntime.dll inside the archive
         if name.ends_with(&format!("/lib/{}", DLL_FILENAME)) || name == DLL_FILENAME {
             let dest = dest_dir.join(DLL_FILENAME);
-            let mut out = std::fs::File::create(&dest)
-                .with_context(|| format!("Failed to create {}", dest.display()))?;
-            std::io::copy(&mut entry, &mut out).context("Failed to extract DLL from archive")?;
-            tracing::info!("Extracted {} ({} bytes)", name, entry.size());
+            // Extract to memory, then write atomically: a partial write at the
+            // final path passes the exists() check forever and permanently
+            // breaks every ORT consumer until manually deleted.
+            let mut buf = Vec::with_capacity(entry.size() as usize);
+            std::io::copy(&mut entry, &mut buf).context("Failed to extract DLL from archive")?;
+            crate::fsutil::atomic_write(&dest, &buf)
+                .with_context(|| format!("Failed to write {}", dest.display()))?;
+            tracing::info!("Extracted {} ({} bytes)", name, buf.len());
             return Ok(());
         }
     }
@@ -232,9 +250,13 @@ fn extract_dll(archive_bytes: &[u8], dest_dir: &Path) -> Result<()> {
             && name.to_str() == Some(DLL_FILENAME)
         {
             let dest = dest_dir.join(DLL_FILENAME);
-            let mut out = std::fs::File::create(&dest)
-                .with_context(|| format!("Failed to create {}", dest.display()))?;
-            std::io::copy(&mut entry, &mut out).context("Failed to extract DLL from archive")?;
+            // Extract to memory, then write atomically: a partial write at the
+            // final path passes the exists() check forever and permanently
+            // breaks every ORT consumer until manually deleted.
+            let mut buf = Vec::new();
+            std::io::copy(&mut entry, &mut buf).context("Failed to extract DLL from archive")?;
+            crate::fsutil::atomic_write(&dest, &buf)
+                .with_context(|| format!("Failed to write {}", dest.display()))?;
             tracing::info!("Extracted {}", path.display());
             return Ok(());
         }

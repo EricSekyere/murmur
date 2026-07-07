@@ -154,13 +154,8 @@ fn upsert_server(mut root: Value, name: &str, exe: &str) -> Result<Value> {
 }
 
 fn write_atomic(path: &Path, value: &Value) -> Result<()> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
     let body = serde_json::to_string_pretty(value)?;
-    let tmp = path.with_extension("json.tmp");
-    std::fs::write(&tmp, body.as_bytes())?;
-    std::fs::rename(&tmp, path)?;
+    murmur_core::fsutil::atomic_write(path, body.as_bytes())?;
     Ok(())
 }
 

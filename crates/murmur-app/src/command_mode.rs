@@ -26,6 +26,45 @@ use crate::state::AppState;
 /// dictation hotkey (design Section 5), configurable later.
 pub(crate) const COMMAND_MODE_HOTKEY: &str = "ctrl+shift+period";
 
+/// The single gated action awaiting physical confirmation, bound to a nonce.
+///
+/// ASR stays live while the confirm dialog is open, so a newer utterance can
+/// supersede the stored action before the dialog re-renders. The nonce binds a
+/// confirm/cancel click to the exact action the dialog displayed: a stale
+/// click is refused instead of running an action the user never reviewed.
+#[derive(Default)]
+struct PendingGate {
+    last_nonce: u64,
+    slot: Option<(u64, PendingAction)>,
+}
+
+impl PendingGate {
+    /// Stash a new pending action, superseding any previous one, and return
+    /// the nonce the confirm dialog must echo back.
+    fn stash(&mut self, action: PendingAction) -> u64 {
+        self.last_nonce += 1;
+        self.slot = Some((self.last_nonce, action));
+        self.last_nonce
+    }
+
+    /// Drop whatever is stored (a non-pending outcome supersedes it).
+    fn clear(&mut self) {
+        self.slot = None;
+    }
+
+    /// Take the action only if `nonce` matches the stored one; a stale nonce
+    /// returns `None` and leaves the current action in place.
+    fn take(&mut self, nonce: u64) -> Option<PendingAction> {
+        match self.slot.take() {
+            Some((stored, action)) if stored == nonce => Some(action),
+            other => {
+                self.slot = other;
+                None
+            }
+        }
+    }
+}
+
 /// Everything `run_command` needs, kept behind one async lock in app state
 /// (execution awaits the tool backend while holding it).
 pub(crate) struct CommandState {
@@ -33,7 +72,7 @@ pub(crate) struct CommandState {
     executor: Executor<SystemActions>,
     backend: ActionBackend,
     /// The single gated action awaiting physical confirmation, if any.
-    pending: Option<PendingAction>,
+    pending: PendingGate,
 }
 
 impl CommandState {
@@ -45,14 +84,15 @@ impl CommandState {
             grammar: starter_grammar().context("building the starter command grammar")?,
             executor: Executor::new(SystemActions, PermissionStore::load()),
             backend: ActionBackend::new(std::iter::empty::<String>()),
-            pending: None,
+            pending: PendingGate::default(),
         })
     }
 }
 
 /// Serializable mirror of [`ExecOutcome`] for the frontend. `Pending`
 /// carries the tool name and parsed arguments so the confirm dialog can
-/// echo exactly what the ASR produced.
+/// echo exactly what the ASR produced, plus the nonce the dialog must send
+/// back with its confirm/cancel.
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub(crate) enum ExecOutcomeDto {
@@ -63,6 +103,7 @@ pub(crate) enum ExecOutcomeDto {
         tool: String,
         args: Value,
         reversible: bool,
+        nonce: u64,
     },
     Blocked,
     NoAction,
@@ -78,6 +119,9 @@ fn split_outcome(outcome: ExecOutcome) -> (ExecOutcomeDto, Option<PendingAction>
                 tool: pending.tool.clone(),
                 args: pending.args.clone(),
                 reversible: pending.reversible,
+                // Placeholder: run_command patches in the real nonce once the
+                // action is stashed in the gate.
+                nonce: 0,
             },
             Some(pending),
         ),
@@ -127,23 +171,36 @@ pub(crate) async fn run_command(
         backend,
         pending,
     } = &mut *command;
-    let (dto, new_pending) = route_and_execute(grammar, executor, &*backend, &transcript)
+    let (mut dto, new_pending) = route_and_execute(grammar, executor, &*backend, &transcript)
         .await
         .map_err(|e| format!("{e:#}"))?;
-    // Each utterance supersedes any stale pending action, so the confirm
-    // dialog can never run something other than what it currently shows.
-    *pending = new_pending;
+    // Each utterance supersedes any stale pending action, and the nonce binds
+    // the confirm dialog to this exact action, so a confirm click can never
+    // run something other than what the dialog showed.
+    match new_pending {
+        Some(action) => {
+            let stashed = pending.stash(action);
+            if let ExecOutcomeDto::Pending { nonce, .. } = &mut dto {
+                *nonce = stashed;
+            }
+        }
+        None => pending.clear(),
+    }
     Ok(dto)
 }
 
 /// Execute the stored pending action. Only the confirm dialog's physical
 /// click or keypress invokes this; voice can never reach it because no
-/// routed outcome maps here.
+/// routed outcome maps here. `nonce` must match the displayed action's, so a
+/// click racing a superseding utterance is refused rather than misfiring.
 #[tauri::command]
-pub(crate) async fn confirm_pending(state: State<'_, AppState>) -> Result<ExecOutcomeDto, String> {
+pub(crate) async fn confirm_pending(
+    state: State<'_, AppState>,
+    nonce: u64,
+) -> Result<ExecOutcomeDto, String> {
     let mut command = state.command.lock().await;
-    let Some(pending) = command.pending.take() else {
-        return Err("no action is awaiting confirmation".to_string());
+    let Some(pending) = command.pending.take(nonce) else {
+        return Err("that action is no longer awaiting confirmation".to_string());
     };
     let outcome = confirm_and_execute(pending, &command.backend)
         .await
@@ -151,10 +208,11 @@ pub(crate) async fn confirm_pending(state: State<'_, AppState>) -> Result<ExecOu
     Ok(split_outcome(outcome).0)
 }
 
-/// Drop the stored pending action without running it.
+/// Drop the stored pending action without running it. A stale nonce is a
+/// no-op so cancelling an outdated dialog never discards a newer action.
 #[tauri::command]
-pub(crate) async fn cancel_pending(state: State<'_, AppState>) -> Result<(), String> {
-    let dropped = state.command.lock().await.pending.take().is_some();
+pub(crate) async fn cancel_pending(state: State<'_, AppState>, nonce: u64) -> Result<(), String> {
+    let dropped = state.command.lock().await.pending.take(nonce).is_some();
     tracing::info!(dropped, "pending command action cancelled");
     Ok(())
 }
@@ -323,6 +381,47 @@ mod tests {
         assert!(backend.calls().is_empty());
     }
 
+    fn pending_action(tool: &str) -> PendingAction {
+        PendingAction {
+            tool: tool.into(),
+            args: json!({}),
+            reversible: true,
+        }
+    }
+
+    #[test]
+    fn confirm_with_matching_nonce_takes_the_action() {
+        let mut gate = PendingGate::default();
+        let nonce = gate.stash(pending_action("git/push"));
+        let taken = gate.take(nonce).expect("matching nonce takes the action");
+        assert_eq!(taken.tool, "git/push");
+        assert!(gate.take(nonce).is_none(), "slot is emptied after take");
+    }
+
+    #[test]
+    fn stale_nonce_cannot_take_a_superseding_action() {
+        let mut gate = PendingGate::default();
+        let old_nonce = gate.stash(pending_action("git/push"));
+        let new_nonce = gate.stash(pending_action("fs/delete"));
+        assert_ne!(old_nonce, new_nonce);
+        assert!(
+            gate.take(old_nonce).is_none(),
+            "a confirm for the superseded dialog must not run the new action"
+        );
+        let taken = gate
+            .take(new_nonce)
+            .expect("the superseding action survives a stale take");
+        assert_eq!(taken.tool, "fs/delete");
+    }
+
+    #[test]
+    fn clear_drops_the_action_for_any_nonce() {
+        let mut gate = PendingGate::default();
+        let nonce = gate.stash(pending_action("git/push"));
+        gate.clear();
+        assert!(gate.take(nonce).is_none());
+    }
+
     #[test]
     fn dto_serializes_with_kind_tags() {
         let executed = serde_json::to_value(ExecOutcomeDto::Executed {
@@ -336,12 +435,14 @@ mod tests {
             tool: "git/push".into(),
             args: json!({"remote": "origin"}),
             reversible: false,
+            nonce: 7,
         })
         .expect("serialize");
         assert_eq!(pending["kind"], "pending");
         assert_eq!(pending["tool"], "git/push");
         assert_eq!(pending["args"]["remote"], "origin");
         assert_eq!(pending["reversible"], false);
+        assert_eq!(pending["nonce"], 7);
 
         let blocked = serde_json::to_value(ExecOutcomeDto::Blocked).expect("serialize");
         assert_eq!(blocked["kind"], "blocked");

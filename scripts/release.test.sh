@@ -194,6 +194,52 @@ run_script "$repo"
 assert_contains "$repo/whatsnew.data.js" '"title":"Keep me visible"' \
   'skip values under 7 chars are ignored'
 
+# --- Case 12: mentioning "BREAKING CHANGE" mid-sentence is not breaking ---
+repo="$(new_repo case12)"
+git -C "$repo" commit -q --allow-empty -m 'fix: tighten release detection
+
+This commit documents how the BREAKING CHANGE footer is parsed but is
+not itself breaking.'
+out="$(cd "$repo" && bash "$SCRIPT" notes.md whatsnew.data.js)"
+if printf '%s' "$out" | grep -q 'version=0.1.1'; then
+  echo 'PASS: body prose mentioning BREAKING CHANGE stays a patch'
+  pass=$((pass + 1))
+else
+  echo 'FAIL: body prose mentioning BREAKING CHANGE stays a patch'
+  echo "  output: $out"
+  fail=$((fail + 1))
+fi
+
+# --- Case 13: a real BREAKING CHANGE footer bumps (minor while pre-1.0) ---
+repo="$(new_repo case13)"
+git -C "$repo" commit -q --allow-empty -m 'fix: change config format
+
+BREAKING CHANGE: old configs no longer load.'
+out="$(cd "$repo" && bash "$SCRIPT" notes.md whatsnew.data.js)"
+if printf '%s' "$out" | grep -q 'version=0.2.0'; then
+  echo 'PASS: BREAKING CHANGE footer bumps the version'
+  pass=$((pass + 1))
+else
+  echo 'FAIL: BREAKING CHANGE footer bumps the version'
+  echo "  output: $out"
+  fail=$((fail + 1))
+fi
+
+# --- Case 14: the spec's hyphenated BREAKING-CHANGE synonym also bumps ---
+repo="$(new_repo case14)"
+git -C "$repo" commit -q --allow-empty -m 'fix: change config format
+
+BREAKING-CHANGE: old configs no longer load.'
+out="$(cd "$repo" && bash "$SCRIPT" notes.md whatsnew.data.js)"
+if printf '%s' "$out" | grep -q 'version=0.2.0'; then
+  echo 'PASS: hyphenated BREAKING-CHANGE also bumps'
+  pass=$((pass + 1))
+else
+  echo 'FAIL: hyphenated BREAKING-CHANGE also bumps'
+  echo "  output: $out"
+  fail=$((fail + 1))
+fi
+
 echo
 echo "passed=$pass failed=$fail"
 [ "$fail" -eq 0 ]

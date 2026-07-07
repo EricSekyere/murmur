@@ -131,16 +131,11 @@ impl PermissionStore {
         self.save_to(&Self::path()?)
     }
 
-    /// Save the store to `path` atomically: write a sibling tempfile, then
-    /// rename, so a crash mid-write cannot corrupt the saved policy.
+    /// Save the store to `path` atomically: write a unique sibling tempfile,
+    /// then rename, so a crash mid-write cannot corrupt the saved policy.
     pub fn save_to(&self, path: &Path) -> Result<(), CommandError> {
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
         let content = toml::to_string_pretty(self)?;
-        let tmp_path = path.with_extension("toml.tmp");
-        std::fs::write(&tmp_path, &content)?;
-        std::fs::rename(&tmp_path, path)?;
+        crate::fsutil::atomic_write(path, content.as_bytes())?;
         tracing::debug!(path = %path.display(), "saved command permissions");
         Ok(())
     }

@@ -246,10 +246,13 @@ hotkeySave.addEventListener('click', async () => {
     await invoke('update_settings', { hotkey: capturedHotkey });
     hotkeyDisplay.textContent = capturedHotkey;
     showToast('Hotkey updated', 'success');
+    capturedHotkey = '';
   } catch (err) {
     showToast(`Hotkey failed: ${err}`, 'error');
+    // Keep the capture and re-enable Save so the user can retry without
+    // re-typing the combo the input still shows.
+    hotkeySave.disabled = false;
   }
-  capturedHotkey = '';
 });
 
 outputModeSelect.addEventListener('change', async () => {
@@ -744,6 +747,14 @@ function buildModelCard(m) {
   progressFill.className = 'model-card__progress-fill';
   progress.appendChild(progressFill);
 
+  // A re-render mid-download (revisiting Settings re-runs loadModelList) must
+  // not hand back enabled buttons: that allowed concurrent change_model calls
+  // and progress events binding to the wrong card.
+  if (changingModelId) {
+    btn.disabled = true;
+    if (m.id === changingModelId) progress.hidden = false;
+  }
+
   action.appendChild(btn);
   action.appendChild(progress);
   card.appendChild(info);
@@ -752,6 +763,9 @@ function buildModelCard(m) {
 }
 
 async function handleChangeModel(modelId) {
+  // One switch/download at a time; a second click would overwrite
+  // changingModelId and misbind later progress events.
+  if (changingModelId) return;
   changingModelId = modelId;
   for (const btn of modelList.querySelectorAll('.model-card__btn')) {
     btn.disabled = true;
@@ -760,7 +774,7 @@ async function handleChangeModel(modelId) {
   if (progressEl) progressEl.hidden = false;
 
   try {
-    await invoke('change_model', { modelId });
+    await invoke('change_model', { model_id: modelId });
   } catch (err) {
     showToast(`Failed to switch model: ${err}`, 'error');
     changingModelId = null;

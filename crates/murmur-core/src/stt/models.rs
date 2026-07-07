@@ -50,8 +50,14 @@ pub enum SttModel {
     WhisperMediumEn,
     #[serde(alias = "large-v3-turbo")]
     WhisperLargeV3Turbo,
-    // Parakeet models (via parakeet-rs, ONNX format)
+    // Parakeet models (via parakeet-rs, ONNX format). Renamed explicitly:
+    // rename_all's kebab-case yields "parakeet-tdt06b-v2", which diverges from
+    // the documented id() form and made the documented ID fail the whole
+    // Settings parse (resetting the config). The alias keeps configs written
+    // with the old serde form loading.
+    #[serde(rename = "parakeet-tdt-06b-v2", alias = "parakeet-tdt06b-v2")]
     ParakeetTdt06bV2,
+    #[serde(rename = "parakeet-tdt-06b-v3", alias = "parakeet-tdt06b-v3")]
     ParakeetTdt06bV3,
 }
 
@@ -110,6 +116,19 @@ impl SttModel {
     /// transcribes in the spoken language.
     pub fn is_multilingual(&self) -> bool {
         matches!(self, Self::WhisperLargeV3Turbo | Self::ParakeetTdt06bV3)
+    }
+
+    /// Whether the model honors the translate-to-English toggle. Parakeet v3
+    /// is multilingual but always transcribes in the spoken language; the
+    /// engine never applies translation on the Parakeet path.
+    pub fn supports_translation(&self) -> bool {
+        matches!(self, Self::WhisperLargeV3Turbo)
+    }
+
+    /// Whether a forced Speech Language is applied. Parakeet v3 detects the
+    /// spoken language automatically and ignores the setting.
+    pub fn supports_forced_language(&self) -> bool {
+        matches!(self, Self::WhisperLargeV3Turbo)
     }
 
     /// Approximate total download size in MB.
@@ -177,6 +196,9 @@ impl SttModel {
             "large-v3-turbo" | "large-v3-turbo.en" => Some(Self::WhisperLargeV3Turbo),
             "parakeet-tdt-0.6b-v2" => Some(Self::ParakeetTdt06bV2),
             "parakeet-tdt-0.6b-v3" => Some(Self::ParakeetTdt06bV3),
+            // Serde form written by configs before the explicit rename above
+            "parakeet-tdt06b-v2" => Some(Self::ParakeetTdt06bV2),
+            "parakeet-tdt06b-v3" => Some(Self::ParakeetTdt06bV3),
             _ => None,
         }
     }
@@ -388,6 +410,14 @@ impl ModelManager {
                 pb.inc(chunk.len() as u64);
             }
 
+            // Flush and close before verifying: tokio file writes complete in
+            // the background, so a final-chunk error (disk full) only surfaces
+            // here — without this a truncated file gets renamed into place.
+            tokio::io::AsyncWriteExt::flush(&mut out)
+                .await
+                .context("Failed to flush downloaded file")?;
+            drop(out);
+
             pb.finish_with_message(format!("{} downloaded", file.local_name));
 
             let hash = format!("{:x}", hasher.finalize());
@@ -458,6 +488,14 @@ impl ModelManager {
                 on_progress(cumulative_downloaded, Some(estimated_total));
             }
 
+            // Flush and close before verifying: tokio file writes complete in
+            // the background, so a final-chunk error (disk full) only surfaces
+            // here — without this a truncated file gets renamed into place.
+            tokio::io::AsyncWriteExt::flush(&mut out)
+                .await
+                .context("Failed to flush downloaded file")?;
+            drop(out);
+
             let hash = format!("{:x}", hasher.finalize());
             verify_download(&temp_path, file, &hash).await?;
 
@@ -512,6 +550,42 @@ mod tests {
     use super::*;
 
     #[test]
+    fn serde_form_matches_id_for_every_variant() {
+        // A divergence here is a config-destroying bug: Settings persists the
+        // serde form, docs and the CLI use id(), and a form the other parser
+        // rejects fails the whole Settings parse and resets it to defaults.
+        for model in SttModel::all() {
+            let serialized = serde_json::to_value(model).expect("serialize");
+            assert_eq!(
+                serialized,
+                serde_json::Value::String(model.id().to_string()),
+                "{model:?}: serde form and id() must agree"
+            );
+            let parsed: SttModel =
+                serde_json::from_value(serde_json::Value::String(model.id().to_string()))
+                    .expect("id() form must deserialize");
+            assert_eq!(parsed, *model);
+            assert_eq!(SttModel::from_name(model.id()), Some(*model));
+        }
+    }
+
+    #[test]
+    fn legacy_serde_forms_still_deserialize() {
+        // Configs written before the Parakeet serde rename carry the plain
+        // rename_all form; they must keep loading.
+        for (legacy, expected) in [
+            ("parakeet-tdt06b-v2", SttModel::ParakeetTdt06bV2),
+            ("parakeet-tdt06b-v3", SttModel::ParakeetTdt06bV3),
+        ] {
+            let parsed: SttModel =
+                serde_json::from_value(serde_json::Value::String(legacy.to_string()))
+                    .expect("legacy serde form must deserialize");
+            assert_eq!(parsed, expected);
+            assert_eq!(SttModel::from_name(legacy), Some(expected));
+        }
+    }
+
+    #[test]
     fn parakeet_v3_round_trips_id_and_short_name() {
         let m = SttModel::ParakeetTdt06bV3;
         assert_eq!(m.id(), "parakeet-tdt-06b-v3");
@@ -530,6 +604,18 @@ mod tests {
     fn parakeet_v3_is_multilingual_v2_stays_english_only() {
         assert!(SttModel::ParakeetTdt06bV3.is_multilingual());
         assert!(!SttModel::ParakeetTdt06bV2.is_multilingual());
+    }
+
+    #[test]
+    fn only_whisper_turbo_supports_translation_and_forced_language() {
+        // Parakeet v3 is multilingual but the engine ignores set_language and
+        // set_translate on the Parakeet path; the capability split keeps the
+        // settings UI from silently no-opping (it warns instead).
+        for model in SttModel::all() {
+            let is_turbo = *model == SttModel::WhisperLargeV3Turbo;
+            assert_eq!(model.supports_translation(), is_turbo, "{model:?}");
+            assert_eq!(model.supports_forced_language(), is_turbo, "{model:?}");
+        }
     }
 
     #[test]

@@ -100,6 +100,11 @@ function applyState(newState) {
   durationDisplay.hidden = newState !== 'recording';
   wordCount.hidden        = newState !== 'done';
   procTime.hidden         = newState !== 'done';
+
+  // The duration timer only runs in the recording state; without this, any
+  // transition that skips the normal stop path (errors, forced idle) leaves
+  // the interval ticking on a hidden display.
+  if (newState !== 'recording') stopDurationTimer();
 }
 
 function updateModelBanner(status) {
@@ -122,7 +127,10 @@ function showError(msg) {
 
 function clearError() {
   errorBanner.hidden = true;
-  applyState('idle');
+  // Only the error state resolves to idle; clearing the banner while
+  // recording/processing must not fake an idle UI (it would defeat the
+  // double-click guard and desync from the backend's recording-state).
+  if (uiState === 'error') applyState('idle');
 }
 
 dismissError.addEventListener('click', clearError);

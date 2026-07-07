@@ -16,6 +16,7 @@
 //!   tools before [`ActionBackend::call_tool`].
 
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow, bail};
 use murmur_core::command::{RiskTier, Tool};
@@ -27,6 +28,13 @@ use rmcp::{
 };
 use serde::Deserialize;
 use serde_json::Value;
+
+/// Every protocol operation is bounded: servers are untrusted, and the app
+/// awaits these calls while holding its single command-mode lock, so an
+/// unresponsive server must never be able to hang the caller indefinitely.
+const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(15);
+const LIST_TOOLS_TIMEOUT: Duration = Duration::from_secs(15);
+const CALL_TOOL_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// One stdio MCP server from an `mcpServers` config block.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -77,6 +85,7 @@ pub fn parse_mcp_servers(json: &str) -> Result<Vec<ServerConfig>> {
             tracing::warn!(server = %name, "skipping MCP server entry without a command");
             continue;
         };
+        validate_server_name(&name)?;
         servers.push(ServerConfig {
             name,
             command,
@@ -103,8 +112,26 @@ pub fn risk_from_annotations(annotations: Option<&ToolAnnotations>) -> RiskTier 
 
 /// Namespace a tool name with its server so tools from different servers
 /// cannot collide: `commit` from server `git` becomes `git/commit`.
+///
+/// Unambiguous only because server names may not contain `/` (enforced by
+/// [`validate_server_name`]): dispatchers split on the first `/`, and a
+/// server named `a/b` would make `a/b + c` collide with `a + b/c`.
 pub fn namespaced_tool_name(server: &str, tool: &str) -> String {
     format!("{server}/{tool}")
+}
+
+/// Reject server names that would break `server/tool` namespacing.
+///
+/// # Errors
+/// When `name` contains `/`, which is the namespace separator.
+fn validate_server_name(name: &str) -> Result<()> {
+    if name.contains('/') {
+        bail!(
+            "MCP server name '{name}' must not contain '/': it is the tool \
+             namespace separator (server/tool)"
+        );
+    }
+    Ok(())
 }
 
 fn to_core_tool(server: &str, tool: &McpTool) -> Tool {
@@ -159,11 +186,20 @@ impl ActionBackend {
             TokioChildProcess::new(tokio::process::Command::new(&cfg.command).configure(|cmd| {
                 cmd.args(&cfg.args);
                 cmd.envs(&cfg.env);
+                // Reap the child if the app tears down without reaching
+                // shutdown(); otherwise nothing on Windows would ever kill it.
+                cmd.kill_on_drop(true);
             }))
             .with_context(|| format!("spawning MCP server '{}' ({})", cfg.name, cfg.command))?;
-        let service = ()
-            .serve(transport)
+        let service = tokio::time::timeout(HANDSHAKE_TIMEOUT, ().serve(transport))
             .await
+            .map_err(|_| {
+                anyhow!(
+                    "MCP handshake with server '{}' timed out after {}s",
+                    cfg.name,
+                    HANDSHAKE_TIMEOUT.as_secs()
+                )
+            })?
             .with_context(|| format!("MCP handshake with server '{}' failed", cfg.name))?;
         self.attach(&cfg.name, service)
     }
@@ -172,6 +208,7 @@ impl ActionBackend {
     /// with the same allowlist gate as [`Self::connect`]. Replaces an
     /// existing connection with the same name (reconnect).
     pub fn attach(&mut self, server: &str, service: Connection) -> Result<()> {
+        validate_server_name(server)?;
         self.ensure_allowed(server)?;
         if self
             .connections
@@ -194,9 +231,14 @@ impl ActionBackend {
     pub async fn list_tools(&self) -> Result<Vec<Tool>> {
         let mut tools = Vec::new();
         for (server, conn) in &self.connections {
-            let listed = conn
-                .list_all_tools()
+            let listed = tokio::time::timeout(LIST_TOOLS_TIMEOUT, conn.list_all_tools())
                 .await
+                .map_err(|_| {
+                    anyhow!(
+                        "listing tools on MCP server '{server}' timed out after {}s",
+                        LIST_TOOLS_TIMEOUT.as_secs()
+                    )
+                })?
                 .with_context(|| format!("listing tools on MCP server '{server}'"))?;
             tools.extend(listed.iter().map(|t| to_core_tool(server, t)));
         }
@@ -226,8 +268,17 @@ impl ActionBackend {
         };
         let mut params = CallToolRequestParams::new(tool_name.to_string());
         params.arguments = arguments;
-        conn.call_tool(params)
+        // Bounded: the app awaits this while holding its single command-mode
+        // lock, so an unresponsive server must not be able to wedge every
+        // later command until restart.
+        tokio::time::timeout(CALL_TOOL_TIMEOUT, conn.call_tool(params))
             .await
+            .map_err(|_| {
+                anyhow!(
+                    "tool '{tool_name}' on MCP server '{server}' timed out after {}s",
+                    CALL_TOOL_TIMEOUT.as_secs()
+                )
+            })?
             .with_context(|| format!("calling tool '{tool_name}' on MCP server '{server}'"))
     }
 
@@ -281,6 +332,18 @@ mod tests {
     fn entry_without_command_is_skipped() {
         let json = r#"{ "mcpServers": { "broken": { "args": ["x"] } } }"#;
         assert!(parse_mcp_servers(json).expect("valid json").is_empty());
+    }
+
+    #[test]
+    fn server_name_with_slash_is_rejected() {
+        // "a/b" + tool "c" would namespace identically to "a" + tool "b/c",
+        // letting one server shadow another's registry entry (and inherit its
+        // risk tier), so slashes in server names are refused at parse time.
+        let json = r#"{ "mcpServers": { "a/b": { "command": "npx" } } }"#;
+        let err = parse_mcp_servers(json).expect_err("slash name must be rejected");
+        assert!(err.to_string().contains("must not contain '/'"));
+        assert!(validate_server_name("plain-name").is_ok());
+        assert!(validate_server_name("a/b").is_err());
     }
 
     #[test]

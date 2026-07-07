@@ -102,21 +102,21 @@ impl MurmurMcp {
     #[tool(
         description = "List the most recent phrases dictated through Murmur (voice-to-text), newest first."
     )]
-    fn get_recent_transcripts(
+    async fn get_recent_transcripts(
         &self,
         Parameters(req): Parameters<RecentRequest>,
     ) -> Result<CallToolResult, McpError> {
-        history_json("", req.limit)
+        history_json_blocking(String::new(), req.limit).await
     }
 
     #[tool(
         description = "Search Murmur's voice transcription history for a case-insensitive substring, newest first."
     )]
-    fn search_transcripts(
+    async fn search_transcripts(
         &self,
         Parameters(req): Parameters<SearchRequest>,
     ) -> Result<CallToolResult, McpError> {
-        history_json(&req.query, req.limit)
+        history_json_blocking(req.query, req.limit).await
     }
 
     #[tool(
@@ -131,7 +131,7 @@ impl MurmurMcp {
         &self,
         Parameters(req): Parameters<WaitRequest>,
     ) -> Result<CallToolResult, McpError> {
-        if !history_enabled() {
+        if !history_enabled_blocking().await {
             return outcome_json(&WaitOutcome::HistoryDisabled {
                 message: "Murmur's save-history setting is off, so new dictations cannot be \
                           observed. Ask the user to enable saving history in Murmur settings.",
@@ -141,9 +141,25 @@ impl MurmurMcp {
         let path = History::default_path()
             .map_err(|e| McpError::internal_error(format!("history path: {e}"), None))?;
         // Newest entry only: the baseline and each poll just need the head of
-        // the newest-first log.
-        let load = || History::load(&path).search("", 1);
-        let baseline_ms = load().first().map(|e| e.timestamp_ms);
+        // the newest-first log. Reads run on the blocking pool: this loop
+        // repeats every 500ms and must not stall the reactor's other requests.
+        let load = || {
+            let path = path.clone();
+            async move {
+                tokio::task::spawn_blocking(move || History::load_readonly(&path).search("", 1))
+                    .await
+                    .unwrap_or_default()
+            }
+        };
+        // The baseline scans the whole log for the max timestamp (the same
+        // comparator detection uses); the head entry alone can lag it after a
+        // backwards clock step, which would re-deliver an old transcript.
+        let baseline_path = path.clone();
+        let baseline_ms = tokio::task::spawn_blocking(move || {
+            wait::baseline_ms(&History::load_readonly(&baseline_path).search("", usize::MAX))
+        })
+        .await
+        .unwrap_or(None);
         tracing::debug!(waited_secs, ?baseline_ms, "waiting for next dictation");
         let found =
             wait::wait_for_new_entry(baseline_ms, wait::polls_for(waited_secs), load, || {
@@ -184,8 +200,20 @@ impl ServerHandler for MurmurMcp {
     }
 }
 
+/// [`history_json`] on the blocking pool: the read is sync file I/O and must
+/// stay off the reactor.
+async fn history_json_blocking(
+    query: String,
+    limit: Option<usize>,
+) -> Result<CallToolResult, McpError> {
+    tokio::task::spawn_blocking(move || history_json(&query, limit))
+        .await
+        .map_err(|e| McpError::internal_error(format!("history read task: {e}"), None))?
+}
+
 /// Load the history log and return up to `limit` (clamped) entries matching
-/// `query` as a pretty JSON array.
+/// `query` as a pretty JSON array. Sync file I/O: call via
+/// [`history_json_blocking`] from async context.
 fn history_json(query: &str, limit: Option<usize>) -> Result<CallToolResult, McpError> {
     // Respect the history opt-out: expose nothing when the user has disabled
     // saving history, even if a log file remains on disk from before.
@@ -195,7 +223,7 @@ fn history_json(query: &str, limit: Option<usize>) -> Result<CallToolResult, Mcp
     let limit = limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT);
     let path = History::default_path()
         .map_err(|e| McpError::internal_error(format!("history path: {e}"), None))?;
-    let entries: Vec<TranscriptOut> = History::load(&path)
+    let entries: Vec<TranscriptOut> = History::load_readonly(&path)
         .search(query, limit)
         .into_iter()
         .map(TranscriptOut::from)
@@ -214,11 +242,19 @@ fn outcome_json(outcome: &WaitOutcome) -> Result<CallToolResult, McpError> {
 
 /// Whether the user currently allows storing transcription history. Defaults to
 /// enabled if settings can't be read, since the history file is the source of
-/// truth and the app purges it when the user opts out.
+/// truth and the app purges it when the user opts out. Uses the read-only
+/// loader: this server must never write config recovery files the running app
+/// could race with.
 fn history_enabled() -> bool {
     Settings::default_path()
-        .and_then(|path| Settings::load(&path))
-        .map(|s| s.save_history)
+        .map(|path| Settings::load_readonly(&path).save_history)
+        .unwrap_or(true)
+}
+
+/// [`history_enabled`] on the blocking pool for async handlers.
+async fn history_enabled_blocking() -> bool {
+    tokio::task::spawn_blocking(history_enabled)
+        .await
         .unwrap_or(true)
 }
 

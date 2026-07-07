@@ -552,6 +552,26 @@ impl Settings {
         }
     }
 
+    /// Load settings without touching the disk: a missing or invalid file
+    /// yields defaults and is never created, backed up, or rewritten.
+    ///
+    /// For read-only consumers like the MCP server, which share the config
+    /// file with the running app; [`Self::load`]'s recovery writes would race
+    /// the app's own saves.
+    pub fn load_readonly(path: &PathBuf) -> Self {
+        if !path.exists() {
+            return Self::default();
+        }
+        Self::read_and_validate(path).unwrap_or_else(|e| {
+            tracing::warn!(
+                "Config at {} is unreadable or invalid ({}); using defaults without modifying it",
+                path.display(),
+                e
+            );
+            Self::default()
+        })
+    }
+
     fn read_and_validate(path: &PathBuf) -> Result<Self> {
         let content = std::fs::read_to_string(path)?;
         let mut settings: Settings = toml::from_str(&content)?;
@@ -562,18 +582,9 @@ impl Settings {
     }
 
     /// Save settings to a TOML file (atomic: write to tempfile, then rename).
-    pub fn save(&self, path: &PathBuf) -> Result<()> {
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
+    pub fn save(&self, path: &std::path::Path) -> Result<()> {
         let content = toml::to_string_pretty(self)?;
-
-        // Atomic write: write to a sibling tempfile first, then rename.
-        // This prevents a crash mid-write from corrupting the config file.
-        let tmp_path = path.with_extension("toml.tmp");
-        std::fs::write(&tmp_path, &content)?;
-        std::fs::rename(&tmp_path, path)?;
-
+        crate::fsutil::atomic_write(path, content.as_bytes())?;
         tracing::info!("Saved config to {}", path.display());
         Ok(())
     }
@@ -721,6 +732,30 @@ mod tests {
             developer_mode: None,
             rewrite_mode: mode,
         }
+    }
+
+    #[test]
+    fn load_readonly_never_touches_a_corrupt_file() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "not [valid toml").expect("write");
+
+        let settings = Settings::load_readonly(&path);
+        assert_eq!(settings.save_history, Settings::default().save_history);
+        // Unlike load(), nothing on disk may change: no .bak, no rewrite.
+        assert_eq!(
+            std::fs::read_to_string(&path).expect("read"),
+            "not [valid toml"
+        );
+        assert!(!path.with_extension("toml.bak").exists());
+    }
+
+    #[test]
+    fn load_readonly_does_not_create_a_missing_file() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("config.toml");
+        let _ = Settings::load_readonly(&path);
+        assert!(!path.exists());
     }
 
     #[test]

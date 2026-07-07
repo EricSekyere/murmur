@@ -34,6 +34,16 @@ pub(crate) fn polls_for(timeout_secs: u64) -> u64 {
     timeout_secs.saturating_mul(1000) / POLL_INTERVAL_MS
 }
 
+/// The baseline for a new wait: the maximum timestamp across `entries`.
+///
+/// The same comparator [`newest_since`] detects with. Baselining on the head
+/// entry (position 0) instead would re-deliver an old transcript when a
+/// backwards clock step leaves the most recently appended entry with a
+/// smaller timestamp than an earlier one.
+pub(crate) fn baseline_ms(entries: &[HistoryEntry]) -> Option<u64> {
+    entries.iter().map(|e| e.timestamp_ms).max()
+}
+
 /// The newest entry strictly newer than the baseline, if any. A `None`
 /// baseline means the history was empty when the wait began, so any entry is
 /// new. Selection is by timestamp rather than position so it holds even if
@@ -50,21 +60,23 @@ pub(crate) fn newest_since(
 
 /// Poll `load` until it yields an entry newer than `baseline_ms`, sleeping via
 /// `sleep` between checks, for at most `max_polls` sleeps. Returns `None` on
-/// timeout. The sleeper is injected so tests can pass a ready future instead
-/// of real time.
-pub(crate) async fn wait_for_new_entry<L, S, Fut>(
+/// timeout. Both the loader and the sleeper are injected futures so the real
+/// caller can read off the reactor and tests can pass ready futures instead
+/// of real time or files.
+pub(crate) async fn wait_for_new_entry<L, LFut, S, SFut>(
     baseline_ms: Option<u64>,
     max_polls: u64,
     mut load: L,
     mut sleep: S,
 ) -> Option<HistoryEntry>
 where
-    L: FnMut() -> Vec<HistoryEntry>,
-    S: FnMut() -> Fut,
-    Fut: Future<Output = ()>,
+    L: FnMut() -> LFut,
+    LFut: Future<Output = Vec<HistoryEntry>>,
+    S: FnMut() -> SFut,
+    SFut: Future<Output = ()>,
 {
     for poll in 0..=max_polls {
-        let entries = load();
+        let entries = load().await;
         if let Some(entry) = newest_since(&entries, baseline_ms) {
             return Some(entry.clone());
         }
@@ -85,6 +97,19 @@ mod tests {
             timestamp_ms,
             app: None,
         }
+    }
+
+    #[test]
+    fn baseline_is_the_max_timestamp_not_the_head() {
+        // A backwards clock step can leave the most recently appended entry
+        // (position 0) with a smaller timestamp than an older one; the
+        // baseline must still cover the max, or the older entry would be
+        // "detected" as new and re-delivered immediately.
+        let entries = vec![entry("appended-after-clock-step", 150), entry("older", 300)];
+        let baseline = baseline_ms(&entries);
+        assert_eq!(baseline, Some(300));
+        assert_eq!(newest_since(&entries, baseline), None);
+        assert_eq!(baseline_ms(&[]), None);
     }
 
     #[test]
@@ -136,7 +161,7 @@ mod tests {
             4,
             || {
                 loads += 1;
-                vec![entry("stale", 100)]
+                std::future::ready(vec![entry("stale", 100)])
             },
             || std::future::ready(()),
         )
@@ -154,11 +179,11 @@ mod tests {
             10,
             || {
                 loads += 1;
-                if loads >= 3 {
+                std::future::ready(if loads >= 3 {
                     vec![entry("answer", 200), entry("stale", 100)]
                 } else {
                     vec![entry("stale", 100)]
-                }
+                })
             },
             || std::future::ready(()),
         )
