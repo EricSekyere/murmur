@@ -20,6 +20,9 @@
   let lastFocused = null;
   // Guards double-activation while a confirm/cancel invoke is in flight.
   let busy = false;
+  // Nonce of the action the dialog currently shows; confirm/cancel echo it so
+  // the backend refuses clicks that race a superseding utterance.
+  let shownNonce = null;
 
   function setBadge(active) {
     badge.hidden = !active;
@@ -40,6 +43,7 @@
   }
 
   function openDialog(pending) {
+    shownNonce = pending.nonce;
     toolEl.textContent = pending.tool || '';
     // Echo the parsed arguments verbatim; textContent keeps ASR-derived
     // text inert (never interpreted as markup).
@@ -58,15 +62,16 @@
 
   function closeDialog() {
     overlay.hidden = true;
+    shownNonce = null;
     if (lastFocused && typeof lastFocused.focus === 'function') lastFocused.focus();
     lastFocused = null;
   }
 
   async function doCancel() {
-    if (busy) return;
+    if (busy || shownNonce === null) return;
     busy = true;
     try {
-      await invoke('cancel_pending');
+      await invoke('cancel_pending', { nonce: shownNonce });
     } catch (err) {
       console.error('Failed to cancel pending action:', err);
     } finally {
@@ -76,10 +81,10 @@
   }
 
   async function doConfirm() {
-    if (busy) return;
+    if (busy || shownNonce === null) return;
     busy = true;
     try {
-      await invoke('confirm_pending');
+      await invoke('confirm_pending', { nonce: shownNonce });
       showToast('Action completed', 'success');
     } catch (err) {
       showToast(`Action failed: ${err}`, 'error');
