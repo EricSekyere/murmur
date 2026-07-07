@@ -397,6 +397,14 @@ impl ModelManager {
                 pb.inc(chunk.len() as u64);
             }
 
+            // Flush and close before verifying: tokio file writes complete in
+            // the background, so a final-chunk error (disk full) only surfaces
+            // here — without this a truncated file gets renamed into place.
+            tokio::io::AsyncWriteExt::flush(&mut out)
+                .await
+                .context("Failed to flush downloaded file")?;
+            drop(out);
+
             pb.finish_with_message(format!("{} downloaded", file.local_name));
 
             let hash = format!("{:x}", hasher.finalize());
@@ -466,6 +474,14 @@ impl ModelManager {
                 cumulative_downloaded += chunk.len() as u64;
                 on_progress(cumulative_downloaded, Some(estimated_total));
             }
+
+            // Flush and close before verifying: tokio file writes complete in
+            // the background, so a final-chunk error (disk full) only surfaces
+            // here — without this a truncated file gets renamed into place.
+            tokio::io::AsyncWriteExt::flush(&mut out)
+                .await
+                .context("Failed to flush downloaded file")?;
+            drop(out);
 
             let hash = format!("{:x}", hasher.finalize());
             verify_download(&temp_path, file, &hash).await?;

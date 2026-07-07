@@ -197,10 +197,14 @@ fn extract_dll(archive_bytes: &[u8], dest_dir: &Path) -> Result<()> {
         // The DLL is at <prefix>/lib/onnxruntime.dll inside the archive
         if name.ends_with(&format!("/lib/{}", DLL_FILENAME)) || name == DLL_FILENAME {
             let dest = dest_dir.join(DLL_FILENAME);
-            let mut out = std::fs::File::create(&dest)
-                .with_context(|| format!("Failed to create {}", dest.display()))?;
-            std::io::copy(&mut entry, &mut out).context("Failed to extract DLL from archive")?;
-            tracing::info!("Extracted {} ({} bytes)", name, entry.size());
+            // Extract to memory, then write atomically: a partial write at the
+            // final path passes the exists() check forever and permanently
+            // breaks every ORT consumer until manually deleted.
+            let mut buf = Vec::with_capacity(entry.size() as usize);
+            std::io::copy(&mut entry, &mut buf).context("Failed to extract DLL from archive")?;
+            crate::fsutil::atomic_write(&dest, &buf)
+                .with_context(|| format!("Failed to write {}", dest.display()))?;
+            tracing::info!("Extracted {} ({} bytes)", name, buf.len());
             return Ok(());
         }
     }
@@ -232,9 +236,13 @@ fn extract_dll(archive_bytes: &[u8], dest_dir: &Path) -> Result<()> {
             && name.to_str() == Some(DLL_FILENAME)
         {
             let dest = dest_dir.join(DLL_FILENAME);
-            let mut out = std::fs::File::create(&dest)
-                .with_context(|| format!("Failed to create {}", dest.display()))?;
-            std::io::copy(&mut entry, &mut out).context("Failed to extract DLL from archive")?;
+            // Extract to memory, then write atomically: a partial write at the
+            // final path passes the exists() check forever and permanently
+            // breaks every ORT consumer until manually deleted.
+            let mut buf = Vec::new();
+            std::io::copy(&mut entry, &mut buf).context("Failed to extract DLL from archive")?;
+            crate::fsutil::atomic_write(&dest, &buf)
+                .with_context(|| format!("Failed to write {}", dest.display()))?;
             tracing::info!("Extracted {}", path.display());
             return Ok(());
         }
