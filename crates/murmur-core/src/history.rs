@@ -246,7 +246,7 @@ impl History {
     }
 
     /// Atomic save: write to a unique sibling tempfile, then rename.
-    pub fn save(&self, path: &PathBuf) -> Result<()> {
+    pub fn save(&self, path: &std::path::Path) -> Result<()> {
         let content = serde_json::to_string(self)?;
         crate::fsutil::atomic_write(path, content.as_bytes())?;
         Ok(())

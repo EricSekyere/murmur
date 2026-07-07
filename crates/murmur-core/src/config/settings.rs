@@ -582,7 +582,7 @@ impl Settings {
     }
 
     /// Save settings to a TOML file (atomic: write to tempfile, then rename).
-    pub fn save(&self, path: &PathBuf) -> Result<()> {
+    pub fn save(&self, path: &std::path::Path) -> Result<()> {
         let content = toml::to_string_pretty(self)?;
         crate::fsutil::atomic_write(path, content.as_bytes())?;
         tracing::info!("Saved config to {}", path.display());
