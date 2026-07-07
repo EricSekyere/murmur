@@ -744,6 +744,14 @@ function buildModelCard(m) {
   progressFill.className = 'model-card__progress-fill';
   progress.appendChild(progressFill);
 
+  // A re-render mid-download (revisiting Settings re-runs loadModelList) must
+  // not hand back enabled buttons: that allowed concurrent change_model calls
+  // and progress events binding to the wrong card.
+  if (changingModelId) {
+    btn.disabled = true;
+    if (m.id === changingModelId) progress.hidden = false;
+  }
+
   action.appendChild(btn);
   action.appendChild(progress);
   card.appendChild(info);
@@ -752,6 +760,9 @@ function buildModelCard(m) {
 }
 
 async function handleChangeModel(modelId) {
+  // One switch/download at a time; a second click would overwrite
+  // changingModelId and misbind later progress events.
+  if (changingModelId) return;
   changingModelId = modelId;
   for (const btn of modelList.querySelectorAll('.model-card__btn')) {
     btn.disabled = true;
