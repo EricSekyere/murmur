@@ -50,21 +50,23 @@ pub(crate) fn newest_since(
 
 /// Poll `load` until it yields an entry newer than `baseline_ms`, sleeping via
 /// `sleep` between checks, for at most `max_polls` sleeps. Returns `None` on
-/// timeout. The sleeper is injected so tests can pass a ready future instead
-/// of real time.
-pub(crate) async fn wait_for_new_entry<L, S, Fut>(
+/// timeout. Both the loader and the sleeper are injected futures so the real
+/// caller can read off the reactor and tests can pass ready futures instead
+/// of real time or files.
+pub(crate) async fn wait_for_new_entry<L, LFut, S, SFut>(
     baseline_ms: Option<u64>,
     max_polls: u64,
     mut load: L,
     mut sleep: S,
 ) -> Option<HistoryEntry>
 where
-    L: FnMut() -> Vec<HistoryEntry>,
-    S: FnMut() -> Fut,
-    Fut: Future<Output = ()>,
+    L: FnMut() -> LFut,
+    LFut: Future<Output = Vec<HistoryEntry>>,
+    S: FnMut() -> SFut,
+    SFut: Future<Output = ()>,
 {
     for poll in 0..=max_polls {
-        let entries = load();
+        let entries = load().await;
         if let Some(entry) = newest_since(&entries, baseline_ms) {
             return Some(entry.clone());
         }
@@ -136,7 +138,7 @@ mod tests {
             4,
             || {
                 loads += 1;
-                vec![entry("stale", 100)]
+                std::future::ready(vec![entry("stale", 100)])
             },
             || std::future::ready(()),
         )
@@ -154,11 +156,11 @@ mod tests {
             10,
             || {
                 loads += 1;
-                if loads >= 3 {
+                std::future::ready(if loads >= 3 {
                     vec![entry("answer", 200), entry("stale", 100)]
                 } else {
                     vec![entry("stale", 100)]
-                }
+                })
             },
             || std::future::ready(()),
         )

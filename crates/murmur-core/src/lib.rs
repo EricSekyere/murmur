@@ -3,6 +3,7 @@ pub mod cloud;
 pub mod command;
 pub mod config;
 pub mod dictation;
+pub mod fsutil;
 #[cfg(feature = "help")]
 pub mod help;
 pub mod history;

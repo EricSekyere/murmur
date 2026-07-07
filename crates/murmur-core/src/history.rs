@@ -88,6 +88,23 @@ impl History {
         }
     }
 
+    /// Load without side effects: a missing or unparseable file yields empty
+    /// and is never renamed or rewritten. For read-only consumers like the
+    /// MCP server, whose recovery writes would race the owning app.
+    pub fn load_readonly(path: &PathBuf) -> Self {
+        let Ok(content) = std::fs::read_to_string(path) else {
+            return Self::default();
+        };
+        serde_json::from_str(&content).unwrap_or_else(|e| {
+            tracing::warn!(
+                "History at {} is unreadable ({}); reading as empty without modifying it",
+                path.display(),
+                e
+            );
+            Self::default()
+        })
+    }
+
     /// Prepend a new entry, dropping the oldest beyond the cap.
     pub fn add(&mut self, text: &str, app: Option<String>) {
         self.entries.insert(
@@ -228,15 +245,10 @@ impl History {
         }
     }
 
-    /// Atomic save: write to a sibling tempfile, then rename.
+    /// Atomic save: write to a unique sibling tempfile, then rename.
     pub fn save(&self, path: &PathBuf) -> Result<()> {
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
         let content = serde_json::to_string(self)?;
-        let tmp = path.with_extension("json.tmp");
-        std::fs::write(&tmp, &content)?;
-        std::fs::rename(&tmp, path)?;
+        crate::fsutil::atomic_write(path, content.as_bytes())?;
         Ok(())
     }
 }
@@ -272,6 +284,19 @@ fn is_distinctive_term(tok: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn load_readonly_never_touches_a_corrupt_file() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("history.json");
+        std::fs::write(&path, "{not json").expect("write");
+
+        let history = History::load_readonly(&path);
+        assert!(history.entries.is_empty());
+        // Unlike load(), nothing on disk may change: no .bak rename.
+        assert_eq!(std::fs::read_to_string(&path).expect("read"), "{not json");
+        assert!(!path.with_extension("json.bak").exists());
+    }
 
     #[test]
     fn add_prepends_and_caps() {
