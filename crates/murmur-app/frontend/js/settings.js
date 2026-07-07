@@ -760,7 +760,7 @@ async function handleChangeModel(modelId) {
   if (progressEl) progressEl.hidden = false;
 
   try {
-    await invoke('change_model', { modelId });
+    await invoke('change_model', { model_id: modelId });
   } catch (err) {
     showToast(`Failed to switch model: ${err}`, 'error');
     changingModelId = null;

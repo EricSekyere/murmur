@@ -134,7 +134,7 @@ pub(crate) async fn pick_project_folder(app: tauri::AppHandle) -> Option<String>
 /// Enable/disable codebase vocabulary and optionally set the project root, then
 /// persist and re-index (or clear) in the background. The result count is
 /// reported via the `codebase-index` event.
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub(crate) fn set_codebase_vocabulary(
     app: tauri::AppHandle,
     state: State<'_, AppState>,
@@ -259,7 +259,7 @@ pub(crate) fn list_models(state: State<'_, AppState>) -> Result<Vec<ModelInfo>, 
         .collect())
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub(crate) async fn change_model(
     app: tauri::AppHandle,
     state: State<'_, AppState>,
@@ -332,7 +332,12 @@ pub(crate) fn set_developer_mode(state: State<'_, AppState>, enabled: bool) -> R
 }
 
 /// Update one or more settings fields and persist to config.
-#[tauri::command]
+///
+/// `rename_all = "snake_case"`: Tauri looks invoke args up by the camelCase of
+/// the Rust name by default, and a missing key deserializes an `Option` as
+/// `None` instead of erroring — so without this every multi-word field sent
+/// with snake_case keys from JS silently saved nothing.
+#[tauri::command(rename_all = "snake_case")]
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn update_settings(
     app: tauri::AppHandle,
