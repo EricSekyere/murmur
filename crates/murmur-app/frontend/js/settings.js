@@ -246,10 +246,13 @@ hotkeySave.addEventListener('click', async () => {
     await invoke('update_settings', { hotkey: capturedHotkey });
     hotkeyDisplay.textContent = capturedHotkey;
     showToast('Hotkey updated', 'success');
+    capturedHotkey = '';
   } catch (err) {
     showToast(`Hotkey failed: ${err}`, 'error');
+    // Keep the capture and re-enable Save so the user can retry without
+    // re-typing the combo the input still shows.
+    hotkeySave.disabled = false;
   }
-  capturedHotkey = '';
 });
 
 outputModeSelect.addEventListener('change', async () => {

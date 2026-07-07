@@ -49,6 +49,14 @@ async function closeWhatsNew() {
 function maybeShowWhatsNew(status) {
   if (whatsNewVersion) whatsNewVersion.textContent = `Version ${status.app_version || ''}`;
   if (status.app_version && status.app_version !== status.whats_new_seen) {
+    // A genuine first run shows onboarding at the same z-index; release notes
+    // on top of the welcome flow help nobody. Mark this version seen silently
+    // instead (the button in Settings can still open the dialog).
+    const onboarding = document.getElementById('onboarding');
+    if (onboarding && !onboarding.hidden) {
+      invoke('mark_whats_new_seen').catch(() => {});
+      return;
+    }
     openWhatsNew();
   }
 }
