@@ -151,7 +151,15 @@ impl MurmurMcp {
                     .unwrap_or_default()
             }
         };
-        let baseline_ms = load().await.first().map(|e| e.timestamp_ms);
+        // The baseline scans the whole log for the max timestamp (the same
+        // comparator detection uses); the head entry alone can lag it after a
+        // backwards clock step, which would re-deliver an old transcript.
+        let baseline_path = path.clone();
+        let baseline_ms = tokio::task::spawn_blocking(move || {
+            wait::baseline_ms(&History::load_readonly(&baseline_path).search("", usize::MAX))
+        })
+        .await
+        .unwrap_or(None);
         tracing::debug!(waited_secs, ?baseline_ms, "waiting for next dictation");
         let found =
             wait::wait_for_new_entry(baseline_ms, wait::polls_for(waited_secs), load, || {
