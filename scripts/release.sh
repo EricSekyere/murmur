@@ -105,7 +105,10 @@ while IFS= read -r hash; do
     bang="${BASH_REMATCH[3]}"
   fi
 
-  if [ -n "$bang" ] || printf '%s' "$body" | grep -q 'BREAKING CHANGE'; then
+  # Anchored to a footer line per the Conventional Commits spec (either
+  # spelling, colon required): prose merely mentioning "BREAKING CHANGE"
+  # must not trigger a major bump.
+  if [ -n "$bang" ] || printf '%s' "$body" | grep -qE '^BREAKING[- ]CHANGE:'; then
     has_break=1
   fi
 
