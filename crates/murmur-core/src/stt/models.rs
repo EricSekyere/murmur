@@ -50,8 +50,14 @@ pub enum SttModel {
     WhisperMediumEn,
     #[serde(alias = "large-v3-turbo")]
     WhisperLargeV3Turbo,
-    // Parakeet models (via parakeet-rs, ONNX format)
+    // Parakeet models (via parakeet-rs, ONNX format). Renamed explicitly:
+    // rename_all's kebab-case yields "parakeet-tdt06b-v2", which diverges from
+    // the documented id() form and made the documented ID fail the whole
+    // Settings parse (resetting the config). The alias keeps configs written
+    // with the old serde form loading.
+    #[serde(rename = "parakeet-tdt-06b-v2", alias = "parakeet-tdt06b-v2")]
     ParakeetTdt06bV2,
+    #[serde(rename = "parakeet-tdt-06b-v3", alias = "parakeet-tdt06b-v3")]
     ParakeetTdt06bV3,
 }
 
@@ -177,6 +183,9 @@ impl SttModel {
             "large-v3-turbo" | "large-v3-turbo.en" => Some(Self::WhisperLargeV3Turbo),
             "parakeet-tdt-0.6b-v2" => Some(Self::ParakeetTdt06bV2),
             "parakeet-tdt-0.6b-v3" => Some(Self::ParakeetTdt06bV3),
+            // Serde form written by configs before the explicit rename above
+            "parakeet-tdt06b-v2" => Some(Self::ParakeetTdt06bV2),
+            "parakeet-tdt06b-v3" => Some(Self::ParakeetTdt06bV3),
             _ => None,
         }
     }
@@ -510,6 +519,42 @@ async fn verify_download(temp_path: &std::path::Path, file: &ModelFile, hash: &s
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn serde_form_matches_id_for_every_variant() {
+        // A divergence here is a config-destroying bug: Settings persists the
+        // serde form, docs and the CLI use id(), and a form the other parser
+        // rejects fails the whole Settings parse and resets it to defaults.
+        for model in SttModel::all() {
+            let serialized = serde_json::to_value(model).expect("serialize");
+            assert_eq!(
+                serialized,
+                serde_json::Value::String(model.id().to_string()),
+                "{model:?}: serde form and id() must agree"
+            );
+            let parsed: SttModel =
+                serde_json::from_value(serde_json::Value::String(model.id().to_string()))
+                    .expect("id() form must deserialize");
+            assert_eq!(parsed, *model);
+            assert_eq!(SttModel::from_name(model.id()), Some(*model));
+        }
+    }
+
+    #[test]
+    fn legacy_serde_forms_still_deserialize() {
+        // Configs written before the Parakeet serde rename carry the plain
+        // rename_all form; they must keep loading.
+        for (legacy, expected) in [
+            ("parakeet-tdt06b-v2", SttModel::ParakeetTdt06bV2),
+            ("parakeet-tdt06b-v3", SttModel::ParakeetTdt06bV3),
+        ] {
+            let parsed: SttModel =
+                serde_json::from_value(serde_json::Value::String(legacy.to_string()))
+                    .expect("legacy serde form must deserialize");
+            assert_eq!(parsed, expected);
+            assert_eq!(SttModel::from_name(legacy), Some(expected));
+        }
+    }
 
     #[test]
     fn parakeet_v3_round_trips_id_and_short_name() {
