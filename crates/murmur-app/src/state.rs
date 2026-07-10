@@ -62,6 +62,10 @@ pub(crate) struct AppState {
     /// background at startup. Merged with the user's manual vocabulary at
     /// transcription time; empty when the indexer is disabled.
     pub project_vocab: Mutex<Vec<String>>,
+    /// Relative paths of every indexed project file, refreshed alongside
+    /// `project_vocab`, so command mode can resolve "open the … file" phrases.
+    /// Empty when the indexer is disabled.
+    pub project_files: Mutex<Vec<String>>,
     /// Live file watcher that re-indexes when a project's source files change.
     /// `None` when the indexer is disabled or has no roots. Dropping it stops
     /// watching.

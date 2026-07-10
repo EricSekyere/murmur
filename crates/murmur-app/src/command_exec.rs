@@ -72,6 +72,10 @@ const CMD_LAUNCH: &str = "native.launch";
 const CMD_FOCUS: &str = "native.focus";
 const CMD_PRESS: &str = "native.press";
 const CMD_PASTE: &str = "native.paste";
+/// Spoken file resolution. Not a native action: it needs the app's project
+/// file index, so `command_mode::run_command` intercepts it before the
+/// executor.
+pub(crate) const CMD_OPEN_FILE: &str = "open_file";
 
 /// The paste chord "paste" sends, in [`NativeActions::send_keys`] syntax.
 #[cfg(target_os = "macos")]
@@ -87,6 +91,10 @@ const PASTE_KEYS: &str = "control v";
 pub fn starter_grammar() -> Result<Grammar> {
     let mut grammar = Grammar::new();
     for (id, pattern) in [
+        // Before the launch/focus catch-alls: first added pattern wins, so
+        // "open the user controller file" resolves a file rather than
+        // launching an app named "the user controller file".
+        (CMD_OPEN_FILE, "(open|go to) [the] {query} file"),
         (CMD_LAUNCH, "(open|launch|start) {target}"),
         (CMD_FOCUS, "(switch|go) to [the] {query}"),
         (CMD_FOCUS, "focus [on] [the] {query}"),
@@ -196,6 +204,12 @@ impl<A: NativeActions> Executor<A> {
                 .focus_window(required_slot(matched, "query")?)?,
             CMD_PRESS => self.actions.send_keys(required_slot(matched, "keys")?)?,
             CMD_PASTE => self.actions.send_keys(PASTE_KEYS)?,
+            // Resolved in command_mode::run_command against the app's file
+            // index; reaching the executor means that interception broke.
+            CMD_OPEN_FILE => {
+                tracing::warn!("open_file reached the executor instead of command_mode");
+                return Ok(ExecOutcome::NoAction);
+            }
             other => {
                 tracing::warn!(command_id = %other, "no native action mapped for command");
                 return Ok(ExecOutcome::NoAction);
@@ -499,6 +513,52 @@ mod tests {
                 "phrase {phrase:?}"
             );
         }
+    }
+
+    #[test]
+    fn open_file_pattern_captures_the_spoken_query() {
+        let grammar = starter_grammar().expect("starter grammar compiles");
+        for phrase in [
+            "open the user controller test file",
+            "go to the user controller test file",
+            "open user controller test file",
+        ] {
+            let matched = grammar
+                .match_phrase(phrase)
+                .unwrap_or_else(|| panic!("phrase {phrase:?} should match"));
+            assert_eq!(matched.command_id, CMD_OPEN_FILE, "phrase {phrase:?}");
+            assert_eq!(
+                matched.slots.get("query"),
+                Some(&SlotValue::Text("user controller test".into()))
+            );
+        }
+    }
+
+    #[test]
+    fn open_file_pattern_does_not_shadow_launch_or_focus() {
+        let grammar = starter_grammar().expect("starter grammar compiles");
+        // No trailing "file": these stay app launch / window focus.
+        assert_eq!(
+            grammar.match_phrase("open firefox").unwrap().command_id,
+            CMD_LAUNCH
+        );
+        assert_eq!(
+            grammar
+                .match_phrase("go to the browser")
+                .unwrap()
+                .command_id,
+            CMD_FOCUS
+        );
+    }
+
+    #[tokio::test]
+    async fn open_file_reaching_the_executor_is_no_action() {
+        // run_command resolves open_file before the executor; the executor
+        // deliberately maps it to nothing rather than guessing an action.
+        let exec = executor_with(vec![], &[]);
+        let outcome = run_phrase(&exec, "open the readme file").await;
+        assert_eq!(outcome, ExecOutcome::NoAction);
+        assert!(exec.actions.calls().is_empty());
     }
 
     #[tokio::test]

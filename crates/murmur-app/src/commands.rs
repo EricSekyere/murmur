@@ -171,6 +171,11 @@ pub(crate) fn set_codebase_vocabulary(
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .clear();
+        state
+            .project_files
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clear();
         let _ = app.emit(
             "codebase-index",
             serde_json::json!({ "count": 0, "enabled": enabled }),
