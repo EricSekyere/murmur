@@ -141,6 +141,27 @@ listen('speech-threshold', (event) => {
   }
 });
 
+// Contexts where the session is not paused-and-resumable dictation, so the
+// dormancy "waiting" overlay would mislead: command mode (the pill may be
+// awaiting a physical confirmation, not speech) and a display-only session
+// (the onboarding mic test).
+let commandMode = false;
+let outputSuppressed = false;
+
+function dormancySuppressed() {
+  return commandMode || outputSuppressed;
+}
+
+listen('command-mode-changed', (event) => {
+  commandMode = !!event.payload?.active;
+  if (dormancySuppressed() && isWaitingNow()) leaveWaiting();
+});
+
+listen('output-suppressed', (event) => {
+  outputSuppressed = !!event.payload?.suppressed;
+  if (dormancySuppressed() && isWaitingNow()) leaveWaiting();
+});
+
 // The is-waiting class is the single source of truth for dormancy.
 function isWaitingNow() {
   return widget.classList.contains('is-waiting');
@@ -175,6 +196,7 @@ function noteSignalActivity() {
 function sessionTick() {
   if (
     !isWaitingNow() &&
+    !dormancySuppressed() &&
     ACTIVE.has(currentState) &&
     performance.now() - lastSignalMs >= WAITING_AFTER_MS
   ) {
