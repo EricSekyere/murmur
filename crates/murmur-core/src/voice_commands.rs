@@ -106,6 +106,103 @@ pub fn match_snippet<'a>(phrase: &str, snippets: &'a [Snippet]) -> Option<&'a st
         .map(|s| s.expansion.as_str())
 }
 
+/// Splice the clipboard text over every spoken placeholder in `phrase`.
+///
+/// Placeholders match case-insensitively as whole words: a multi-word
+/// placeholder must appear as a contiguous word sequence ("insert clipboard
+/// data" contains it; "reinserts clipboard" does not). `read_clipboard` is
+/// only invoked when a placeholder actually occurs, so ordinary dictation
+/// never touches the clipboard. Returns `None` — deliver the phrase
+/// unchanged — when nothing matches or the clipboard is empty/unreadable,
+/// so the placeholder words are never silently deleted.
+pub fn substitute_clipboard(
+    phrase: &str,
+    placeholders: &[String],
+    read_clipboard: impl FnOnce() -> Option<String>,
+) -> Option<String> {
+    let patterns: Vec<Vec<String>> = placeholders
+        .iter()
+        .map(|p| word_tokens(p).into_iter().map(|w| w.lower).collect())
+        .filter(|words: &Vec<String>| !words.is_empty())
+        .collect();
+    if patterns.is_empty() {
+        return None;
+    }
+    let spans = placeholder_spans(&word_tokens(phrase), &patterns);
+    if spans.is_empty() {
+        return None;
+    }
+    let clip = read_clipboard()?;
+    if clip.trim().is_empty() {
+        return None;
+    }
+    let mut result = String::with_capacity(phrase.len() + clip.len());
+    let mut cursor = 0;
+    for (start, end) in spans {
+        result.push_str(&phrase[cursor..start]);
+        result.push_str(&clip);
+        cursor = end;
+    }
+    result.push_str(&phrase[cursor..]);
+    Some(result)
+}
+
+/// A word in the original string: its byte span plus lowercased text.
+struct Word {
+    start: usize,
+    end: usize,
+    lower: String,
+}
+
+/// Maximal alphanumeric runs, so punctuation and whitespace act as word
+/// boundaries ("clipboard," matches "clipboard"; "reinserts" stays one word).
+fn word_tokens(text: &str) -> Vec<Word> {
+    let mut words = Vec::new();
+    let mut current: Option<Word> = None;
+    for (i, ch) in text.char_indices() {
+        if ch.is_alphanumeric() {
+            let word = current.get_or_insert_with(|| Word {
+                start: i,
+                end: i,
+                lower: String::new(),
+            });
+            word.end = i + ch.len_utf8();
+            word.lower.extend(ch.to_lowercase());
+        } else if let Some(word) = current.take() {
+            words.push(word);
+        }
+    }
+    words.extend(current);
+    words
+}
+
+/// Non-overlapping byte spans where any pattern occurs as a contiguous word
+/// sequence; the longest pattern wins at each position.
+fn placeholder_spans(words: &[Word], patterns: &[Vec<String>]) -> Vec<(usize, usize)> {
+    let mut spans = Vec::new();
+    let mut i = 0;
+    while i < words.len() {
+        let hit = patterns
+            .iter()
+            .filter(|pat| {
+                words[i..].len() >= pat.len()
+                    && words[i..i + pat.len()]
+                        .iter()
+                        .zip(pat.iter())
+                        .all(|(w, p)| w.lower == *p)
+            })
+            .max_by_key(|pat| pat.len());
+        match hit {
+            Some(pat) => {
+                spans.push((words[i].start, words[i + pat.len() - 1].end));
+                i += pat.len();
+            }
+            None => i += 1,
+        }
+    }
+    spans
+}
+
 /// Warnings for snippets that will never fire: a trigger shadowed by a built-in
 /// command, or a duplicate of an earlier trigger (only the first one wins).
 pub fn snippet_warnings(snippets: &[Snippet]) -> Vec<String> {
@@ -257,6 +354,84 @@ mod tests {
         assert_eq!(warnings.len(), 2);
         assert!(warnings[0].contains("scratch that"));
         assert!(warnings[1].contains("Duplicate"));
+    }
+
+    fn placeholders() -> Vec<String> {
+        vec![
+            "insert clipboard".to_string(),
+            "paste clipboard".to_string(),
+        ]
+    }
+
+    #[test]
+    fn clipboard_placeholder_matches_case_and_whitespace_insensitively() {
+        let result = substitute_clipboard("Here: INSERT   Clipboard.", &placeholders(), || {
+            Some("copied".to_string())
+        });
+        assert_eq!(result, Some("Here: copied.".to_string()));
+    }
+
+    #[test]
+    fn clipboard_placeholder_no_match_returns_none() {
+        let result = substitute_clipboard("just ordinary dictation", &placeholders(), || {
+            Some("copied".to_string())
+        });
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn clipboard_empty_or_unreadable_leaves_phrase_unchanged() {
+        for clip in [None, Some(String::new()), Some("   \n".to_string())] {
+            let result = substitute_clipboard("insert clipboard", &placeholders(), || clip.clone());
+            assert_eq!(result, None, "clipboard {clip:?} must not substitute");
+        }
+    }
+
+    #[test]
+    fn clipboard_placeholder_replaces_every_occurrence() {
+        let result = substitute_clipboard(
+            "insert clipboard and then paste clipboard again",
+            &placeholders(),
+            || Some("X".to_string()),
+        );
+        assert_eq!(result, Some("X and then X again".to_string()));
+    }
+
+    #[test]
+    fn clipboard_placeholder_embedded_in_a_larger_word_does_not_match() {
+        for phrase in ["reinserts clipboard data", "insert clipboards"] {
+            let result =
+                substitute_clipboard(phrase, &placeholders(), || Some("copied".to_string()));
+            assert_eq!(result, None, "phrase {phrase:?} must not match");
+        }
+        // But extra surrounding words still match the whole-word sequence.
+        let result = substitute_clipboard("please insert clipboard data", &placeholders(), || {
+            Some("copied".to_string())
+        });
+        assert_eq!(result, Some("please copied data".to_string()));
+    }
+
+    #[test]
+    fn clipboard_is_not_read_without_a_placeholder() {
+        let read = std::cell::Cell::new(false);
+        let result = substitute_clipboard("no placeholder here", &placeholders(), || {
+            read.set(true);
+            Some("copied".to_string())
+        });
+        assert_eq!(result, None);
+        assert!(!read.get(), "clipboard must not be read on a miss");
+    }
+
+    #[test]
+    fn empty_and_whitespace_placeholder_entries_are_ignored() {
+        let junk = vec!["".to_string(), "   ".to_string(), "...".to_string()];
+        let read = std::cell::Cell::new(false);
+        let result = substitute_clipboard("any words at all", &junk, || {
+            read.set(true);
+            Some("copied".to_string())
+        });
+        assert_eq!(result, None);
+        assert!(!read.get());
     }
 
     #[test]

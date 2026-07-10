@@ -153,6 +153,7 @@ pub fn run() -> anyhow::Result<()> {
             startup_notice: Mutex::new(None),
             suppress_output: std::sync::atomic::AtomicBool::new(false),
             project_vocab: Mutex::new(Vec::new()),
+            project_files: Mutex::new(Vec::new()),
             codebase_watcher: Mutex::new(None),
             indexing: std::sync::atomic::AtomicBool::new(false),
             index_pending: std::sync::atomic::AtomicBool::new(false),
@@ -344,7 +345,7 @@ pub(crate) fn spawn_project_index(app: tauri::AppHandle) {
 
 /// One project-index pass: read the current roots, scan, and publish the result.
 fn run_one_index(app: &tauri::AppHandle) {
-    use murmur_core::indexer::{IndexConfig, index_projects};
+    use murmur_core::indexer::{IndexConfig, index_project_files, index_projects};
 
     let (enabled, roots, max_symbols, extensions) = {
         let state = app.state::<AppState>();
@@ -390,6 +391,23 @@ fn run_one_index(app: &tauri::AppHandle) {
                 "codebase-index",
                 serde_json::json!({ "count": 0, "enabled": true, "error": e.to_string() }),
             );
+        }
+    }
+
+    // Path index for spoken file resolution ("open the … file" in command
+    // mode). Best-effort like the vocabulary: a failure logs and keeps the
+    // previous list.
+    match index_project_files(&roots, &cfg) {
+        Ok(files) => {
+            tracing::info!(count = files.len(), "codebase file-path index ready");
+            let state = app.state::<AppState>();
+            *state
+                .project_files
+                .lock()
+                .unwrap_or_else(|e| e.into_inner()) = files;
+        }
+        Err(e) => {
+            tracing::warn!("Codebase file-path index failed: {:#}", e);
         }
     }
 }

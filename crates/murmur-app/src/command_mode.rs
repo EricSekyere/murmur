@@ -10,14 +10,15 @@
 use std::sync::atomic::Ordering;
 
 use anyhow::Context;
-use murmur_core::command::{Grammar, PermissionStore, RouteOutcome};
+use murmur_core::command::{Grammar, Match, PermissionStore, RouteOutcome, SlotValue};
 use murmur_mcp::ActionBackend;
 use serde_json::Value;
 use tauri::{Emitter, Manager, State};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut};
 
 use crate::command_exec::{
-    ExecOutcome, Executor, PendingAction, ToolBackend, confirm_and_execute, starter_grammar,
+    CMD_OPEN_FILE, ExecOutcome, Executor, PendingAction, ToolBackend, confirm_and_execute,
+    starter_grammar,
 };
 use crate::native_actions::{NativeActions, SystemActions};
 use crate::state::AppState;
@@ -141,18 +142,55 @@ fn route_transcript(grammar: &Grammar, transcript: &str) -> RouteOutcome {
         .unwrap_or(RouteOutcome::NoMatch)
 }
 
-/// Route one transcript and run it through the guarded executor. Returns
-/// the DTO plus any pending action for the caller to stash. Free function
-/// so tests can drive it with mock actions and backends.
-async fn route_and_execute<A: NativeActions, B: ToolBackend>(
-    grammar: &Grammar,
+/// Run a routed outcome through the guarded executor. Returns the DTO plus
+/// any pending action for the caller to stash. Free function so tests can
+/// drive it with mock actions and backends.
+async fn execute_and_split<A: NativeActions, B: ToolBackend>(
     executor: &Executor<A>,
     backend: &B,
-    transcript: &str,
+    outcome: RouteOutcome,
 ) -> anyhow::Result<(ExecOutcomeDto, Option<PendingAction>)> {
-    let outcome = route_transcript(grammar, transcript);
     let executed = executor.execute(outcome, backend).await?;
     Ok(split_outcome(executed))
+}
+
+/// Resolve a spoken "open the … file" query against the indexed project
+/// paths and type the best match's relative path. Handled here rather than
+/// in the executor because it needs `AppState::project_files`. The query is
+/// spoken content and is never logged; the resolved path only at trace.
+// TODO: disambiguation overlay for near-tie scores and the Tier-2 embedding
+// fallback (viable-features.md §1.1); v1 types the single best match.
+fn run_open_file(state: &AppState, matched: &Match) -> anyhow::Result<ExecOutcomeDto> {
+    let Some(SlotValue::Text(query)) = matched.slots.get("query") else {
+        anyhow::bail!(
+            "command '{}' is missing text slot 'query'",
+            matched.command_id
+        );
+    };
+    let best = {
+        let files = state
+            .project_files
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        murmur_core::indexer::resolve_file(query, &files)
+            .into_iter()
+            .next()
+    };
+    let Some(best) = best else {
+        tracing::debug!("no indexed file matched the spoken open-file query");
+        return Ok(ExecOutcomeDto::NoAction);
+    };
+    tracing::trace!(path = %best.path, score = best.score, "open-file query resolved");
+    let output_mode = state
+        .settings
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .output_mode;
+    murmur_core::output::dispatch_verbatim(&best.path, output_mode)
+        .context("typing the resolved file path")?;
+    Ok(ExecOutcomeDto::Executed {
+        result: Value::Null,
+    })
 }
 
 /// Run a command-mode transcript through Tier 1 routing and the guarded
@@ -171,7 +209,16 @@ pub(crate) async fn run_command(
         backend,
         pending,
     } = &mut *command;
-    let (mut dto, new_pending) = route_and_execute(grammar, executor, &*backend, &transcript)
+    let outcome = route_transcript(grammar, &transcript);
+    // open_file needs the project file index in app state, which the executor
+    // (pure native actions) can't reach, so it is resolved here.
+    if let RouteOutcome::Command(matched) = &outcome
+        && matched.command_id == CMD_OPEN_FILE
+    {
+        pending.clear();
+        return run_open_file(&state, matched).map_err(|e| format!("{e:#}"));
+    }
+    let (mut dto, new_pending) = execute_and_split(executor, &*backend, outcome)
         .await
         .map_err(|e| format!("{e:#}"))?;
     // Each utterance supersedes any stale pending action, and the nonce binds
@@ -349,9 +396,13 @@ mod tests {
         let grammar = starter_grammar().expect("starter grammar compiles");
         let backend = RecordingBackend::default();
 
-        let (dto, pending) = route_and_execute(&grammar, &executor, &backend, "open firefox")
-            .await
-            .expect("execute");
+        let (dto, pending) = execute_and_split(
+            &executor,
+            &backend,
+            route_transcript(&grammar, "open firefox"),
+        )
+        .await
+        .expect("execute");
 
         assert_eq!(
             dto,
@@ -371,14 +422,29 @@ mod tests {
         let grammar = starter_grammar().expect("starter grammar compiles");
         let backend = RecordingBackend::default();
 
-        let (dto, pending) = route_and_execute(&grammar, &executor, &backend, "make me a sandwich")
-            .await
-            .expect("execute");
+        let (dto, pending) = execute_and_split(
+            &executor,
+            &backend,
+            route_transcript(&grammar, "make me a sandwich"),
+        )
+        .await
+        .expect("execute");
 
         assert_eq!(dto, ExecOutcomeDto::NoAction);
         assert!(pending.is_none());
         assert!(actions.calls().is_empty());
         assert!(backend.calls().is_empty());
+    }
+
+    #[test]
+    fn open_file_routes_as_a_command_for_interception() {
+        // run_command relies on the routed id to divert open_file to the
+        // project file index before the executor sees it.
+        let grammar = starter_grammar().expect("starter grammar compiles");
+        match route_transcript(&grammar, "open the user controller test file") {
+            RouteOutcome::Command(matched) => assert_eq!(matched.command_id, CMD_OPEN_FILE),
+            _ => panic!("expected an open_file command match"),
+        }
     }
 
     fn pending_action(tool: &str) -> PendingAction {

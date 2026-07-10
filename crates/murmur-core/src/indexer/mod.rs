@@ -11,6 +11,7 @@
 
 mod extract;
 mod rank;
+mod resolve;
 #[cfg(feature = "treesitter")]
 mod treesitter;
 
@@ -21,6 +22,7 @@ use anyhow::{Result, bail};
 use ignore::WalkBuilder;
 
 pub use rank::RankedSymbol;
+pub use resolve::{FileMatch, resolve_file};
 
 /// Source extensions scanned when [`IndexConfig::extensions`] is empty.
 const DEFAULT_EXTENSIONS: &[&str] = &["rs", "ts", "tsx", "js", "jsx", "py", "go", "java"];
@@ -94,6 +96,63 @@ pub fn index_projects(roots: &[PathBuf], cfg: &IndexConfig) -> Result<Vec<String
         .into_iter()
         .map(|s| s.text)
         .collect())
+}
+
+/// Walk the project roots (gitignore-aware, like [`index_projects`]) and
+/// return every file as a root-relative, forward-slash path for the spoken
+/// file resolver ([`resolve_file`]). Deliberately not filtered by source
+/// extension: "open the readme file" should resolve docs and configs too.
+/// Deduped and stably sorted; missing roots are skipped.
+pub fn index_project_files(roots: &[PathBuf], cfg: &IndexConfig) -> Result<Vec<String>> {
+    let mut paths = Vec::new();
+    let mut scanned = 0usize;
+    for root in dedup_roots(roots) {
+        if scanned >= cfg.max_files {
+            break;
+        }
+        collect_relative_paths(&root, cfg, &mut paths, &mut scanned);
+    }
+    paths.sort_unstable();
+    paths.dedup();
+    Ok(paths)
+}
+
+/// Fold one root's files into `paths`, honoring the shared file budget.
+fn collect_relative_paths(
+    root: &Path,
+    cfg: &IndexConfig,
+    paths: &mut Vec<String>,
+    scanned: &mut usize,
+) {
+    let walker = WalkBuilder::new(root)
+        .hidden(true)
+        .git_global(false)
+        .require_git(false)
+        .build();
+    for entry in walker {
+        if *scanned >= cfg.max_files {
+            break;
+        }
+        let Ok(entry) = entry else { continue };
+        if !entry.file_type().is_some_and(|t| t.is_file()) {
+            continue;
+        }
+        let Ok(relative) = entry.path().strip_prefix(root) else {
+            continue;
+        };
+        // Non-UTF-8 path components can't be spoken or typed; skip them.
+        let Some(joined) = forward_slashed(relative) else {
+            continue;
+        };
+        paths.push(joined);
+        *scanned += 1;
+    }
+}
+
+/// Join a relative path with `/` regardless of platform; `None` on non-UTF-8.
+fn forward_slashed(path: &Path) -> Option<String> {
+    let parts: Option<Vec<&str>> = path.components().map(|c| c.as_os_str().to_str()).collect();
+    parts.map(|p| p.join("/"))
 }
 
 /// Canonicalize the roots and drop any that is the same as, or nested under,
@@ -271,6 +330,70 @@ mod tests {
             root.join("does-not-exist"),
         ]);
         assert_eq!(kept.len(), 2);
+    }
+
+    #[test]
+    fn file_index_returns_relative_slash_normalized_paths() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        write(root, "src/nested/deep.rs", "fn deep() {}");
+        write(root, "README.md", "# docs");
+
+        let files = index_project_files(&[root.to_path_buf()], &IndexConfig::default()).unwrap();
+        assert!(files.contains(&"src/nested/deep.rs".to_string()));
+        // No extension filter: docs and configs are resolvable by voice too.
+        assert!(files.contains(&"README.md".to_string()));
+        assert!(
+            files.iter().all(|f| !f.contains('\\')),
+            "paths must be forward-slash normalized: {files:?}"
+        );
+    }
+
+    #[test]
+    fn file_index_respects_gitignore() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        write(root, ".gitignore", "ignored.rs\nsecret/\n");
+        write(root, "keep.rs", "fn kept() {}");
+        write(root, "ignored.rs", "fn hidden() {}");
+        write(root, "secret/inner.rs", "fn hidden() {}");
+
+        let files = index_project_files(&[root.to_path_buf()], &IndexConfig::default()).unwrap();
+        assert!(files.contains(&"keep.rs".to_string()));
+        assert!(!files.contains(&"ignored.rs".to_string()));
+        assert!(
+            !files.iter().any(|f| f.starts_with("secret/")),
+            "gitignored directory must be excluded: {files:?}"
+        );
+    }
+
+    #[test]
+    fn file_index_dedups_nested_roots_and_honors_file_cap() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        write(root, "src/lib.rs", "fn a() {}");
+        write(root, "src/util.rs", "fn b() {}");
+
+        // A nested root collapses into its ancestor: each file listed once.
+        let files = index_project_files(
+            &[root.to_path_buf(), root.join("src")],
+            &IndexConfig::default(),
+        )
+        .unwrap();
+        assert_eq!(
+            files,
+            vec!["src/lib.rs".to_string(), "src/util.rs".to_string()]
+        );
+
+        let capped = index_project_files(
+            &[root.to_path_buf()],
+            &IndexConfig {
+                max_files: 1,
+                ..IndexConfig::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(capped.len(), 1);
     }
 
     #[test]

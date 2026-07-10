@@ -26,11 +26,31 @@ pub enum OutputMode {
     Stdout,
 }
 
-/// Execute the output strategy, including fallback logic for `Auto` mode.
-///
-/// This centralizes the fallback chain so both the Tauri app and CLI benefit.
+/// Whether typed output carries the dictation trailing space.
+#[cfg(feature = "keyboard")]
+enum Separator {
+    /// Append a space so consecutive dictated phrases don't run together.
+    TrailingSpace,
+    /// Type the text exactly as given (e.g. a resolved file path).
+    Exact,
+}
+
+/// Dictation output: type `text` followed by a separating space, with the
+/// `Auto` fallback chain. Centralizes the chain so both app and CLI benefit.
 #[cfg(feature = "keyboard")]
 pub fn dispatch_output(text: &str, mode: OutputMode) -> anyhow::Result<()> {
+    deliver(text, mode, Separator::TrailingSpace)
+}
+
+/// Output `text` verbatim, without the dictation trailing space. For
+/// command-mode results such as a resolved file path typed at the cursor.
+#[cfg(feature = "keyboard")]
+pub fn dispatch_verbatim(text: &str, mode: OutputMode) -> anyhow::Result<()> {
+    deliver(text, mode, Separator::Exact)
+}
+
+#[cfg(feature = "keyboard")]
+fn deliver(text: &str, mode: OutputMode, separator: Separator) -> anyhow::Result<()> {
     let trimmed = text.trim();
     if trimmed.is_empty() {
         return Ok(());
@@ -41,6 +61,13 @@ pub fn dispatch_output(text: &str, mode: OutputMode) -> anyhow::Result<()> {
         chars = trimmed.len(),
         "Outputting transcribed text"
     );
+
+    // Typed variants may append a separating space for dictation; clipboard
+    // and stdout always emit the exact text.
+    let typed = match separator {
+        Separator::TrailingSpace => format!("{trimmed} "),
+        Separator::Exact => trimmed.to_string(),
+    };
 
     match mode {
         // Auto and Keyboard both type directly with SendInput Unicode, which
@@ -53,17 +80,14 @@ pub fn dispatch_output(text: &str, mode: OutputMode) -> anyhow::Result<()> {
         // elevated window), and a user who genuinely needs it can still select
         // the ClipboardPaste mode, per app via App Profiles if they like.
         OutputMode::Auto | OutputMode::Keyboard => {
-            let text_with_space = format!("{} ", trimmed);
-
-            let kb_result =
-                keyboard::KeyboardOutput::new().and_then(|mut kb| kb.type_text(&text_with_space));
+            let kb_result = keyboard::KeyboardOutput::new().and_then(|mut kb| kb.type_text(&typed));
 
             if let Err(e) = kb_result {
                 tracing::warn!(
                     "Keyboard output failed, falling back to clipboard+paste: {}",
                     e
                 );
-                let paste_result = paste::ClipboardPasteOutput::new().paste_text(&text_with_space);
+                let paste_result = paste::ClipboardPasteOutput::new().paste_text(&typed);
 
                 if let Err(e2) = paste_result {
                     tracing::warn!(
@@ -75,8 +99,7 @@ pub fn dispatch_output(text: &str, mode: OutputMode) -> anyhow::Result<()> {
             }
         }
         OutputMode::ClipboardPaste => {
-            let text_with_space = format!("{} ", trimmed);
-            if let Err(e) = paste::ClipboardPasteOutput::new().paste_text(&text_with_space) {
+            if let Err(e) = paste::ClipboardPasteOutput::new().paste_text(&typed) {
                 tracing::warn!("Clipboard+paste failed, copying to clipboard: {}", e);
                 clipboard::ClipboardOutput::new()?.copy(trimmed)?;
             }

@@ -173,6 +173,12 @@ pub struct Settings {
     #[serde(default)]
     pub snippets: Vec<Snippet>,
 
+    /// Spoken placeholders replaced inline by the current clipboard text
+    /// (text substitution, never a paste keystroke). Whole-word,
+    /// case-insensitive match anywhere in a phrase; empty disables the feature.
+    #[serde(default = "default_clipboard_placeholders")]
+    pub clipboard_placeholders: Vec<String>,
+
     /// Spoken language: "auto" to detect, or a code like "en"/"es"/"fr".
     /// Only honored by multilingual models (the `.en` models are English-only).
     #[serde(default = "default_language")]
@@ -316,10 +322,12 @@ pub const SESSION_TIMEOUT_MAX_SECS: f32 = 300.0;
 pub const MAX_VOCAB_ENTRIES: usize = 100;
 pub const MAX_SNIPPETS: usize = 100;
 pub const MAX_APP_PROFILES: usize = 50;
+pub const MAX_CLIPBOARD_PLACEHOLDERS: usize = 16;
 const MAX_VOCAB_ENTRY_CHARS: usize = 100;
 const MAX_SNIPPET_TRIGGER_CHARS: usize = 100;
 const MAX_SNIPPET_EXPANSION_CHARS: usize = 2_000;
 const MAX_APP_PATTERN_CHARS: usize = 100;
+const MAX_CLIPBOARD_PLACEHOLDER_CHARS: usize = 100;
 
 /// Truncate a string to at most `max` characters, on a UTF-8 boundary.
 fn truncate_chars(s: &mut String, max: usize) {
@@ -369,7 +377,7 @@ fn default_phrase_pause_secs() -> f32 {
 }
 
 fn default_session_timeout_secs() -> f32 {
-    30.0
+    60.0
 }
 
 fn default_true() -> bool {
@@ -390,6 +398,10 @@ fn default_caption_position() -> String {
 
 fn default_pre_output_delay_ms() -> u64 {
     80
+}
+
+fn default_clipboard_placeholders() -> Vec<String> {
+    vec!["insert clipboard".into(), "paste clipboard".into()]
 }
 
 fn default_double_tap_key() -> String {
@@ -426,6 +438,7 @@ impl Default for Settings {
             sound_feedback: true,
             live_preview: true,
             snippets: Vec::new(),
+            clipboard_placeholders: default_clipboard_placeholders(),
             language: default_language(),
             translate_to_english: false,
             show_translated_caption: false,
@@ -605,6 +618,18 @@ impl Settings {
         for p in &mut self.app_profiles {
             truncate_chars(&mut p.app, MAX_APP_PATTERN_CHARS);
         }
+        // Placeholders match case-insensitively, so store them normalized;
+        // drop empties and duplicates the matcher would never use.
+        let mut placeholders: Vec<String> = Vec::new();
+        for entry in std::mem::take(&mut self.clipboard_placeholders) {
+            let mut normalized = entry.trim().to_lowercase();
+            truncate_chars(&mut normalized, MAX_CLIPBOARD_PLACEHOLDER_CHARS);
+            if !normalized.is_empty() && !placeholders.contains(&normalized) {
+                placeholders.push(normalized);
+            }
+        }
+        placeholders.truncate(MAX_CLIPBOARD_PLACEHOLDERS);
+        self.clipboard_placeholders = placeholders;
         self.indexer.max_symbols = self.indexer.max_symbols.clamp(1, MAX_INDEX_SYMBOLS);
         self.indexer.extensions.truncate(MAX_INDEX_EXTENSIONS);
         self.indexer.project_roots.truncate(MAX_INDEX_ROOTS);
@@ -833,6 +858,66 @@ mod tests {
         let text = toml::to_string_pretty(&settings).unwrap();
         let reloaded: Settings = toml::from_str(&text).unwrap();
         assert!(reloaded.show_translated_caption);
+    }
+
+    #[test]
+    fn clipboard_placeholders_round_trip_through_toml() {
+        let settings = Settings {
+            clipboard_placeholders: vec!["insert clipboard".into(), "drop it here".into()],
+            ..Settings::default()
+        };
+        let text = toml::to_string_pretty(&settings).unwrap();
+        let reloaded: Settings = toml::from_str(&text).unwrap();
+        assert_eq!(
+            reloaded.clipboard_placeholders,
+            settings.clipboard_placeholders
+        );
+    }
+
+    #[test]
+    fn old_config_without_clipboard_placeholders_loads_with_defaults() {
+        let old = r#"hotkey = "ctrl+shift+space""#;
+        let settings: Settings = toml::from_str(old).unwrap();
+        assert_eq!(
+            settings.clipboard_placeholders,
+            vec![
+                "insert clipboard".to_string(),
+                "paste clipboard".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn clamp_normalizes_clipboard_placeholders() {
+        let mut settings = Settings {
+            clipboard_placeholders: vec![
+                "  Insert Clipboard  ".into(),
+                "insert clipboard".into(),
+                "   ".into(),
+                "".into(),
+                "Paste Clipboard".into(),
+            ],
+            ..Settings::default()
+        };
+        settings.clamp_collections();
+        assert_eq!(
+            settings.clipboard_placeholders,
+            vec![
+                "insert clipboard".to_string(),
+                "paste clipboard".to_string()
+            ]
+        );
+
+        // The count cap holds even for a hand-edited config full of entries.
+        let mut oversized = Settings {
+            clipboard_placeholders: (0..40).map(|i| format!("placeholder {i}")).collect(),
+            ..Settings::default()
+        };
+        oversized.clamp_collections();
+        assert_eq!(
+            oversized.clipboard_placeholders.len(),
+            MAX_CLIPBOARD_PLACEHOLDERS
+        );
     }
 
     #[test]

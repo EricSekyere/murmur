@@ -51,6 +51,7 @@
           </span>
           <h1 class="logo">murmur</h1>
           <span id="dev-mode-badge" class="badge badge--dev" hidden>DEV</span>
+          <span id="dev-build-badge" class="badge badge--dev" hidden>dev build</span>
         </div>
 
         <span id="status-badge" class="badge badge--idle" role="status" aria-live="polite">Idle</span>
@@ -522,8 +523,8 @@
                     <span class="settings-hint">Total silence before a session auto-stops. Set to 0 to keep listening until you stop it yourself (hands-free).</span>
                   </div>
                   <div class="settings-slider-wrap">
-                    <input type="range" id="session-timeout-range" min="0" max="120" step="5" value="30">
-                    <span id="session-timeout-value" class="settings-slider-val">30s</span>
+                    <input type="range" id="session-timeout-range" min="0" max="120" step="5" value="60">
+                    <span id="session-timeout-value" class="settings-slider-val">60s</span>
                   </div>
                 </div>
               </div>

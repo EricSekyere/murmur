@@ -6,6 +6,7 @@ use std::time::Instant;
 use anyhow::Context;
 use murmur_core::stt::engine::SttEngine;
 use murmur_core::stt::models::{Backend, ModelManager, SttModel};
+#[cfg(feature = "vad")]
 use murmur_core::stt::runtime;
 use tauri::{Emitter, Manager};
 
@@ -169,6 +170,12 @@ async fn download_and_init_model(
 
 /// The ONNX Runtime DLL is needed by both Silero VAD and Parakeet; fetch it
 /// when either consumer is present.
+///
+/// Gated on `vad`: `murmur_core::stt::runtime` is only compiled when core has
+/// `parakeet`, `vad`, or `help`, and in the app's feature graph those are
+/// reachable only through `vad`/`full` (and `full` enables `vad`). Without them
+/// there is no ONNX Runtime consumer, so the no-op variant below applies.
+#[cfg(feature = "vad")]
 async fn download_ort_if_needed(app: &tauri::AppHandle, model: SttModel) -> anyhow::Result<()> {
     #[cfg(feature = "full")]
     let needs_ort =
@@ -194,6 +201,13 @@ async fn download_ort_if_needed(app: &tauri::AppHandle, model: SttModel) -> anyh
     })
     .await
     .context("ONNX Runtime download failed")?;
+    Ok(())
+}
+
+/// No ONNX Runtime consumer (VAD/Parakeet) is compiled in, so there is nothing
+/// to fetch.
+#[cfg(not(feature = "vad"))]
+async fn download_ort_if_needed(_app: &tauri::AppHandle, _model: SttModel) -> anyhow::Result<()> {
     Ok(())
 }
 

@@ -95,8 +95,9 @@ function flashState(name, text, ms) {
 function startRecordingUi() {
   recordStart = performance.now();
   heardSpeech = false;
+  lastSignalMs = performance.now();
   widget.style.setProperty('--amp', '0');
-  if (!timerHandle) timerHandle = setInterval(updateTimer, 250);
+  if (!timerHandle) timerHandle = setInterval(sessionTick, 250);
 }
 
 function stopRecordingUi() {
@@ -104,17 +105,104 @@ function stopRecordingUi() {
     clearInterval(timerHandle);
     timerHandle = null;
   }
+  clearWaiting();
   widget.style.setProperty('--amp', '0');
 }
 
 function updateTimer() {
-  // Keep showing "listening" until the backend confirms it hears speech.
-  if (!heardSpeech || currentState !== 'recording') return;
+  // Keep showing "listening" until the backend confirms it hears speech,
+  // and don't stomp the "waiting" label while dormant.
+  if (isWaitingNow() || !heardSpeech || currentState !== 'recording') return;
   const total = Math.floor((performance.now() - recordStart) / 1000);
   const mm = Math.floor(total / 60);
   const ss = String(total % 60).padStart(2, '0');
   label.classList.add('mono');
   setLabel(`${mm}:${ss}`);
+}
+
+// ─── Waiting (dormant) overlay ──────────────────────────────────────────────
+// A few seconds without signal while a session is still active dims the pill
+// to a "waiting" look (is-waiting class + label, so it isn't colour alone).
+// The next detected signal restores the active look; session end clears it.
+const WAITING_AFTER_MS = 3500;
+// RMS level that counts as speech activity. Starts at the backend's default
+// signal floor and is replaced by the calibrated (and adaptively lowered)
+// threshold via the 'speech-threshold' event, so a quiet speaker the engine
+// is actively transcribing also keeps the pill awake.
+let signalLevel = 0.002;
+// performance.now() of the last audible signal; the 250ms session tick
+// compares against it instead of re-arming a timeout on every audio-level
+// event (rapid events stay debounced, per the UI guidelines).
+let lastSignalMs = 0;
+
+listen('speech-threshold', (event) => {
+  if (typeof event.payload === 'number' && event.payload > 0) {
+    signalLevel = event.payload;
+  }
+});
+
+// Contexts where the session is not paused-and-resumable dictation, so the
+// dormancy "waiting" overlay would mislead: command mode (the pill may be
+// awaiting a physical confirmation, not speech) and a display-only session
+// (the onboarding mic test).
+let commandMode = false;
+let outputSuppressed = false;
+
+function dormancySuppressed() {
+  return commandMode || outputSuppressed;
+}
+
+listen('command-mode-changed', (event) => {
+  commandMode = !!event.payload?.active;
+  if (dormancySuppressed() && isWaitingNow()) leaveWaiting();
+});
+
+listen('output-suppressed', (event) => {
+  outputSuppressed = !!event.payload?.suppressed;
+  if (dormancySuppressed() && isWaitingNow()) leaveWaiting();
+});
+
+// The is-waiting class is the single source of truth for dormancy.
+function isWaitingNow() {
+  return widget.classList.contains('is-waiting');
+}
+
+function enterWaiting() {
+  if (!ACTIVE.has(currentState)) return;
+  widget.classList.add('is-waiting');
+  label.classList.remove('mono');
+  setLabel('waiting');
+}
+
+function leaveWaiting() {
+  widget.classList.remove('is-waiting');
+  if (currentState === 'listening') setLabel('listening');
+  updateTimer(); // recording: restore the mono timer face immediately
+}
+
+function clearWaiting() {
+  widget.classList.remove('is-waiting');
+}
+
+/** Signal heard: restore the active look and push the dormancy deadline. */
+function noteSignalActivity() {
+  if (!ACTIVE.has(currentState)) return;
+  lastSignalMs = performance.now();
+  if (isWaitingNow()) leaveWaiting();
+}
+
+/** 250ms tick while a session is active: dim to "waiting" once the dormancy
+    deadline passes, then keep the mono timer painted. */
+function sessionTick() {
+  if (
+    !isWaitingNow() &&
+    !dormancySuppressed() &&
+    ACTIVE.has(currentState) &&
+    performance.now() - lastSignalMs >= WAITING_AFTER_MS
+  ) {
+    enterWaiting();
+  }
+  updateTimer();
 }
 
 micBtn.addEventListener('click', async () => {
@@ -128,6 +216,7 @@ micBtn.addEventListener('click', async () => {
 
 listen('audio-level', (event) => {
   if (typeof event.payload !== 'number' || !ACTIVE.has(currentState)) return;
+  if (event.payload >= signalLevel) noteSignalActivity();
   // Perceptual lift: speech RMS is small, so raise it toward 1 for the bars.
   const amp = Math.min(1, Math.pow(event.payload * 6, 0.75));
   widget.style.setProperty('--amp', amp.toFixed(3));
@@ -135,6 +224,7 @@ listen('audio-level', (event) => {
 
 listen('audio-signal-detected', () => {
   heardSpeech = true;
+  noteSignalActivity();
   if (currentState === 'listening') {
     applyState('recording');
     updateTimer();

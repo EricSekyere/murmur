@@ -140,6 +140,21 @@ body { display:flex; align-items:flex-start; justify-content:flex-start; padding
 .is-locating .ring.r3 { animation-delay:.64s; }
 .is-locating { animation:locateGlow 1.3s ease-in-out infinite; }
 
+/* Waiting (dormant): session still live but no signal for a few seconds.
+   Overlay on the active states; widget.js clears it on the next signal.
+   Not colour alone: the label reads "waiting", the wave settles flat, and
+   everything dims while one slow ring shows the session is still open.
+   The core/ring dimming yields to the locate beacon (:not(.is-locating)):
+   Find Pill exists to be seen, and a dormant pill is when it is dimmest. */
+.is-waiting:not(.is-locating) .core { background:var(--faint); box-shadow:none; animation:none; }
+.is-waiting:not(.is-locating) .ring { border-color:var(--faint); }
+.is-waiting:not(.is-locating) .ring.r1 { animation:breathe 4.8s var(--eo) infinite; }
+.is-waiting:not(.is-locating) .ring.r2,
+.is-waiting:not(.is-locating) .ring.r3 { animation:none; opacity:0; }
+.is-waiting .wave { opacity:.3; transform:none; }
+.is-waiting .wave i { background:var(--faint); animation:none; height:4px; }
+.is-waiting .label { color:var(--dim); }
+
 /* ─── Micro-states (real pseudo-classes) ─────────────────────────────────── */
 .pill:hover { transform:translateY(-1px);
   box-shadow:0 1px 0 rgba(255,255,255,.1) inset, 0 -6px 14px rgba(0,0,0,.35) inset,
@@ -194,4 +209,6 @@ body { display:flex; align-items:flex-start; justify-content:flex-start; padding
   .s-recording .wave i:nth-child(3) { height:5px; } .s-recording .wave i:nth-child(4) { height:15px; }
   .s-recording .wave i:nth-child(5) { height:9px; } .s-recording .wave i:nth-child(6) { height:11px; }
   .s-recording .wave i:nth-child(7) { height:6px; }
+  /* After the .s-recording heights so the dormant wave still settles flat. */
+  .is-waiting .wave i:nth-child(n) { height:4px; }
 }

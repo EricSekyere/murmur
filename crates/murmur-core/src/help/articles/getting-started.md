@@ -38,9 +38,10 @@ default Murmur types the characters directly, which never touches your clipboard
 ## Auto-stop and timeouts
 
 A session ends on its own after a short silence once you have spoken, and a whole
-session ends after a longer stretch of total inactivity (30 seconds by default).
-Set Session Timeout to 0 to keep listening until you stop it yourself, which is
-useful for hands-free dictation.
+session ends after a longer stretch of total inactivity (60 seconds by default).
+During shorter pauses the session stays live: the pill dims to a "waiting" look
+and wakes again the moment you resume speaking. Set Session Timeout to 0 to keep
+listening until you stop it yourself, which is useful for hands-free dictation.
 
 ## First-run setup
 

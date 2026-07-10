@@ -30,10 +30,20 @@ pub(crate) fn take_startup_notice(state: State<'_, AppState>) -> Option<String> 
 /// Display-only mode: while suppressed, phrases are shown in the UI but never
 /// typed into the focused app (used by the onboarding mic test).
 #[tauri::command]
-pub(crate) fn set_output_suppressed(state: State<'_, AppState>, suppressed: bool) {
+pub(crate) fn set_output_suppressed(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    suppressed: bool,
+) {
     state
         .suppress_output
         .store(suppressed, std::sync::atomic::Ordering::Release);
+    // Tell the pill so it can drop the "waiting" dormancy overlay: a
+    // display-only session (the onboarding mic test) is not paused dictation.
+    let _ = app.emit(
+        "output-suppressed",
+        serde_json::json!({ "suppressed": suppressed }),
+    );
 }
 
 #[tauri::command]
@@ -98,6 +108,9 @@ pub(crate) fn get_status(state: State<'_, AppState>) -> serde_json::Value {
             .unwrap_or_else(|e| e.into_inner())
             .len(),
         "app_version": env!("CARGO_PKG_VERSION"),
+        // Debug builds are visually identical to installed releases; the UI
+        // shows a badge so a dev build is never mistaken for production.
+        "debug_build": cfg!(debug_assertions),
         "whats_new_seen": settings.whats_new_seen_version,
         "command_mode": state
             .command_mode
@@ -168,6 +181,11 @@ pub(crate) fn set_codebase_vocabulary(
         // Disabled or no folder: stop injecting immediately and report it.
         state
             .project_vocab
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clear();
+        state
+            .project_files
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .clear();

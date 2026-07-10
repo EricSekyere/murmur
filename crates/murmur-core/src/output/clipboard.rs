@@ -18,3 +18,11 @@ impl ClipboardOutput {
         Ok(())
     }
 }
+
+/// Current clipboard text; errors when the clipboard is unavailable or holds
+/// no text (e.g. an image). The content is never logged.
+pub fn read() -> Result<String> {
+    let text = Clipboard::new()?.get_text()?;
+    tracing::debug!("Read {} characters from clipboard", text.len());
+    Ok(text)
+}
