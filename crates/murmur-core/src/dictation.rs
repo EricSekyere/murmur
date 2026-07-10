@@ -37,7 +37,7 @@ impl Default for DictationConfig {
             // pattern used by transcribe-rs/transcriber/energy_adaptive_chunked.
             split_search: Duration::from_millis(2000),
             preroll: Duration::from_millis(350),
-            session_timeout: Duration::from_secs(30),
+            session_timeout: Duration::from_secs(60),
         }
     }
 }
@@ -302,6 +302,14 @@ impl DictationSession {
 
     pub fn finish(&mut self) -> Option<AudioBuffer> {
         self.flush_phrase(false)
+    }
+
+    /// Whether a phrase is in progress: speech was detected and the phrase has
+    /// not yet flushed. Silence inside this window is an expected pause (the
+    /// user hasn't exceeded `silence_hold` yet), so watchdogs must not treat
+    /// it as a dead input device.
+    pub fn is_mid_phrase(&self) -> bool {
+        self.in_speech
     }
 
     /// Snapshot of the in-progress phrase, resampled to 16 kHz mono, for live

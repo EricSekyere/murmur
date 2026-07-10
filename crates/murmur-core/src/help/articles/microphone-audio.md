@@ -28,7 +28,7 @@ while filtering steady background hum.
 
 Phrase Pause is the silence that ends one phrase so it gets delivered (0.6
 seconds by default). Session Timeout is the total inactivity before the whole
-session stops (30 seconds by default; set 0 for hands-free). A shorter silence
+session stops (60 seconds by default; set 0 for hands-free). A shorter silence
 after you finish a phrase also auto-stops a session once you have spoken.
 
 ## Echo cancellation

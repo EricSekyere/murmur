@@ -29,6 +29,10 @@ const PARTIAL_TICKS: u32 = 14;
 /// mid-recording (~3s). A connected mic always delivers silence samples, so a
 /// sustained gap means the device disconnected or the driver stalled.
 const MID_SESSION_STALL_TICKS: u32 = 60;
+/// RMS floor above which a chunk counts as audible signal for the UI: the
+/// one-shot `SignalDetected` event and the floor of the pill's activity
+/// threshold (`SpeechThreshold`) both use it.
+const SIGNAL_FLOOR_RMS: f32 = 0.002;
 
 #[derive(Clone)]
 pub(crate) struct StartParams {
@@ -59,6 +63,13 @@ pub(crate) enum AudioResult {
     /// Periodic RMS level update, sent every ~100ms.
     AudioLevel(f32),
     SignalDetected,
+    /// The RMS level the UI should treat as speech activity: the calibrated
+    /// (and adaptively lowered) speech threshold, capped at
+    /// [`SIGNAL_FLOOR_RMS`] so the pill is never less sensitive than the
+    /// legacy fixed floor. Sent after calibration and on every adaptive
+    /// change so the pill's dormancy logic tracks what the capture path
+    /// actually counts as speech.
+    SpeechThreshold(f32),
     NoSignal(String),
     StreamingDone,
 }
@@ -233,6 +244,9 @@ fn run_session(
     keep_calibration_preroll(&live_buf, &mut analyzed_up_to, native_rate, native_channels);
 
     let session = build_session(params, &calibration, native_rate, echo_cancellation);
+    let _ = result_tx.send(AudioResult::SpeechThreshold(
+        calibration.threshold.min(SIGNAL_FLOOR_RMS),
+    ));
 
     Monitor {
         cmd_rx,
@@ -250,6 +264,7 @@ fn run_session(
         floor_window: VecDeque::with_capacity(FLOOR_WINDOW_TICKS),
         level_tick: 0,
         saw_signal: false,
+        had_phrase: false,
         consecutive_no_sample_ticks: 0,
         consecutive_silent_ticks: 0,
         startup_deadline: Instant::now() + Duration::from_millis(1200),
@@ -259,7 +274,7 @@ fn run_session(
     .run();
 }
 
-/// CPAL's native backend (WASAPI) can panic on some drivers â€” contain it.
+/// CPAL's native backend (WASAPI) can panic on some drivers; contain it.
 fn start_capture(
     capture: &mut AudioCapture,
     device: Option<&str>,
@@ -285,7 +300,7 @@ fn stop_capture(capture: &mut AudioCapture, context: &str) {
     }
 }
 
-/// Some WASAPI paths report success but never produce callbacks â€” wait for
+/// Some WASAPI paths report success but never produce callbacks; wait for
 /// the first samples before declaring the session started.
 fn probe_initial_samples(live_buf: &Arc<Mutex<Vec<f32>>>) -> bool {
     let deadline = Instant::now() + Duration::from_millis(1500);
@@ -319,6 +334,8 @@ struct Monitor<'a> {
     floor_window: VecDeque<f32>,
     level_tick: u32,
     saw_signal: bool,
+    /// A non-empty phrase has been forwarded this session.
+    had_phrase: bool,
     consecutive_no_sample_ticks: u32,
     /// Post-signal ticks where the stream delivers only digital silence.
     consecutive_silent_ticks: u32,
@@ -344,6 +361,16 @@ impl Monitor<'_> {
                 Some(mono) => (self.session.ingest(mono), compute_rms(mono)),
                 None => (Vec::new(), 0.0),
             };
+
+            // Mark the phrase BEFORE the watchdogs run: at the tick a
+            // long-pause phrase flushes, the silent-tick count may already be
+            // past the stall limit, and the watchdog must not preempt the
+            // delivery it is about to allow.
+            if events.iter().any(
+                |e| matches!(e, DictationEvent::PhraseReady(audio) if !audio.samples.is_empty()),
+            ) {
+                self.had_phrase = true;
+            }
 
             self.track_signal(chunk.is_some(), chunk_rms);
             if let Flow::EndSession = self.check_watchdogs(chunk.is_some(), chunk_rms) {
@@ -377,7 +404,7 @@ impl Monitor<'_> {
     fn handle_command(&mut self) -> Flow {
         match self.cmd_rx.try_recv() {
             Ok(Cmd::StartStreaming(_)) => {
-                tracing::warn!("StartStreaming received while a session is active â€” rejecting");
+                tracing::warn!("StartStreaming received while a session is active; rejecting");
                 let _ = self.result_tx.send(AudioResult::StartFailed(
                     "A recording session is already active".to_string(),
                 ));
@@ -457,7 +484,7 @@ impl Monitor<'_> {
     }
 
     fn track_signal(&mut self, saw_new_samples: bool, chunk_rms: f32) {
-        if saw_new_samples && chunk_rms > 0.002 && !self.saw_signal {
+        if saw_new_samples && chunk_rms > SIGNAL_FLOOR_RMS && !self.saw_signal {
             self.saw_signal = true;
             let _ = self.result_tx.send(AudioResult::SignalDetected);
         }
@@ -489,15 +516,26 @@ impl Monitor<'_> {
         }
 
         // A driver delivering only digital silence after a disconnect/mute
-        // evades the no-sample check above. Room noise floor sits above this
-        // threshold, so real speech pauses don't trip it.
+        // evades the no-sample check above. Only enforced before the first
+        // phrase and never inside an unflushed one: some drivers noise-gate
+        // speech pauses to digital zero (calibration on such devices still
+        // reads a small nonzero floor, so the ambient level cannot tell the
+        // cases apart), so once real speech has flowed, sustained zeros are a
+        // natural pause and the inactivity session_timeout owns the session
+        // end. With the timeout disabled (hands-free), zeros from a gating
+        // driver are indistinguishable from a dead device; the session stays
+        // open by design and the timeout log below is the only breadcrumb.
         if self.saw_signal {
             if saw_new_samples && chunk_rms <= 0.00005 {
                 self.consecutive_silent_ticks += 1;
             } else if saw_new_samples {
                 self.consecutive_silent_ticks = 0;
             }
-            if self.consecutive_silent_ticks >= MID_SESSION_STALL_TICKS {
+            if should_fail_on_digital_silence(
+                self.had_phrase,
+                self.session.is_mid_phrase(),
+                self.consecutive_silent_ticks,
+            ) {
                 return self.fail_no_signal(
                     "Microphone is delivering only silence. The input device may have been disconnected, muted, or changed.",
                 );
@@ -553,6 +591,9 @@ impl Monitor<'_> {
             );
             self.current_threshold = candidate;
             self.session.set_speech_threshold(candidate);
+            let _ = self.result_tx.send(AudioResult::SpeechThreshold(
+                candidate.min(SIGNAL_FLOOR_RMS),
+            ));
         }
     }
 
@@ -567,16 +608,97 @@ impl Monitor<'_> {
                     }
                 }
                 DictationEvent::PhraseReady(audio) => {
+                    // had_phrase is set in run() before the watchdogs, not here.
                     if !audio.samples.is_empty() {
                         let _ = self.result_tx.send(AudioResult::PhraseReady(audio));
                     }
                 }
                 DictationEvent::SessionTimeout => {
-                    tracing::info!("Streaming session timeout â€” no speech");
+                    // Distinguish an ordinary quiet timeout from one whose
+                    // tail was digital silence: on a non-gating device the
+                    // latter means the mic died mid-session, which the
+                    // post-phrase watchdog no longer reports directly.
+                    if self.consecutive_silent_ticks >= MID_SESSION_STALL_TICKS {
+                        tracing::warn!(
+                            silent_ticks = self.consecutive_silent_ticks,
+                            "Streaming session ended by inactivity timeout with the mic delivering digital silence; the device may be muted or disconnected, or its driver gates pauses to zero"
+                        );
+                    } else {
+                        tracing::info!(
+                            "Streaming session ended: no speech within the inactivity timeout"
+                        );
+                    }
                     return self.finish_session("session timeout");
                 }
             }
         }
         Flow::Continue
+    }
+}
+
+/// Whether sustained digital silence should tear the session down. Before any
+/// phrase and outside one, it still means a dead or muted device (keep the
+/// actionable error). Inside an unflushed phrase, silence is an expected pause
+/// (a long `phrase_pause` setting can hold a phrase open past the stall limit,
+/// and killing there would discard captured speech). After real speech has
+/// flowed, drivers that noise-gate pauses to digital zero make it
+/// indistinguishable from a natural pause, so the inactivity session_timeout
+/// owns the session end instead.
+fn should_fail_on_digital_silence(
+    had_phrase: bool,
+    mid_phrase: bool,
+    consecutive_silent_ticks: u32,
+) -> bool {
+    !had_phrase && !mid_phrase && consecutive_silent_ticks >= MID_SESSION_STALL_TICKS
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn digital_silence_fails_only_before_first_phrase() {
+        assert!(should_fail_on_digital_silence(
+            false,
+            false,
+            MID_SESSION_STALL_TICKS
+        ));
+        assert!(should_fail_on_digital_silence(
+            false,
+            false,
+            MID_SESSION_STALL_TICKS + 1
+        ));
+        // A gating driver zeroing a pause after real speech must not kill
+        // the session; the inactivity timeout handles it.
+        assert!(!should_fail_on_digital_silence(
+            true,
+            false,
+            MID_SESSION_STALL_TICKS
+        ));
+        assert!(!should_fail_on_digital_silence(true, false, u32::MAX));
+    }
+
+    #[test]
+    fn digital_silence_never_fails_inside_an_unflushed_phrase() {
+        // A phrase_pause above the ~3s stall limit keeps the phrase open
+        // through a longer gated pause; killing there would discard the
+        // user's captured speech before it ever flushed.
+        assert!(!should_fail_on_digital_silence(
+            false,
+            true,
+            MID_SESSION_STALL_TICKS
+        ));
+        assert!(!should_fail_on_digital_silence(false, true, u32::MAX));
+    }
+
+    #[test]
+    fn digital_silence_tolerated_below_stall_threshold() {
+        assert!(!should_fail_on_digital_silence(
+            false,
+            false,
+            MID_SESSION_STALL_TICKS - 1
+        ));
+        assert!(!should_fail_on_digital_silence(false, false, 0));
+        assert!(!should_fail_on_digital_silence(true, false, 0));
     }
 }

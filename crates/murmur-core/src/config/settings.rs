@@ -377,7 +377,7 @@ fn default_phrase_pause_secs() -> f32 {
 }
 
 fn default_session_timeout_secs() -> f32 {
-    30.0
+    60.0
 }
 
 fn default_true() -> bool {

@@ -369,6 +369,9 @@ fn streaming_worker(app: &tauri::AppHandle, generation: u64) {
                 stats.saw_signal = true;
                 let _ = app.emit("audio-signal-detected", serde_json::json!({}));
             }
+            Ok(AudioResult::SpeechThreshold(threshold)) => {
+                let _ = app.emit("speech-threshold", threshold);
+            }
             Ok(AudioResult::NoSignal(message)) => {
                 stats.saw_no_signal = true;
                 emit_transcription_diagnostic(app, "rejected", "no_signal", None, None, None);

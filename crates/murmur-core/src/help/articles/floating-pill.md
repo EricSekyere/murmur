@@ -11,6 +11,11 @@ listening and recording your voice, and when it is thinking (transcribing what
 you just said). Watching the pill tells you at a glance whether your speech is
 being captured.
 
+If you pause speaking for a few seconds mid-session, the pill dims and its label
+reads "waiting". That is not off: the session is still live and dictation resumes
+automatically the moment you speak again. The session only ends for real after
+the Session Timeout of total inactivity (or when you stop it yourself).
+
 ## Move the pill
 
 Drag the pill anywhere on screen with your mouse. It remembers where you put it.
