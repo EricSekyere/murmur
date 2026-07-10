@@ -4,10 +4,29 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{SampleFormat, SupportedStreamConfig};
 use std::sync::{Arc, Mutex};
 
-/// Per-run AEC health, so the (sometimes-broken) Windows AEC is probed at most
-/// once: 0 = unknown, 1 = delivers signal, -1 = silent (use the raw mic).
+/// Per-run AEC health: 0 = unknown (probe next session), 1 = delivers signal,
+/// -1 = only silence (use the raw mic for the rest of the run).
 #[cfg(windows)]
 static AEC_STATE: std::sync::atomic::AtomicI8 = std::sync::atomic::AtomicI8::new(0);
+
+/// Consecutive first-session AEC probes that saw only silence. The probe can
+/// misjudge a working AEC when the user simply hasn't spoken yet, so a single
+/// silent probe uses the raw mic for that session but re-tries AEC next
+/// session; only after this many silent probes is AEC given up on for the run.
+#[cfg(windows)]
+static AEC_SILENT_PROBES: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+
+/// Give up on AEC for the run after this many consecutive silent probes.
+#[cfg(windows)]
+const AEC_MAX_SILENT_PROBES: u8 = 3;
+
+/// How long a probe waits for a signal-bearing sample before falling back to
+/// the raw mic for that session. Long enough to span the user's speech onset
+/// after the hotkey (a driver that gates idle audio to zero delivers only
+/// silence until then); bounded so a silent start can't stall dictation. On a
+/// genuinely broken AEC this is also the worst-case audio lost before fallback.
+#[cfg(windows)]
+const AEC_PROBE_DEADLINE_MS: u64 = 800;
 
 /// Per-run health of the Linux echo-cancel path, mirroring `AEC_STATE`:
 /// 0 = unprobed, 1 = working, -1 = unavailable (missing pactl/parec, or the
@@ -98,24 +117,52 @@ impl AudioCapture {
                         rate,
                         channels
                     );
-                    // First session this run: confirm the AEC actually delivers
-                    // signal. Some Windows audio stacks' Communications AEC emits
-                    // only digital zeros even with a render reference; if so, drop
-                    // it and fall back to the raw mic so dictation still works.
+                    // Confirm the AEC actually delivers signal before trusting
+                    // it. Some Windows stacks' Communications AEC emits only
+                    // digital zeros even with a render reference. Wait for a
+                    // signal-bearing sample rather than sampling a fixed window:
+                    // right after the hotkey the user is usually still silent,
+                    // and a driver that gates idle audio to zero would fail an
+                    // immediate sample even when its AEC passes speech fine, so
+                    // polling for the first real sample lets a working AEC prove
+                    // itself once the user speaks. A fully silent probe uses the
+                    // raw mic for this session but re-tries AEC next session, so
+                    // one silent start can't demote a working AEC for the whole
+                    // run; AEC is abandoned only after AEC_MAX_SILENT_PROBES.
                     if AEC_STATE.load(Ordering::Relaxed) == 0 {
-                        std::thread::sleep(std::time::Duration::from_millis(250));
-                        let alive = self
-                            .buffer
-                            .lock()
-                            .map(|b| b.iter().any(|s| s.abs() > 1e-5))
-                            .unwrap_or(false);
+                        let deadline = std::time::Instant::now()
+                            + std::time::Duration::from_millis(AEC_PROBE_DEADLINE_MS);
+                        let mut alive = false;
+                        while std::time::Instant::now() < deadline {
+                            std::thread::sleep(std::time::Duration::from_millis(30));
+                            alive = self
+                                .buffer
+                                .lock()
+                                .map(|b| b.iter().any(|s| s.abs() > 1e-5))
+                                .unwrap_or(false);
+                            if alive {
+                                break;
+                            }
+                        }
                         if alive {
                             AEC_STATE.store(1, Ordering::Relaxed);
+                            AEC_SILENT_PROBES.store(0, Ordering::Relaxed);
                         } else {
-                            AEC_STATE.store(-1, Ordering::Relaxed);
-                            tracing::warn!(
-                                "Echo cancellation delivered only silence; using the raw microphone instead"
-                            );
+                            let silent = AEC_SILENT_PROBES.fetch_add(1, Ordering::Relaxed) + 1;
+                            if silent >= AEC_MAX_SILENT_PROBES {
+                                AEC_STATE.store(-1, Ordering::Relaxed);
+                                tracing::warn!(
+                                    silent_probes = silent,
+                                    "Echo cancellation delivered only silence across probes; using the raw microphone for this run"
+                                );
+                            } else {
+                                tracing::info!(
+                                    probe = silent,
+                                    max = AEC_MAX_SILENT_PROBES,
+                                    "Echo cancellation delivered no signal within {}ms; using the raw microphone for this session, will retry AEC next session",
+                                    AEC_PROBE_DEADLINE_MS
+                                );
+                            }
                             self.voice = None;
                             if let Ok(mut b) = self.buffer.lock() {
                                 b.clear();
