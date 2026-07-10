@@ -41,6 +41,7 @@ const analyticsPanel     = document.getElementById('analytics-panel');
 const diagnosticsToggle  = document.getElementById('diagnostics-toggle');
 const diagnosticsPanel   = document.getElementById('diagnostics-panel');
 const devModeBadge       = document.getElementById('dev-mode-badge');
+const devBuildBadge      = document.getElementById('dev-build-badge');
 const developerModeToggle = document.getElementById('developer-mode-toggle');
 
 const hotkeyInput        = document.getElementById('hotkey-input');

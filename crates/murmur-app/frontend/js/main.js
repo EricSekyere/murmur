@@ -41,6 +41,7 @@ async function init() {
     }
     developerModeToggle.checked = !!status.developer_mode;
     devModeBadge.hidden = !status.developer_mode;
+    devBuildBadge.hidden = !status.debug_build;
     maybeShowWhatsNew(status);
   } catch (err) {
     console.error('Failed to get status:', err);

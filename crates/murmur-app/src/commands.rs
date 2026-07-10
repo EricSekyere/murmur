@@ -98,6 +98,9 @@ pub(crate) fn get_status(state: State<'_, AppState>) -> serde_json::Value {
             .unwrap_or_else(|e| e.into_inner())
             .len(),
         "app_version": env!("CARGO_PKG_VERSION"),
+        // Debug builds are visually identical to installed releases; the UI
+        // shows a badge so a dev build is never mistaken for production.
+        "debug_build": cfg!(debug_assertions),
         "whats_new_seen": settings.whats_new_seen_version,
         "command_mode": state
             .command_mode
