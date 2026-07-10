@@ -30,10 +30,20 @@ pub(crate) fn take_startup_notice(state: State<'_, AppState>) -> Option<String> 
 /// Display-only mode: while suppressed, phrases are shown in the UI but never
 /// typed into the focused app (used by the onboarding mic test).
 #[tauri::command]
-pub(crate) fn set_output_suppressed(state: State<'_, AppState>, suppressed: bool) {
+pub(crate) fn set_output_suppressed(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    suppressed: bool,
+) {
     state
         .suppress_output
         .store(suppressed, std::sync::atomic::Ordering::Release);
+    // Tell the pill so it can drop the "waiting" dormancy overlay: a
+    // display-only session (the onboarding mic test) is not paused dictation.
+    let _ = app.emit(
+        "output-suppressed",
+        serde_json::json!({ "suppressed": suppressed }),
+    );
 }
 
 #[tauri::command]
