@@ -304,6 +304,12 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          # whisper.cpp's ggml uses std::filesystem, which AppleClang marks
+          # unavailable below macOS 10.15, so the cmake/cc build of
+          # whisper-rs-sys fails without a deployment target. Force it for both
+          # slices of the universal binary. Keep in sync with tauri.conf.json's
+          # bundle.macOS.minimumSystemVersion.
+          MACOSX_DEPLOYMENT_TARGET: "10.15"
           # Apple Developer ID signing. Inert when unset: tauri-action only signs
           # when APPLE_SIGNING_IDENTITY is non-empty. KEYCHAIN_PASSWORD lets it
           # import APPLE_CERTIFICATE (a base64-encoded .p12) into a temp keychain.
