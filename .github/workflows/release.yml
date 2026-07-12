@@ -290,13 +290,36 @@ jobs:
         shell: bash
         run: cp whatsnew.data.js crates/murmur-app/frontend/js/whatsnew.data.js
 
-      - name: Report macOS signing status
+      - name: Configure macOS signing
         shell: bash
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
-          if [ -z "${{ secrets.APPLE_SIGNING_IDENTITY }}" ]; then
-            echo "::notice::macOS signing/notarization skipped (no APPLE_* secrets); shipping an unsigned universal bundle."
-          else
+          # tauri's macOS bundler runs `security import` whenever APPLE_CERTIFICATE
+          # is PRESENT in the environment, even as an empty string, so passing
+          # unset secrets straight through makes an unsigned build fail at
+          # codesign ("SecKeychainItemImport: parameters not valid"). Export the
+          # signing vars only when a certificate is actually configured; leave
+          # them absent otherwise so tauri produces an unsigned bundle cleanly.
+          if [ -n "$APPLE_CERTIFICATE" ]; then
             echo "::notice::macOS signing + notarization enabled via Apple Developer ID."
+            {
+              echo "APPLE_CERTIFICATE=$APPLE_CERTIFICATE"
+              echo "APPLE_CERTIFICATE_PASSWORD=$APPLE_CERTIFICATE_PASSWORD"
+              echo "APPLE_SIGNING_IDENTITY=$APPLE_SIGNING_IDENTITY"
+              echo "KEYCHAIN_PASSWORD=$KEYCHAIN_PASSWORD"
+              echo "APPLE_ID=$APPLE_ID"
+              echo "APPLE_PASSWORD=$APPLE_PASSWORD"
+              echo "APPLE_TEAM_ID=$APPLE_TEAM_ID"
+            } >> "$GITHUB_ENV"
+          else
+            echo "::notice::macOS signing/notarization skipped (no APPLE_* secrets); shipping an unsigned universal bundle."
           fi
 
       - uses: tauri-apps/tauri-action@v0
@@ -310,20 +333,11 @@ jobs:
           # slices of the universal binary. Keep in sync with tauri.conf.json's
           # bundle.macOS.minimumSystemVersion.
           MACOSX_DEPLOYMENT_TARGET: "10.15"
-          # Apple Developer ID signing. Inert when unset: tauri-action only signs
-          # when APPLE_SIGNING_IDENTITY is non-empty. KEYCHAIN_PASSWORD lets it
-          # import APPLE_CERTIFICATE (a base64-encoded .p12) into a temp keychain.
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
-          # Notarization (Apple ID method). Only runs when all three are present;
-          # required for a Developer ID build to pass Gatekeeper off the store.
-          # For App Store Connect API-key auth instead, swap these for
-          # APPLE_API_ISSUER / APPLE_API_KEY / APPLE_API_KEY_PATH.
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          # Apple Developer ID signing + notarization vars are exported by the
+          # "Configure macOS signing" step above, and only when a certificate is
+          # present. They are deliberately NOT set here: passing unset secrets as
+          # empty strings makes tauri's bundler attempt `security import` on an
+          # empty certificate and fail an otherwise-unsigned build.
         with:
           projectPath: crates/murmur-app
           tagName: v${{ needs.prepare.outputs.version }}
