@@ -327,4 +327,10 @@ jobs:
         with:
           projectPath: crates/murmur-app
           tagName: v${{ needs.prepare.outputs.version }}
-          args: --target universal-apple-darwin
+          # tauri.conf.json's bundle.targets is ["nsis"] (Windows); override it
+          # here (as release-linux does with deb,appimage) so the universal
+          # build actually produces macOS bundles: app (+ the updater
+          # .app.tar.gz/.sig from createUpdaterArtifacts) and the dmg installer.
+          # Without this, tauri builds the binary but no bundle, and
+          # tauri-action reports "No artifacts were found".
+          args: --target universal-apple-darwin --bundles app,dmg
