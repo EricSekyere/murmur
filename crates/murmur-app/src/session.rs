@@ -528,10 +528,14 @@ fn handle_phrase(
                                     }
                                 }
                             });
+                        let delivered = substituted.as_deref().unwrap_or(delivered);
+                        // Spoken emoji ("emoji fire" -> 🔥) composes after
+                        // clipboard substitution; None means no emoji spoken.
+                        let with_emoji = murmur_core::emoji::substitute_emoji(delivered);
                         deliver_text(
                             app,
                             state,
-                            substituted.as_deref().unwrap_or(delivered),
+                            with_emoji.as_deref().unwrap_or(delivered),
                             output_mode,
                             processing_time_ms,
                             translated_caption,
