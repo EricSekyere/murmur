@@ -416,6 +416,12 @@
   letter-spacing: 0.08em;
 }
 
+/* Secondary figure under a stat-card label (e.g. vocabulary richness). */
+.stat-card__hint {
+  font-size: 0.62rem;
+  color: var(--color-text-muted);
+}
+
 .analytics-peak {
   font-size: 0.8rem;
   color: var(--color-text-secondary);

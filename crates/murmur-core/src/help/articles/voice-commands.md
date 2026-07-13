@@ -33,6 +33,16 @@ Paste, cut, and select all are intentionally never voice commands. A single
 misrecognition could inject your clipboard or wipe a document, so saying "paste"
 or "select all" simply types those words instead.
 
+## Conventional Commit by voice
+
+Say "commit" followed by a commit type (feat, fix, docs, chore, and the other
+Conventional Commit types) to type a formatted commit line instead of prose:
+"commit feat scope core add the vocabulary metric" types
+`feat(core): add the vocabulary metric`. Say "scope" plus one word for the
+scope, and "breaking" right before the description for the `!` marker. Murmur
+only types the line; it never runs git. Phrases like "commit the changes" are
+unaffected because a valid type must follow "commit".
+
 ## Type a command literally
 
 To type a command's words instead of running it, prefix the phrase with

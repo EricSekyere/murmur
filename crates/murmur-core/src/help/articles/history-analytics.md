@@ -27,7 +27,8 @@ name.
 The Analytics view summarizes your usage entirely from local history: total words
 and phrases, words this week, your day streak, top apps, and recent per-session
 stats like words per minute, duration, and average latency. It also shows today,
-all-time, and peak-hour summaries.
+all-time, and peak-hour summaries, plus a vocabulary card with your distinct word
+count and a richness score (the share of unique words in your recent dictation).
 
 ## Day streak
 
