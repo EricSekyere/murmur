@@ -484,42 +484,61 @@ fn handle_phrase(
         } else {
             match voice_commands::parse(&text) {
                 VoiceCommand::Text => {
-                    // A user snippet expands to its replacement text; otherwise
-                    // the spoken phrase is delivered verbatim.
-                    let (expansion, placeholders) = {
-                        let settings = state.settings.lock().unwrap_or_else(|e| e.into_inner());
-                        (
-                            voice_commands::match_snippet(&text, &settings.snippets)
-                                .map(str::to_string),
-                            settings.clipboard_placeholders.clone(),
-                        )
-                    };
-                    let delivered = expansion.as_deref().unwrap_or(text.as_str());
-                    // Spoken clipboard placeholder: splice the clipboard text
-                    // into the final delivery string (a text substitution,
-                    // never a paste keystroke). Runs after snippet expansion
-                    // and is skipped on the literal_escape path above, which
-                    // stays verbatim by design.
-                    let substituted =
-                        voice_commands::substitute_clipboard(delivered, &placeholders, || {
-                            match murmur_core::output::clipboard::read() {
-                                Ok(clip) => Some(clip),
-                                Err(e) => {
-                                    tracing::debug!("Clipboard read for placeholder failed: {e}");
-                                    None
+                    // Spoken Conventional Commit ("commit feat scope core add
+                    // x") delivers the formatted line as-is; snippet expansion
+                    // and clipboard substitution are skipped so nothing can
+                    // rewrite it. Text only — git is never run.
+                    if let Some(commit_line) = murmur_core::commit::format_commit(&text) {
+                        deliver_text(
+                            app,
+                            state,
+                            &commit_line,
+                            output_mode,
+                            processing_time_ms,
+                            translated_caption,
+                            #[cfg(windows)]
+                            previous_hwnd,
+                        );
+                    } else {
+                        // A user snippet expands to its replacement text; otherwise
+                        // the spoken phrase is delivered verbatim.
+                        let (expansion, placeholders) = {
+                            let settings = state.settings.lock().unwrap_or_else(|e| e.into_inner());
+                            (
+                                voice_commands::match_snippet(&text, &settings.snippets)
+                                    .map(str::to_string),
+                                settings.clipboard_placeholders.clone(),
+                            )
+                        };
+                        let delivered = expansion.as_deref().unwrap_or(text.as_str());
+                        // Spoken clipboard placeholder: splice the clipboard text
+                        // into the final delivery string (a text substitution,
+                        // never a paste keystroke). Runs after snippet expansion
+                        // and is skipped on the literal_escape path above, which
+                        // stays verbatim by design.
+                        let substituted =
+                            voice_commands::substitute_clipboard(delivered, &placeholders, || {
+                                match murmur_core::output::clipboard::read() {
+                                    Ok(clip) => Some(clip),
+                                    Err(e) => {
+                                        tracing::debug!(
+                                            "Clipboard read for placeholder failed: {e}"
+                                        );
+                                        None
+                                    }
                                 }
-                            }
-                        });
-                    deliver_text(
-                        app,
-                        state,
-                        substituted.as_deref().unwrap_or(delivered),
-                        output_mode,
-                        processing_time_ms,
-                        translated_caption,
-                        #[cfg(windows)]
-                        previous_hwnd,
-                    );
+                            });
+                        deliver_text(
+                            app,
+                            state,
+                            substituted.as_deref().unwrap_or(delivered),
+                            output_mode,
+                            processing_time_ms,
+                            translated_caption,
+                            #[cfg(windows)]
+                            previous_hwnd,
+                        );
+                    }
                 }
                 command => {
                     // A command isn't phrase text, so there is nothing to caption.
