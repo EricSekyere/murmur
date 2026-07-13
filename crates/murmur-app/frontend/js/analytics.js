@@ -200,6 +200,8 @@ async function renderUsageStats() {
   set('usage-week-words', formatNumber(stats.words_this_week || 0));
   set('usage-streak', String(stats.day_streak || 0));
   set('usage-phrases', formatNumber(stats.total_phrases || 0));
+  set('usage-unique-words', formatNumber(stats.unique_words || 0));
+  set('usage-richness', `${Math.round((stats.vocabulary_richness || 0) * 100)}% richness`);
 
   // Top apps → horizontal bars scaled to the busiest app (--usage-w drives the
   // fill width in CSS).

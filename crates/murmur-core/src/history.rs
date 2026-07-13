@@ -3,7 +3,7 @@
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -12,6 +12,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 const MAX_ENTRIES: usize = 500;
 
 const MS_PER_DAY: u64 = 86_400_000;
+
+/// Trailing-window size (in words) for the type-token ratio. TTR falls as the
+/// sample grows, so a fixed recent window keeps the figure comparable over time.
+const RICHNESS_WINDOW_WORDS: usize = 1000;
 
 /// Per-application usage tally.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -22,11 +26,16 @@ pub struct AppUsage {
 }
 
 /// On-device usage stats derived entirely from the local history log.
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct UsageStats {
     pub total_phrases: usize,
     pub total_words: usize,
     pub words_this_week: usize,
+    /// Distinct lowercased word types across the stored history.
+    pub unique_words: usize,
+    /// Type-token ratio (unique / total words) over the most recent
+    /// `RICHNESS_WINDOW_WORDS` words; 0.0 when the history is empty.
+    pub vocabulary_richness: f64,
     /// Consecutive days with at least one phrase, ending today (or yesterday if
     /// nothing yet today, so the streak isn't "lost" before the day is over).
     pub day_streak: u32,
@@ -148,10 +157,7 @@ impl History {
             existing.iter().map(|w| w.to_lowercase()).collect();
         let mut counts: HashMap<&str, usize> = HashMap::new();
         for entry in &self.entries {
-            for tok in entry
-                .text
-                .split(|c: char| !(c.is_alphanumeric() || c == '_'))
-            {
+            for tok in word_tokens(&entry.text) {
                 if is_distinctive_term(tok) && !have.contains(&tok.to_lowercase()) {
                     *counts.entry(tok).or_default() += 1;
                 }
@@ -181,6 +187,9 @@ impl History {
         let mut active_days: BTreeSet<u64> = BTreeSet::new();
         let mut words_by_day: HashMap<u64, usize> = HashMap::new();
         let mut per_app: HashMap<&str, (usize, usize)> = HashMap::new();
+        let mut all_types: HashSet<String> = HashSet::new();
+        let mut window_types: HashSet<String> = HashSet::new();
+        let mut window_tokens = 0usize;
 
         for e in &self.entries {
             let words = e.text.split_whitespace().count();
@@ -198,7 +207,23 @@ impl History {
                 slot.0 += 1;
                 slot.1 += words;
             }
+            // Entries are newest-first, so the first RICHNESS_WINDOW_WORDS
+            // tokens seen form the trailing richness window.
+            for tok in word_tokens(&e.text) {
+                let lower = tok.to_lowercase();
+                if window_tokens < RICHNESS_WINDOW_WORDS {
+                    window_types.insert(lower.clone());
+                    window_tokens += 1;
+                }
+                all_types.insert(lower);
+            }
         }
+
+        let vocabulary_richness = if window_tokens == 0 {
+            0.0
+        } else {
+            window_types.len() as f64 / window_tokens as f64
+        };
 
         // Streak: count back from today (or yesterday if today is still empty).
         let mut day_streak = 0u32;
@@ -238,6 +263,8 @@ impl History {
             total_phrases: self.entries.len(),
             total_words,
             words_this_week,
+            unique_words: all_types.len(),
+            vocabulary_richness,
             day_streak,
             top_apps,
             by_weekday,
@@ -258,6 +285,14 @@ fn now_ms() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0)
+}
+
+/// Word tokens as history mining sees them: split on any non-identifier
+/// character. Shared by `learn_terms` and the vocabulary stats so both agree
+/// on what a "word" is.
+fn word_tokens(text: &str) -> impl Iterator<Item = &str> {
+    text.split(|c: char| !(c.is_alphanumeric() || c == '_'))
+        .filter(|t| !t.is_empty())
 }
 
 /// Whether a token looks like a technical identifier worth learning: 3–40 chars,
@@ -345,6 +380,58 @@ mod tests {
         assert_eq!(s.day_streak, 2); // today + yesterday, broken before that
         assert_eq!(s.top_apps[0].app, "warp.exe");
         assert_eq!(s.top_apps[0].phrases, 2);
+    }
+
+    #[test]
+    fn stats_count_unique_words_and_richness() {
+        let now = 100 * MS_PER_DAY + 5_000;
+        let mut h = History::default();
+        let push = |h: &mut History, text: &str| {
+            h.entries.push(HistoryEntry {
+                text: text.to_string(),
+                timestamp_ms: now - 1_000,
+                app: None,
+            });
+        };
+        push(&mut h, "Alpha beta, ALPHA!");
+        push(&mut h, "beta gamma");
+
+        let s = h.stats(now);
+        // Tokens: alpha beta alpha beta gamma → 3 types over 5 tokens.
+        assert_eq!(s.unique_words, 3);
+        assert!((s.vocabulary_richness - 3.0 / 5.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn stats_on_empty_history_report_zero_vocabulary() {
+        let s = History::default().stats(100 * MS_PER_DAY);
+        assert_eq!(s.unique_words, 0);
+        assert_eq!(s.vocabulary_richness, 0.0);
+    }
+
+    #[test]
+    fn richness_window_excludes_words_older_than_the_window() {
+        let now = 100 * MS_PER_DAY + 5_000;
+        let mut h = History::default();
+        // Newest entry fills the whole window with one repeated word; the
+        // older entry's distinct words must not affect the ratio.
+        h.entries.push(HistoryEntry {
+            text: "repeat ".repeat(RICHNESS_WINDOW_WORDS),
+            timestamp_ms: now - 1_000,
+            app: None,
+        });
+        h.entries.push(HistoryEntry {
+            text: "several distinct older words".to_string(),
+            timestamp_ms: now - MS_PER_DAY,
+            app: None,
+        });
+
+        let s = h.stats(now);
+        // All-time uniques still count the old words...
+        assert_eq!(s.unique_words, 5);
+        // ...but the ratio covers only the newest RICHNESS_WINDOW_WORDS tokens.
+        let expected = 1.0 / RICHNESS_WINDOW_WORDS as f64;
+        assert!((s.vocabulary_richness - expected).abs() < 1e-9);
     }
 
     #[test]
