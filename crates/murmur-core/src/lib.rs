@@ -4,6 +4,7 @@ pub mod command;
 pub mod commit;
 pub mod config;
 pub mod dictation;
+pub mod emoji;
 pub mod fsutil;
 #[cfg(feature = "help")]
 pub mod help;
