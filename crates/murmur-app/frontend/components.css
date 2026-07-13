@@ -681,6 +681,12 @@
   cursor: pointer;
 }
 
+.settings-input--goal {
+  width: 90px;
+  flex-shrink: 0;
+  text-align: right;
+}
+
 .settings-textarea {
   width: 100%;
   margin-top: 8px;
@@ -1298,6 +1304,29 @@ footer {
   font-family: var(--font-mono);
   font-size: 0.7rem;
   color: var(--color-text-secondary);
+}
+
+/* Daily word goal: label + count row over a reused .progress-bar track. */
+.usage-goal {
+  margin-top: 14px;
+}
+.usage-goal__meta {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin-bottom: 6px;
+}
+.usage-goal__label {
+  font-size: 0.82rem;
+  color: var(--color-text);
+}
+.usage-goal__count {
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  color: var(--color-text-secondary);
+}
+.usage-goal__bar {
+  height: 8px;
 }
 
 /* Words-per-day sparkline (decorative ornament, gradient bars). */

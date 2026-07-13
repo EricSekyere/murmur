@@ -3,8 +3,8 @@
 use std::sync::Arc;
 
 use murmur_core::config::settings::{
-    PHRASE_PAUSE_MAX_SECS, PHRASE_PAUSE_MIN_SECS, SESSION_TIMEOUT_MAX_SECS, VAD_THRESHOLD_MAX,
-    VAD_THRESHOLD_MIN,
+    MAX_DAILY_WORD_GOAL, PHRASE_PAUSE_MAX_SECS, PHRASE_PAUSE_MIN_SECS, SESSION_TIMEOUT_MAX_SECS,
+    VAD_THRESHOLD_MAX, VAD_THRESHOLD_MIN,
 };
 use murmur_core::config::{AppProfile, Settings, TranscriptionProfile};
 use murmur_core::output::OutputMode;
@@ -73,6 +73,7 @@ pub(crate) fn get_status(state: State<'_, AppState>) -> serde_json::Value {
         "transcription_profile": settings.transcription_profile,
         "phrase_pause_secs": settings.phrase_pause_secs,
         "session_timeout_secs": settings.session_timeout_secs,
+        "daily_word_goal": settings.daily_word_goal,
         "click_to_stop": settings.click_to_stop,
         "show_widget": settings.show_widget,
         "activation_mode": settings.activation_mode,
@@ -366,6 +367,7 @@ pub(crate) fn update_settings(
     transcription_profile: Option<String>,
     phrase_pause_secs: Option<f32>,
     session_timeout_secs: Option<f32>,
+    daily_word_goal: Option<usize>,
     click_to_stop: Option<bool>,
     show_widget: Option<bool>,
     activation_mode: Option<String>,
@@ -417,6 +419,15 @@ pub(crate) fn update_settings(
             ));
         }
         settings.session_timeout_secs = st;
+    }
+    if let Some(goal) = daily_word_goal {
+        if goal > MAX_DAILY_WORD_GOAL {
+            return Err(format!(
+                "daily_word_goal must be 0-{}, got {}",
+                MAX_DAILY_WORD_GOAL, goal
+            ));
+        }
+        settings.daily_word_goal = goal;
     }
     if let Some(cts) = click_to_stop {
         settings.click_to_stop = cts;

@@ -39,6 +39,9 @@ settingsToggle.addEventListener('click', async () => {
       sessionTimeoutRange.value = status.session_timeout_secs;
       sessionTimeoutValue.textContent = formatTimeout(status.session_timeout_secs);
     }
+    if (status.daily_word_goal != null) {
+      dailyWordGoalInput.value = status.daily_word_goal;
+    }
     if (status.click_to_stop != null) {
       clickToStopToggle.checked = status.click_to_stop;
     }
@@ -412,6 +415,19 @@ sessionTimeoutRange.addEventListener('change', async () => {
     await invoke('update_settings', {
       session_timeout_secs: parseInt(sessionTimeoutRange.value, 10),
     });
+  } catch (err) {
+    showToast(`Failed: ${err}`, 'error');
+  }
+});
+
+dailyWordGoalInput.addEventListener('change', async () => {
+  // Normalize free-typed values to the input's own 0..max bounds (0 = off).
+  const max = parseInt(dailyWordGoalInput.max, 10);
+  const goal = Math.min(max, Math.max(0, parseInt(dailyWordGoalInput.value, 10) || 0));
+  dailyWordGoalInput.value = goal;
+  try {
+    await invoke('update_settings', { daily_word_goal: goal });
+    showToast(goal > 0 ? 'Daily word goal updated' : 'Daily word goal off', 'success');
   } catch (err) {
     showToast(`Failed: ${err}`, 'error');
   }
