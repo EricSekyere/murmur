@@ -43,6 +43,13 @@ scope, and "breaking" right before the description for the `!` marker. Murmur
 only types the line; it never runs git. Phrases like "commit the changes" are
 unaffected because a valid type must follow "commit".
 
+## Spoken emoji
+
+Say "emoji" followed by a name to insert the character inline: "great work
+emoji fire" delivers "great work 🔥", and "emoji thumbs up" delivers 👍. The
+explicit "emoji" keyword keeps words like "fire" safe in ordinary prose, and an
+unknown name is simply typed as-is.
+
 ## Type a command literally
 
 To type a command's words instead of running it, prefix the phrase with

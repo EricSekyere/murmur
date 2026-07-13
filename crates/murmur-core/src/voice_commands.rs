@@ -148,15 +148,16 @@ pub fn substitute_clipboard(
 }
 
 /// A word in the original string: its byte span plus lowercased text.
-struct Word {
-    start: usize,
-    end: usize,
-    lower: String,
+/// Shared with the emoji substituter so word boundaries stay consistent.
+pub(crate) struct Word {
+    pub(crate) start: usize,
+    pub(crate) end: usize,
+    pub(crate) lower: String,
 }
 
 /// Maximal alphanumeric runs, so punctuation and whitespace act as word
 /// boundaries ("clipboard," matches "clipboard"; "reinserts" stays one word).
-fn word_tokens(text: &str) -> Vec<Word> {
+pub(crate) fn word_tokens(text: &str) -> Vec<Word> {
     let mut words = Vec::new();
     let mut current: Option<Word> = None;
     for (i, ch) in text.char_indices() {
