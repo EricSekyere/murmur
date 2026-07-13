@@ -243,6 +243,11 @@ pub struct Settings {
     /// panel only auto-opens once per update.
     #[serde(default)]
     pub whats_new_seen_version: Option<String>,
+
+    /// Daily word target shown as progress on the Analytics dashboard
+    /// (0 = disabled). Clamped to [`MAX_DAILY_WORD_GOAL`] on load.
+    #[serde(default)]
+    pub daily_word_goal: usize,
 }
 
 impl AppProfile {
@@ -317,6 +322,7 @@ pub const VAD_THRESHOLD_MAX: f32 = 0.95;
 pub const PHRASE_PAUSE_MIN_SECS: f32 = 0.3;
 pub const PHRASE_PAUSE_MAX_SECS: f32 = 10.0;
 pub const SESSION_TIMEOUT_MAX_SECS: f32 = 300.0;
+pub const MAX_DAILY_WORD_GOAL: usize = 100_000;
 
 // Collection caps: bound user text reaching the decoder prompt / keystrokes.
 pub const MAX_VOCAB_ENTRIES: usize = 100;
@@ -451,6 +457,7 @@ impl Default for Settings {
             indexer: IndexerSettings::default(),
             cloud: None,
             whats_new_seen_version: None,
+            daily_word_goal: 0,
         }
     }
 }
@@ -633,6 +640,7 @@ impl Settings {
         self.indexer.max_symbols = self.indexer.max_symbols.clamp(1, MAX_INDEX_SYMBOLS);
         self.indexer.extensions.truncate(MAX_INDEX_EXTENSIONS);
         self.indexer.project_roots.truncate(MAX_INDEX_ROOTS);
+        self.daily_word_goal = self.daily_word_goal.min(MAX_DAILY_WORD_GOAL);
     }
 
     /// Effective LLM rewrite mode for the foreground process: the first
@@ -918,6 +926,42 @@ mod tests {
             oversized.clipboard_placeholders.len(),
             MAX_CLIPBOARD_PLACEHOLDERS
         );
+    }
+
+    #[test]
+    fn daily_word_goal_round_trips_through_toml() {
+        let settings = Settings {
+            daily_word_goal: 500,
+            ..Settings::default()
+        };
+        let text = toml::to_string_pretty(&settings).unwrap();
+        let reloaded: Settings = toml::from_str(&text).unwrap();
+        assert_eq!(reloaded.daily_word_goal, 500);
+    }
+
+    #[test]
+    fn old_config_without_daily_word_goal_loads_disabled() {
+        let old = r#"hotkey = "ctrl+shift+space""#;
+        let settings: Settings = toml::from_str(old).unwrap();
+        assert_eq!(settings.daily_word_goal, 0);
+    }
+
+    #[test]
+    fn clamp_caps_daily_word_goal() {
+        let mut settings = Settings {
+            daily_word_goal: 1_000_000,
+            ..Settings::default()
+        };
+        settings.clamp_collections();
+        assert_eq!(settings.daily_word_goal, MAX_DAILY_WORD_GOAL);
+
+        // In-range values (including 0 = disabled) pass through untouched.
+        let mut in_range = Settings {
+            daily_word_goal: 500,
+            ..Settings::default()
+        };
+        in_range.clamp_collections();
+        assert_eq!(in_range.daily_word_goal, 500);
     }
 
     #[test]

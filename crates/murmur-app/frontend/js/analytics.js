@@ -249,6 +249,29 @@ async function renderUsageStats() {
       streak.appendChild(cell);
     });
   }
+
+  // Daily word goal: the target lives in settings (get_status); today's words
+  // are the last entry of the oldest-first daily series. Hidden when 0 (off).
+  const goalWrap = document.getElementById('usage-goal');
+  if (goalWrap) {
+    let goal = 0;
+    try {
+      const status = await invoke('get_status');
+      goal = status.daily_word_goal || 0;
+    } catch {
+      // Unreadable settings: treat as no goal and keep the element hidden.
+    }
+    if (goal > 0) {
+      const todayWords = daily.length > 0 ? daily[daily.length - 1] : 0;
+      const count = document.getElementById('usage-goal-count');
+      if (count) {
+        count.textContent = `${todayWords.toLocaleString()} / ${goal.toLocaleString()} words today`;
+      }
+      const fill = document.getElementById('usage-goal-fill');
+      if (fill) fill.style.width = `${Math.min(100, Math.round((todayWords / goal) * 100))}%`;
+    }
+    goalWrap.hidden = goal <= 0;
+  }
 }
 
 analyticsToggle.addEventListener('click', () => {
