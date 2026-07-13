@@ -59,6 +59,7 @@ const micSensitivityRange = document.getElementById('mic-sensitivity-range');
 const micSensitivityValue = document.getElementById('mic-sensitivity-value');
 const sessionTimeoutRange = document.getElementById('session-timeout-range');
 const sessionTimeoutValue = document.getElementById('session-timeout-value');
+const dailyWordGoalInput  = document.getElementById('daily-word-goal-input');
 const clickToStopToggle  = document.getElementById('click-to-stop-toggle');
 const showWidgetToggle   = document.getElementById('show-widget-toggle');
 const micQuality         = document.getElementById('mic-quality');

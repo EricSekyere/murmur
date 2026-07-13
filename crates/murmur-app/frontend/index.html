@@ -267,6 +267,16 @@
                     <span class="stat-card__hint" id="usage-richness">0% richness</span>
                   </div>
                 </div>
+                <!-- Daily word goal progress; only shown when a goal is set. -->
+                <div class="usage-goal" id="usage-goal" hidden>
+                  <div class="usage-goal__meta">
+                    <span class="usage-goal__label">Daily goal</span>
+                    <span class="usage-goal__count" id="usage-goal-count">0 / 0 words today</span>
+                  </div>
+                  <div class="progress-bar usage-goal__bar" aria-hidden="true">
+                    <div class="progress-bar__fill" id="usage-goal-fill"></div>
+                  </div>
+                </div>
                 <ul class="usage-apps" id="usage-top-apps" aria-label="Top applications"></ul>
                 <!-- Decorative activity texture (design-language ornament; no JS binds to it) -->
                 <div class="usage-spark" aria-hidden="true">
@@ -531,6 +541,17 @@
                     <input type="range" id="session-timeout-range" min="0" max="120" step="5" value="60">
                     <span id="session-timeout-value" class="settings-slider-val">60s</span>
                   </div>
+                </div>
+              </div>
+
+              <!-- Daily Word Goal -->
+              <div class="settings-group">
+                <div class="settings-row">
+                  <div class="settings-row__text">
+                    <label class="settings-label" for="daily-word-goal-input">Daily Word Goal</label>
+                    <span class="settings-hint">Words to dictate per day, tracked on the Analytics dashboard. Set to 0 to turn the goal off.</span>
+                  </div>
+                  <input type="number" id="daily-word-goal-input" class="settings-input settings-input--goal" min="0" max="100000" step="50" value="0">
                 </div>
               </div>
 
