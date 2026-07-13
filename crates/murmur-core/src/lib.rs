@@ -1,6 +1,7 @@
 pub mod audio;
 pub mod cloud;
 pub mod command;
+pub mod commit;
 pub mod config;
 pub mod dictation;
 pub mod fsutil;
