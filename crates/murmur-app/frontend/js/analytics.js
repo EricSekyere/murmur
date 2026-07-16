@@ -202,6 +202,8 @@ async function renderUsageStats() {
   set('usage-phrases', formatNumber(stats.total_phrases || 0));
   set('usage-unique-words', formatNumber(stats.unique_words || 0));
   set('usage-richness', `${Math.round((stats.vocabulary_richness || 0) * 100)}% richness`);
+  set('usage-filler-rate', (stats.filler_rate || 0).toFixed(1));
+  set('usage-filler-hint', `${formatNumber(stats.filler_count || 0)} total`);
 
   // Top apps → horizontal bars scaled to the busiest app (--usage-w drives the
   // fill width in CSS).
