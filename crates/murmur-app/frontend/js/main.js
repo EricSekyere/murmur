@@ -26,6 +26,8 @@ async function init() {
   createVoiceBars();
   renderAnalytics();
   renderUsageStats();
+  renderRecords();
+  renderHeatmap();
   renderDiagnostics();
   try {
     const status = await invoke('get_status');

@@ -4,7 +4,9 @@ pub mod command;
 pub mod commit;
 pub mod config;
 pub mod dictation;
+pub mod dictation_request;
 pub mod emoji;
+pub mod filler;
 pub mod fsutil;
 #[cfg(feature = "help")]
 pub mod help;
@@ -12,6 +14,7 @@ pub mod history;
 pub mod hotkey;
 #[cfg(feature = "indexer")]
 pub mod indexer;
+pub mod insights;
 pub mod integrity;
 pub mod llm;
 pub mod meeting;

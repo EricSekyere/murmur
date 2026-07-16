@@ -55,6 +55,14 @@ enigo = "0.6"
 # Selection capture for Command Mode rewrites (rewrite.rs); same version as
 # murmur-core's clipboard output, so no new tree entry.
 arboard = "3"
+# Local WebSocket API for editor plugins (local_api). Server-side only, no
+# TLS: loopback traffic never leaves the machine. 0.29 reuses the sha1/digest
+# stack already in the tree; 0.30 would drag in a second digest stack.
+tokio-tungstenite = { version = "0.29", default-features = false, features = ["handshake"] }
+# Auth token for the local API discovery file; version already in the tree.
+getrandom = "0.4"
+# Drives the WebSocket Stream/Sink halves; already in the tree via tauri.
+futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
 
 # UI Automation: locate the focused input so the live caption anchors by the
 # text field, not the window bottom (caption::focused_input_rect). Shell +
@@ -68,3 +76,6 @@ windows = { version = "0.58", features = [
     "Win32_UI_Shell",
     "Win32_UI_WindowsAndMessaging",
 ] }
+
+[dev-dependencies]
+tempfile = "3"

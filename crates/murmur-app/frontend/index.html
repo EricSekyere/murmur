@@ -266,6 +266,11 @@
                     <span class="stat-card__label">Vocabulary</span>
                     <span class="stat-card__hint" id="usage-richness">0% richness</span>
                   </div>
+                  <div class="stat-card">
+                    <span class="stat-card__value" id="usage-filler-rate">0</span>
+                    <span class="stat-card__label">Filler rate</span>
+                    <span class="stat-card__hint" id="usage-filler-hint">per 100 words</span>
+                  </div>
                 </div>
                 <!-- Daily word goal progress; only shown when a goal is set. -->
                 <div class="usage-goal" id="usage-goal" hidden>
@@ -285,6 +290,40 @@
                   <i style="height:48%"></i><i style="height:66%"></i><i style="height:92%"></i>
                   <i style="height:38%"></i><i style="height:70%"></i><i style="height:58%"></i>
                   <i style="height:80%"></i><i style="height:100%"></i>
+                </div>
+              </div>
+              <div class="analytics-group">
+                <h3 class="analytics-group__title">Personal records</h3>
+                <div class="analytics-grid">
+                  <div class="stat-card">
+                    <span class="stat-card__value" id="records-best-day">--</span>
+                    <span class="stat-card__label">Best day</span>
+                    <span class="stat-card__hint" id="records-best-day-date">--</span>
+                  </div>
+                  <div class="stat-card">
+                    <span class="stat-card__value" id="records-streak">0</span>
+                    <span class="stat-card__label">Longest streak</span>
+                    <span class="stat-card__hint">days</span>
+                  </div>
+                  <div class="stat-card">
+                    <span class="stat-card__value" id="records-weekday">--</span>
+                    <span class="stat-card__label">Most active day</span>
+                  </div>
+                </div>
+                <p class="records-note" id="records-note" hidden></p>
+              </div>
+              <div class="analytics-group">
+                <h3 class="analytics-group__title">Activity</h3>
+                <div class="heatmap" id="activity-heatmap" role="img"
+                     aria-label="Daily dictation activity over the last year"></div>
+                <div class="heatmap-legend" aria-hidden="true">
+                  <span>Less</span>
+                  <i class="heatmap__cell"></i>
+                  <i class="heatmap__cell is-l1"></i>
+                  <i class="heatmap__cell is-l2"></i>
+                  <i class="heatmap__cell is-l3"></i>
+                  <i class="heatmap__cell is-l4"></i>
+                  <span>More</span>
                 </div>
               </div>
               <div class="analytics-group">
@@ -691,6 +730,26 @@
                   <button id="mcp-install-btn" class="btn-small">Connect editors</button>
                 </div>
                 <span class="settings-hint" id="mcp-install-status"></span>
+                <div class="settings-row">
+                  <div class="settings-row__text">
+                    <label class="settings-label" for="mcp-dictation-toggle">Allow agents to start dictation</label>
+                    <span class="settings-hint">A connected coding agent can start voice capture to ask you a question mid-task; you answer by speaking. Turn off to keep the MCP connection read-only.</span>
+                  </div>
+                  <label class="toggle-switch">
+                    <input type="checkbox" id="mcp-dictation-toggle" checked>
+                    <span class="toggle-switch__slider"></span>
+                  </label>
+                </div>
+                <div class="settings-row">
+                  <div class="settings-row__text">
+                    <label class="settings-label" for="local-api-toggle">Local API for editor plugins</label>
+                    <span class="settings-hint">Streams live dictation to editor plugins over a localhost-only WebSocket (authenticated). Takes effect after restarting Murmur.</span>
+                  </div>
+                  <label class="toggle-switch">
+                    <input type="checkbox" id="local-api-toggle">
+                    <span class="toggle-switch__slider"></span>
+                  </label>
+                </div>
               </div>
 
               <!-- Text Snippets -->

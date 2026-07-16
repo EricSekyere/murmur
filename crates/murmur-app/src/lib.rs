@@ -8,8 +8,10 @@ mod caption;
 pub mod command_exec;
 mod command_mode;
 mod commands;
+mod dictation_trigger;
 mod focus;
 mod input;
+mod local_api;
 mod model_setup;
 pub mod native_actions;
 mod preview;
@@ -85,6 +87,21 @@ pub fn run() -> anyhow::Result<()> {
         .context("Failed to determine history path")?;
     let history = murmur_core::history::History::load(&history_path);
 
+    let insights_path = murmur_core::insights::Insights::default_path()
+        .context("Failed to determine insights path")?;
+    let mut insights = murmur_core::insights::Insights::load(&insights_path);
+    // First run with the aggregate: seed it from whatever history is still
+    // stored so records start with the recent past. Best effort — a failed
+    // save must never block startup.
+    if insights.is_empty() {
+        insights.backfill_from_history(&history);
+        if !insights.is_empty()
+            && let Err(e) = insights.save(&insights_path)
+        {
+            tracing::warn!("Failed to save backfilled insights: {}", e);
+        }
+    }
+
     // Engine loads in the background so startup is instant; the UI shows a
     // loading banner until it is ready.
     let engine: Arc<Mutex<Option<SttEngine>>> = Arc::new(Mutex::new(None));
@@ -145,6 +162,8 @@ pub fn run() -> anyhow::Result<()> {
             last_delivered_len: Mutex::new(0),
             history: Mutex::new(history),
             history_path,
+            insights: Mutex::new(insights),
+            insights_path,
             session_dev_mode: Mutex::new(None),
             #[cfg(windows)]
             previous_foreground: Mutex::new(0),
@@ -195,6 +214,8 @@ pub fn run() -> anyhow::Result<()> {
             commands::mark_whats_new_seen,
             commands::mcp_install,
             commands::get_usage_stats,
+            commands::get_records,
+            commands::get_daily_activity,
             commands::learn_vocabulary,
             command_mode::run_command,
             command_mode::confirm_pending,
@@ -284,6 +305,8 @@ fn setup_app(
 
     model_setup::spawn_download_and_init(app.handle().clone(), engine, model);
     input::spawn_global_input_listener(app.handle().clone());
+    dictation_trigger::spawn(app.handle().clone());
+    local_api::spawn(app.handle().clone());
     updater::spawn_startup_check(app.handle().clone());
     spawn_project_index(app.handle().clone());
     #[cfg(feature = "full")]

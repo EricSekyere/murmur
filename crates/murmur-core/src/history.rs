@@ -36,6 +36,11 @@ pub struct UsageStats {
     /// Type-token ratio (unique / total words) over the most recent
     /// `RICHNESS_WINDOW_WORDS` words; 0.0 when the history is empty.
     pub vocabulary_richness: f64,
+    /// Total filler-word occurrences (see [`crate::filler`]) across the
+    /// stored history. A count only — which fillers matched is never kept.
+    pub filler_count: usize,
+    /// Fillers per 100 words; 0.0 when the history is empty.
+    pub filler_rate: f64,
     /// Consecutive days with at least one phrase, ending today (or yesterday if
     /// nothing yet today, so the streak isn't "lost" before the day is over).
     pub day_streak: u32,
@@ -143,6 +148,12 @@ impl History {
         self.entries.clear();
     }
 
+    /// Stored entries, newest first. Read access for consumers like the
+    /// insights backfill without exposing the field itself.
+    pub fn entries(&self) -> &[HistoryEntry] {
+        &self.entries
+    }
+
     /// Mine the history for distinctive technical terms the user has dictated
     /// more than once (camelCase, snake_case, or digit-bearing identifiers) that
     /// aren't already in `existing`, newest-weighted, capped at `max`. These can
@@ -190,10 +201,12 @@ impl History {
         let mut all_types: HashSet<String> = HashSet::new();
         let mut window_types: HashSet<String> = HashSet::new();
         let mut window_tokens = 0usize;
+        let mut filler_count = 0usize;
 
         for e in &self.entries {
             let words = e.text.split_whitespace().count();
             total_words += words;
+            filler_count += crate::filler::count_fillers(&e.text);
             if e.timestamp_ms >= week_ago {
                 words_this_week += words;
             }
@@ -223,6 +236,12 @@ impl History {
             0.0
         } else {
             window_types.len() as f64 / window_tokens as f64
+        };
+
+        let filler_rate = if total_words == 0 {
+            0.0
+        } else {
+            filler_count as f64 / total_words as f64 * 100.0
         };
 
         // Streak: count back from today (or yesterday if today is still empty).
@@ -265,6 +284,8 @@ impl History {
             words_this_week,
             unique_words: all_types.len(),
             vocabulary_richness,
+            filler_count,
+            filler_rate,
             day_streak,
             top_apps,
             by_weekday,
@@ -407,6 +428,27 @@ mod tests {
         let s = History::default().stats(100 * MS_PER_DAY);
         assert_eq!(s.unique_words, 0);
         assert_eq!(s.vocabulary_richness, 0.0);
+        assert_eq!(s.filler_count, 0);
+        assert_eq!(s.filler_rate, 0.0);
+    }
+
+    #[test]
+    fn stats_count_fillers_and_rate() {
+        let now = 100 * MS_PER_DAY + 5_000;
+        let mut h = History::default();
+        let push = |h: &mut History, text: &str| {
+            h.entries.push(HistoryEntry {
+                text: text.to_string(),
+                timestamp_ms: now - 1_000,
+                app: None,
+            });
+        };
+        push(&mut h, "um hello you know world"); // um + "you know" = 2 fillers, 5 words
+        push(&mut h, "clean phrase here"); // 0 fillers, 3 words
+
+        let s = h.stats(now);
+        assert_eq!(s.filler_count, 2);
+        assert!((s.filler_rate - 2.0 / 8.0 * 100.0).abs() < 1e-9);
     }
 
     #[test]

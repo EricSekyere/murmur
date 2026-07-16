@@ -96,6 +96,8 @@ pub(crate) fn get_status(state: State<'_, AppState>) -> serde_json::Value {
         "caption_position": settings.caption_position,
         "save_history": settings.save_history,
         "clean_speech": settings.clean_speech,
+        "mcp_dictation_enabled": settings.mcp_dictation_enabled,
+        "local_api_enabled": settings.local_api_enabled,
         "codebase_vocab_enabled": settings.indexer.enabled,
         "codebase_vocab_roots": settings
             .indexer
@@ -219,12 +221,34 @@ pub(crate) fn get_history(
     serde_json::json!({ "entries": entries })
 }
 
-/// Clear all stored history and persist the empty log.
+/// Clear all stored history and persist the empty log. The per-day insights
+/// aggregate is derived from those transcripts, so it is forgotten too.
 #[tauri::command]
 pub(crate) fn clear_history(state: State<'_, AppState>) -> Result<(), String> {
-    let mut history = state.history.lock().unwrap_or_else(|e| e.into_inner());
-    history.clear();
-    history.save(&state.history_path).map_err(|e| e.to_string())
+    {
+        let mut history = state.history.lock().unwrap_or_else(|e| e.into_inner());
+        history.clear();
+        history
+            .save(&state.history_path)
+            .map_err(|e| e.to_string())?;
+    }
+    purge_insights(&state);
+    Ok(())
+}
+
+/// Forget the per-day insights aggregate: clear it in memory and delete its
+/// files (including any parse-error `.bak`), mirroring the history purge.
+fn purge_insights(state: &AppState) {
+    *state.insights.lock().unwrap_or_else(|e| e.into_inner()) =
+        murmur_core::insights::Insights::default();
+    let bak = state.insights_path.with_extension("json.bak");
+    for path in [&state.insights_path, &bak] {
+        if let Err(e) = std::fs::remove_file(path)
+            && e.kind() != std::io::ErrorKind::NotFound
+        {
+            tracing::warn!(?path, "Failed to remove insights file: {}", e);
+        }
+    }
 }
 
 #[tauri::command]
@@ -384,6 +408,8 @@ pub(crate) fn update_settings(
     caption_position: Option<String>,
     save_history: Option<bool>,
     clean_speech: Option<bool>,
+    mcp_dictation_enabled: Option<bool>,
+    local_api_enabled: Option<bool>,
 ) -> Result<(), String> {
     let mut settings = state.settings.lock().unwrap_or_else(|e| e.into_inner());
     // Only warn about a model/language mismatch if those fields were touched.
@@ -531,23 +557,36 @@ pub(crate) fn update_settings(
         // on disk or stays readable through the MCP server. (settings → history
         // lock order matches record_history.)
         if !sh && settings.save_history {
-            let mut history = state.history.lock().unwrap_or_else(|e| e.into_inner());
-            history.clear();
-            // The UI promises "store nothing on disk", so delete the file (and any
-            // parse-error .bak) rather than rewriting an empty one that lingers.
-            let bak = state.history_path.with_extension("json.bak");
-            for path in [&state.history_path, &bak] {
-                if let Err(e) = std::fs::remove_file(path)
-                    && e.kind() != std::io::ErrorKind::NotFound
-                {
-                    tracing::warn!(?path, "Failed to remove history file on opt-out: {}", e);
+            {
+                let mut history = state.history.lock().unwrap_or_else(|e| e.into_inner());
+                history.clear();
+                // The UI promises "store nothing on disk", so delete the file (and any
+                // parse-error .bak) rather than rewriting an empty one that lingers.
+                let bak = state.history_path.with_extension("json.bak");
+                for path in [&state.history_path, &bak] {
+                    if let Err(e) = std::fs::remove_file(path)
+                        && e.kind() != std::io::ErrorKind::NotFound
+                    {
+                        tracing::warn!(?path, "Failed to remove history file on opt-out: {}", e);
+                    }
                 }
             }
+            // The insights aggregate is transcript-derived; opting out of
+            // history must forget it as well.
+            purge_insights(&state);
         }
         settings.save_history = sh;
     }
     if let Some(cs) = clean_speech {
         settings.clean_speech = cs;
+    }
+    if let Some(md) = mcp_dictation_enabled {
+        settings.mcp_dictation_enabled = md;
+    }
+    // The server only starts/stops with the app, so this takes effect on the
+    // next launch (the UI hint says so).
+    if let Some(la) = local_api_enabled {
+        settings.local_api_enabled = la;
     }
 
     // Same gate the loader uses, so the UI can't persist a config it would reject.
@@ -899,4 +938,26 @@ pub(crate) fn get_usage_stats(state: State<'_, AppState>) -> murmur_core::histor
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .stats(now_ms)
+}
+
+/// All-time personal records derived from the per-day insights aggregate.
+#[tauri::command]
+pub(crate) fn get_records(state: State<'_, AppState>) -> murmur_core::insights::Records {
+    state
+        .insights
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .records()
+}
+
+/// Per-day word totals for the activity heatmap, from the insights aggregate.
+#[tauri::command]
+pub(crate) fn get_daily_activity(
+    state: State<'_, AppState>,
+) -> Vec<murmur_core::insights::DayActivity> {
+    state
+        .insights
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .daily_activity()
 }

@@ -202,6 +202,8 @@ async function renderUsageStats() {
   set('usage-phrases', formatNumber(stats.total_phrases || 0));
   set('usage-unique-words', formatNumber(stats.unique_words || 0));
   set('usage-richness', `${Math.round((stats.vocabulary_richness || 0) * 100)}% richness`);
+  set('usage-filler-rate', (stats.filler_rate || 0).toFixed(1));
+  set('usage-filler-hint', `${formatNumber(stats.filler_count || 0)} total`);
 
   // Top apps → horizontal bars scaled to the busiest app (--usage-w drives the
   // fill width in CSS).
@@ -274,6 +276,87 @@ async function renderUsageStats() {
   }
 }
 
+// Personal records, derived on the backend from the per-day insights
+// aggregate (which outlives the capped history log).
+async function renderRecords() {
+  let records;
+  try {
+    records = await invoke('get_records');
+  } catch (err) {
+    return; // aggregate may be empty or unreadable; leave the placeholders
+  }
+  const set = (id, val) => {
+    const el = document.getElementById(id);
+    if (el) el.textContent = val;
+  };
+  const weekdays = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+  const tracked = records.tracked_days || 0;
+  const bestWords = records.best_day_words || 0;
+
+  set('records-best-day', bestWords > 0 ? formatNumber(bestWords) : '--');
+  set('records-best-day-date',
+    bestWords > 0 ? new Date(records.best_day * 86400000).toLocaleDateString() : '--');
+  set('records-streak', String(records.longest_streak || 0));
+  set('records-weekday',
+    tracked > 0 ? (weekdays[records.most_active_weekday] || '--') : '--');
+
+  const note = document.getElementById('records-note');
+  if (note) {
+    note.textContent = tracked > 0
+      ? `Reflects ${tracked} tracked day${tracked === 1 ? '' : 's'} of dictation`
+      : 'Start dictating to build records';
+    note.hidden = false;
+  }
+}
+
+// Quartile thresholds of the non-zero daily word counts, so heatmap intensity
+// adapts to the user's own volume instead of a fixed scale.
+function heatmapThresholds(values) {
+  if (values.length === 0) return [0, 0, 0];
+  const sorted = [...values].sort((a, b) => a - b);
+  const at = (p) => sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * p))];
+  return [at(0.25), at(0.5), at(0.75)];
+}
+
+// GitHub-style calendar heatmap: columns are weeks, rows are weekdays (Sunday
+// on top), covering the trailing year from the per-day insights aggregate.
+async function renderHeatmap() {
+  const container = document.getElementById('activity-heatmap');
+  if (!container) return;
+  let days;
+  try {
+    days = await invoke('get_daily_activity');
+  } catch (err) {
+    return; // aggregate may be empty or unreadable; leave the grid empty
+  }
+  const wordsByDay = new Map(days.map((d) => [d.day, d.words]));
+  const [q1, q2, q3] = heatmapThresholds(days.map((d) => d.words).filter((w) => w > 0));
+
+  const msPerDay = 86400000;
+  const todayIndex = Math.floor(Date.now() / msPerDay);
+  // Walk the 371-day window's start back to a Sunday so the flat cell list
+  // aligns into week columns (1970-01-01 was a Thursday → (day % 7 + 4) % 7,
+  // 0 = Sunday). Days after today are simply not emitted.
+  let start = todayIndex - 370;
+  start -= (((start % 7) + 4) % 7);
+
+  container.replaceChildren();
+  for (let day = start; day <= todayIndex; day++) {
+    const cell = document.createElement('i');
+    cell.className = 'heatmap__cell';
+    const words = wordsByDay.get(day) || 0;
+    const date = new Date(day * msPerDay).toLocaleDateString();
+    if (words > 0) {
+      const level = words > q3 ? 4 : words > q2 ? 3 : words > q1 ? 2 : 1;
+      cell.classList.add(`is-l${level}`);
+      cell.title = `${date}: ${formatNumber(words)} word${words === 1 ? '' : 's'}`;
+    } else {
+      cell.title = date;
+    }
+    container.appendChild(cell);
+  }
+}
+
 analyticsToggle.addEventListener('click', () => {
   const expanded = analyticsToggle.getAttribute('aria-expanded') === 'true';
   analyticsToggle.setAttribute('aria-expanded', String(!expanded));
@@ -281,6 +364,8 @@ analyticsToggle.addEventListener('click', () => {
   if (!expanded) {
     renderAnalytics();
     renderUsageStats();
+    renderRecords();
+    renderHeatmap();
   }
 });
 

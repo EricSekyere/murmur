@@ -48,7 +48,7 @@ This PRD was written as a forward-looking plan. The product has since shipped on
 
 ### Not yet built (still aspirational in this document)
 - **Directory and path mapping** from spoken references (Section 5.5).
-- **Other per-agent integrations:** the VS Code / Cursor extension and the local WebSocket API (Section 5.4, Epics 3.2 / 3.5). Integration today is the universal OS-level typing path, CLI stdout piping, and the MCP server above.
+- **Other per-agent integrations:** the VS Code / Cursor extension (Section 5.4, Epic 3.2). The local WebSocket API it would build on (Epic 3.5) now ships in the desktop app — localhost-only, token-authenticated, off by default (see `docs/local-api.md`) — but the extension itself is not built. Integration today is the universal OS-level typing path, CLI stdout piping, the MCP server above, and that local WebSocket API.
 - **Distinct coding / prose / command modes** (F6, Epic 2.4). A transcription profile setting exists, but not the full mode system.
 - **Continuous always-listening mode and wake word** (Epic 4.2).
 
@@ -58,7 +58,7 @@ This PRD was written as a forward-looking plan. The product has since shipped on
 - **macOS** has platform-conditional code and a build target in the tree but is not yet signed or notarized, so it is not shipped (blocked on an Apple Developer account).
 
 ### CLI surface
-`murmur listen`, `murmur config`, `murmur models` (with stdout and clipboard output), `murmur index` (codebase vocabulary), and `murmur mcp` (stdio MCP server, plus `murmur mcp install` to register with Cursor / Claude). The WebSocket agent API from the plan is not implemented.
+`murmur listen`, `murmur config`, `murmur models` (with stdout and clipboard output), `murmur index` (codebase vocabulary), and `murmur mcp` (stdio MCP server, plus `murmur mcp install` to register with Cursor / Claude). The WebSocket agent API lives in the desktop app, not the CLI (opt-in; see `docs/local-api.md`).
 
 ---
 
@@ -482,7 +482,7 @@ All dependencies must be compatible with **MIT or Apache 2.0**. No GPL dependenc
 - [ ] "Navigate to source components header" resolves correctly (directory mapping not built)
 - [ ] VS Code/Cursor extension installed and working (not built)
 - [x] Claude Code MCP server functional (`murmur mcp`: exposes transcription history as tools)
-- [ ] WebSocket API documented and tested (not built)
+- [x] WebSocket API documented and tested (ships in the app, off by default; see `docs/local-api.md`)
 - [ ] Case conversion commands work (not built)
 
 ---
