@@ -1,0 +1,53 @@
+{
+  "name": "murmur-vscode",
+  "displayName": "Murmur Dictation",
+  "description": "Reference VS Code client for Murmur's local WebSocket API.",
+  "version": "0.1.0",
+  "private": true,
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "main": "./out/extension.js",
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "murmur.toggleDictation",
+        "category": "Murmur",
+        "title": "Toggle Dictation"
+      },
+      {
+        "command": "murmur.reconnect",
+        "category": "Murmur",
+        "title": "Reconnect"
+      }
+    ],
+    "configuration": {
+      "title": "Murmur Dictation",
+      "properties": {
+        "murmur.insertFinalPhrases": {
+          "type": "boolean",
+          "default": false,
+          "description": "Insert each final dictated phrase at the active editor's cursor. Warning: Murmur itself already types into the focused window, so enabling this while Murmur's normal keyboard output is active will double-type. Only enable it if Murmur's per-app profile directs its output elsewhere."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "tsc -p ./",
+    "watch": "tsc -w -p ./",
+    "pretest": "npm run build && tsc -p tsconfig.test.json",
+    "test": "node --test \"out-test/test/*.test.js\""
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/vscode": "^1.90.0",
+    "typescript": "^5.5.0"
+  }
+}
