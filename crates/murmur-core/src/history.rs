@@ -148,6 +148,12 @@ impl History {
         self.entries.clear();
     }
 
+    /// Stored entries, newest first. Read access for consumers like the
+    /// insights backfill without exposing the field itself.
+    pub fn entries(&self) -> &[HistoryEntry] {
+        &self.entries
+    }
+
     /// Mine the history for distinctive technical terms the user has dictated
     /// more than once (camelCase, snake_case, or digit-bearing identifiers) that
     /// aren't already in `existing`, newest-weighted, capped at `max`. These can
