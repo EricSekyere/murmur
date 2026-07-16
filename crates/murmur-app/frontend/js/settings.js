@@ -66,6 +66,12 @@ settingsToggle.addEventListener('click', async () => {
         .join('\n');
       snippetsSave.disabled = true;
     }
+    if (Array.isArray(status.path_aliases)) {
+      pathAliasesInput.value = status.path_aliases
+        .map(a => `${a.spoken} = ${a.path}`)
+        .join('\n');
+      pathAliasesSave.disabled = true;
+    }
     if (Array.isArray(status.app_profiles)) {
       appProfilesInput.value = status.app_profiles
         .map(formatAppProfile)
@@ -623,6 +629,37 @@ snippetsSave.addEventListener('click', async () => {
     showToast(`Snippets saved (${snippets.length} ${snippets.length === 1 ? 'snippet' : 'snippets'})`, 'success');
   } catch (err) {
     snippetsSave.disabled = false;
+    showToast(`Failed: ${err}`, 'error');
+  }
+});
+
+// Parse "spoken = path" alias lines; same convention as snippets, only the
+// first '=' splits so a path can itself contain '='.
+function parsePathAliases(text) {
+  return text
+    .split('\n')
+    .map(line => {
+      const eq = line.indexOf('=');
+      if (eq === -1) return null;
+      const spoken = line.slice(0, eq).trim();
+      const path = line.slice(eq + 1).trim();
+      return spoken && path ? { spoken, path } : null;
+    })
+    .filter(Boolean);
+}
+
+pathAliasesInput.addEventListener('input', () => {
+  pathAliasesSave.disabled = false;
+});
+
+pathAliasesSave.addEventListener('click', async () => {
+  const aliases = parsePathAliases(pathAliasesInput.value);
+  pathAliasesSave.disabled = true;
+  try {
+    await invoke('update_settings', { path_aliases: aliases });
+    showToast(`Path aliases saved (${aliases.length} ${aliases.length === 1 ? 'alias' : 'aliases'})`, 'success');
+  } catch (err) {
+    pathAliasesSave.disabled = false;
     showToast(`Failed: ${err}`, 'error');
   }
 });

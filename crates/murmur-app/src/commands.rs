@@ -6,7 +6,7 @@ use murmur_core::config::settings::{
     MAX_DAILY_WORD_GOAL, PHRASE_PAUSE_MAX_SECS, PHRASE_PAUSE_MIN_SECS, SESSION_TIMEOUT_MAX_SECS,
     VAD_THRESHOLD_MAX, VAD_THRESHOLD_MIN,
 };
-use murmur_core::config::{AppProfile, Settings, TranscriptionProfile};
+use murmur_core::config::{AppProfile, PathAlias, Settings, TranscriptionProfile};
 use murmur_core::output::OutputMode;
 use murmur_core::stt::models::{ModelManager, SttModel};
 use murmur_core::voice_commands::Snippet;
@@ -93,6 +93,7 @@ pub(crate) fn get_status(state: State<'_, AppState>) -> serde_json::Value {
             else if cfg!(feature = "cuda") { "cuda" }
             else { "none" },
         "app_profiles": settings.app_profiles,
+        "path_aliases": settings.path_aliases,
         "caption_position": settings.caption_position,
         "save_history": settings.save_history,
         "clean_speech": settings.clean_speech,
@@ -405,6 +406,7 @@ pub(crate) fn update_settings(
     translate_to_english: Option<bool>,
     show_translated_caption: Option<bool>,
     app_profiles: Option<Vec<AppProfile>>,
+    path_aliases: Option<Vec<PathAlias>>,
     caption_position: Option<String>,
     save_history: Option<bool>,
     clean_speech: Option<bool>,
@@ -540,6 +542,11 @@ pub(crate) fn update_settings(
                         || p.rewrite_mode.is_some())
             })
             .collect();
+    }
+    if let Some(aliases) = path_aliases {
+        // clamp_collections below trims, lowercases the spoken form, drops
+        // incomplete entries, and enforces the count cap.
+        settings.path_aliases = aliases;
     }
     if let Some(pos) = caption_position {
         if pos != "pill" && pos != "window" {
