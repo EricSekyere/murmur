@@ -937,3 +937,15 @@ pub(crate) fn get_records(state: State<'_, AppState>) -> murmur_core::insights::
         .unwrap_or_else(|e| e.into_inner())
         .records()
 }
+
+/// Per-day word totals for the activity heatmap, from the insights aggregate.
+#[tauri::command]
+pub(crate) fn get_daily_activity(
+    state: State<'_, AppState>,
+) -> Vec<murmur_core::insights::DayActivity> {
+    state
+        .insights
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .daily_activity()
+}

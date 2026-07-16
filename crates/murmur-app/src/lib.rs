@@ -213,6 +213,7 @@ pub fn run() -> anyhow::Result<()> {
             commands::mcp_install,
             commands::get_usage_stats,
             commands::get_records,
+            commands::get_daily_activity,
             commands::learn_vocabulary,
             command_mode::run_command,
             command_mode::confirm_pending,
