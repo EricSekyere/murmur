@@ -1,13 +1,15 @@
 //! Stdio MCP server exposing Murmur's local transcription history through
-//! read-only tools: `get_recent_transcripts`, `search_transcripts`, and
-//! `wait_for_next_dictation`. The client spawns the host process and speaks
+//! `get_recent_transcripts`, `search_transcripts`, `wait_for_next_dictation`,
+//! and `request_dictation`. The client spawns the host process and speaks
 //! JSON-RPC over stdin/stdout, so nothing leaves the machine. The server never
-//! mutates the history log and never starts a recording: the app owns capture
-//! (the user's push-to-talk hotkey); this server only observes the transcripts
-//! the app delivers.
+//! mutates the history log and never captures audio itself: the app owns the
+//! microphone. `request_dictation` merely signals the running app (via a local
+//! trigger file) to start capture; every other tool only observes the
+//! transcripts the app delivers.
 
 use anyhow::Result;
 use murmur_core::config::Settings;
+use murmur_core::dictation_request::{self, DictationRequest};
 use murmur_core::history::{History, HistoryEntry};
 use rmcp::{
     ErrorData as McpError, ServerHandler, ServiceExt,
@@ -42,6 +44,16 @@ struct SearchRequest {
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 struct WaitRequest {
     /// Seconds to wait for the next dictation before giving up (default 30, max 300).
+    #[serde(default)]
+    timeout_secs: Option<u64>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct DictationRequestParams {
+    /// Short question to show the user when recording starts.
+    #[serde(default)]
+    prompt: Option<String>,
+    /// Seconds to wait for the spoken answer before giving up (default 30, max 300).
     #[serde(default)]
     timeout_secs: Option<u64>,
 }
@@ -183,6 +195,75 @@ impl MurmurMcp {
         };
         outcome_json(&outcome)
     }
+
+    #[tool(
+        description = "Ask the user a question out loud and start Murmur recording so they can \
+                       answer by voice; returns the transcript. Starts capture in the running \
+                       Murmur app (the pill shows recording); the user speaks and the spoken \
+                       text is returned. Use this to get a spoken answer without the user \
+                       pressing any hotkey. Returns status 'received' with the transcript, or \
+                       'timed_out'."
+    )]
+    async fn request_dictation(
+        &self,
+        Parameters(req): Parameters<DictationRequestParams>,
+    ) -> Result<CallToolResult, McpError> {
+        if !history_enabled_blocking().await {
+            return outcome_json(&WaitOutcome::HistoryDisabled {
+                message: "Murmur's save-history setting is off, so the spoken answer cannot be \
+                          read back. Ask the user to enable saving history in Murmur settings.",
+            });
+        }
+        let waited_secs = wait::clamp_timeout(req.timeout_secs);
+        let path = History::default_path()
+            .map_err(|e| McpError::internal_error(format!("history path: {e}"), None))?;
+        // Baseline before the trigger is written, so the answer the trigger
+        // produces is strictly newer than everything already logged.
+        let baseline_path = path.clone();
+        let baseline_ms = tokio::task::spawn_blocking(move || {
+            wait::baseline_ms(&History::load_readonly(&baseline_path).search("", usize::MAX))
+        })
+        .await
+        .unwrap_or(None);
+        let trigger_path = write_trigger(req.prompt).await?;
+        tracing::debug!(waited_secs, ?baseline_ms, "dictation requested, waiting");
+        let load = || {
+            let path = path.clone();
+            async move {
+                tokio::task::spawn_blocking(move || History::load_readonly(&path).search("", 1))
+                    .await
+                    .unwrap_or_default()
+            }
+        };
+        let found =
+            wait::wait_for_new_entry(baseline_ms, wait::polls_for(waited_secs), load, || {
+                tokio::time::sleep(wait::POLL_INTERVAL)
+            })
+            .await;
+        let outcome = match found {
+            Some(entry) => {
+                tracing::debug!(timestamp_ms = entry.timestamp_ms, "dictation received");
+                WaitOutcome::Received {
+                    text: entry.text,
+                    timestamp_ms: entry.timestamp_ms,
+                    app: entry.app,
+                }
+            }
+            None => {
+                // The app never consumed the trigger (not running) or the user
+                // stayed silent; either way it must not fire on a later start.
+                let _ =
+                    tokio::task::spawn_blocking(move || dictation_request::clear(&trigger_path))
+                        .await;
+                WaitOutcome::TimedOut {
+                    waited_secs,
+                    message: "Murmur did not capture anything. Make sure the Murmur app is \
+                              running and the user spoke after the prompt.",
+                }
+            }
+        };
+        outcome_json(&outcome)
+    }
 }
 
 #[tool_handler(router = self.tool_router)]
@@ -191,9 +272,11 @@ impl ServerHandler for MurmurMcp {
         let mut info = ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
             .with_instructions(
                 "Murmur exposes your local voice-to-text history. Call get_recent_transcripts \
-                 to see what was just dictated, search_transcripts to find a past phrase, or \
+                 to see what was just dictated, search_transcripts to find a past phrase, \
                  wait_for_next_dictation to receive the next phrase the user speaks (the user \
-                 starts recording with their own hotkey; the server never records).",
+                 starts recording with their own hotkey), or request_dictation to start \
+                 recording in the running Murmur app and get the user's spoken answer to a \
+                 question. The server itself never captures audio; the app owns the microphone.",
             );
         info.server_info = Implementation::new("murmur", env!("CARGO_PKG_VERSION"));
         info
@@ -231,6 +314,32 @@ fn history_json(query: &str, limit: Option<usize>) -> Result<CallToolResult, Mcp
     let json = serde_json::to_string_pretty(&entries)
         .map_err(|e| McpError::internal_error(format!("serialize: {e}"), None))?;
     Ok(CallToolResult::success(vec![Content::text(json)]))
+}
+
+/// Write the dictation trigger file the running app polls for, on the
+/// blocking pool. Returns the trigger path so a timed-out request can clear
+/// its own trigger.
+async fn write_trigger(prompt: Option<String>) -> Result<std::path::PathBuf, McpError> {
+    let trigger_path = dictation_request::default_path()
+        .map_err(|e| McpError::internal_error(format!("trigger path: {e}"), None))?;
+    let trigger = DictationRequest {
+        requested_ms: now_epoch_ms(),
+        prompt,
+    };
+    let write_path = trigger_path.clone();
+    tokio::task::spawn_blocking(move || dictation_request::write(&write_path, &trigger))
+        .await
+        .map_err(|e| McpError::internal_error(format!("trigger write task: {e}"), None))?
+        .map_err(|e| McpError::internal_error(format!("trigger write: {e}"), None))?;
+    Ok(trigger_path)
+}
+
+/// Unix epoch milliseconds, the same clock history entries are stamped with.
+fn now_epoch_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
 }
 
 /// Serialize a wait outcome as the tool's pretty-JSON payload.

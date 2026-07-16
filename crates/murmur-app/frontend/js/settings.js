@@ -81,6 +81,9 @@ settingsToggle.addEventListener('click', async () => {
     if (status.clean_speech != null) {
       cleanSpeechToggle.checked = status.clean_speech;
     }
+    if (status.mcp_dictation_enabled != null) {
+      mcpDictationToggle.checked = status.mcp_dictation_enabled;
+    }
     codebaseVocabToggle.checked = !!status.codebase_vocab_enabled;
     codebaseRoots = Array.isArray(status.codebase_vocab_roots)
       ? status.codebase_vocab_roots.slice()
@@ -510,6 +513,17 @@ cleanSpeechToggle.addEventListener('change', async () => {
     showToast(enabled ? 'Speech cleanup on' : 'Verbatim — no cleanup', 'success');
   } catch (err) {
     cleanSpeechToggle.checked = !enabled;
+    showToast(`Failed: ${err}`, 'error');
+  }
+});
+
+mcpDictationToggle.addEventListener('change', async () => {
+  const enabled = mcpDictationToggle.checked;
+  try {
+    await invoke('update_settings', { mcp_dictation_enabled: enabled });
+    showToast(enabled ? 'Agents can start dictation' : 'Agent-started dictation off', 'success');
+  } catch (err) {
+    mcpDictationToggle.checked = !enabled;
     showToast(`Failed: ${err}`, 'error');
   }
 });

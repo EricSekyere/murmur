@@ -220,6 +220,12 @@ pub struct Settings {
     #[serde(default = "default_true")]
     pub clean_speech: bool,
 
+    /// Allow a connected coding agent (via the MCP `request_dictation` tool)
+    /// to start voice capture so the user can answer a question by speaking.
+    /// Off = the MCP server stays strictly read-only.
+    #[serde(default = "default_true")]
+    pub mcp_dictation_enabled: bool,
+
     /// Use the OS voice-capture path (echo cancellation + noise suppression) so
     /// the mic doesn't pick up audio from your own speakers. Windows only for
     /// now; falls back to the raw mic elsewhere or if it can't be opened.
@@ -453,6 +459,7 @@ impl Default for Settings {
             caption_position: default_caption_position(),
             save_history: true,
             clean_speech: true,
+            mcp_dictation_enabled: true,
             echo_cancellation: true,
             indexer: IndexerSettings::default(),
             cloud: None,
@@ -962,6 +969,24 @@ mod tests {
         };
         in_range.clamp_collections();
         assert_eq!(in_range.daily_word_goal, 500);
+    }
+
+    #[test]
+    fn old_config_without_mcp_dictation_field_loads_enabled() {
+        let old = r#"hotkey = "ctrl+shift+space""#;
+        let settings: Settings = toml::from_str(old).unwrap();
+        assert!(settings.mcp_dictation_enabled);
+    }
+
+    #[test]
+    fn mcp_dictation_setting_round_trips_through_toml() {
+        let settings = Settings {
+            mcp_dictation_enabled: false,
+            ..Settings::default()
+        };
+        let text = toml::to_string_pretty(&settings).unwrap();
+        let reloaded: Settings = toml::from_str(&text).unwrap();
+        assert!(!reloaded.mcp_dictation_enabled);
     }
 
     #[test]
