@@ -422,6 +422,12 @@
   color: var(--color-text-muted);
 }
 
+/* Caveat under the personal-records cards (aggregate coverage note). */
+.records-note {
+  font-size: 0.62rem;
+  color: var(--color-text-muted);
+}
+
 .analytics-peak {
   font-size: 0.8rem;
   color: var(--color-text-secondary);

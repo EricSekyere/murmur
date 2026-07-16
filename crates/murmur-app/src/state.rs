@@ -41,6 +41,11 @@ pub(crate) struct AppState {
     pub history: Mutex<murmur_core::history::History>,
     /// Where `history` is saved on disk.
     pub history_path: std::path::PathBuf,
+    /// Persistent per-day dictation aggregate. Survives the history cap and
+    /// drives the personal-records cards.
+    pub insights: Mutex<murmur_core::insights::Insights>,
+    /// Where `insights` is saved on disk.
+    pub insights_path: std::path::PathBuf,
     /// Developer-mode override for the active session from a matched app
     /// profile. `None` means "use the global setting". Set at session start,
     /// cleared at session end.

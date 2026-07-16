@@ -617,9 +617,9 @@ fn deliver_text(
     }
 }
 
-/// Append a delivered phrase to the persistent history and save it. Best
-/// effort: a failed write is logged, never surfaced to the user. Skipped
-/// entirely when the user has turned history off.
+/// Append a delivered phrase to the persistent history and per-day insights
+/// aggregate, saving both. Best effort: a failed write is logged, never
+/// surfaced to the user. Skipped entirely when the user has turned history off.
 fn record_history(state: &AppState, text: &str) {
     if !state
         .settings
@@ -630,10 +630,23 @@ fn record_history(state: &AppState, text: &str) {
         return;
     }
     let app_name = current_app_name();
-    let mut history = state.history.lock().unwrap_or_else(|e| e.into_inner());
-    history.add(text, app_name);
-    if let Err(e) = history.save(&state.history_path) {
-        tracing::warn!("Failed to save history: {}", e);
+    {
+        let mut history = state.history.lock().unwrap_or_else(|e| e.into_inner());
+        history.add(text, app_name);
+        if let Err(e) = history.save(&state.history_path) {
+            tracing::warn!("Failed to save history: {}", e);
+        }
+    }
+    // Same epoch-ms clock the history entry was stamped with. Taken after the
+    // history lock is released so the two locks are never held together.
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    let mut insights = state.insights.lock().unwrap_or_else(|e| e.into_inner());
+    insights.record(text, now_ms);
+    if let Err(e) = insights.save(&state.insights_path) {
+        tracing::warn!("Failed to save insights: {}", e);
     }
 }
 

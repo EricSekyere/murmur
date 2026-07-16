@@ -13,6 +13,7 @@ pub mod history;
 pub mod hotkey;
 #[cfg(feature = "indexer")]
 pub mod indexer;
+pub mod insights;
 pub mod integrity;
 pub mod llm;
 pub mod meeting;

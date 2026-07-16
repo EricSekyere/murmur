@@ -85,6 +85,21 @@ pub fn run() -> anyhow::Result<()> {
         .context("Failed to determine history path")?;
     let history = murmur_core::history::History::load(&history_path);
 
+    let insights_path = murmur_core::insights::Insights::default_path()
+        .context("Failed to determine insights path")?;
+    let mut insights = murmur_core::insights::Insights::load(&insights_path);
+    // First run with the aggregate: seed it from whatever history is still
+    // stored so records start with the recent past. Best effort — a failed
+    // save must never block startup.
+    if insights.is_empty() {
+        insights.backfill_from_history(&history);
+        if !insights.is_empty()
+            && let Err(e) = insights.save(&insights_path)
+        {
+            tracing::warn!("Failed to save backfilled insights: {}", e);
+        }
+    }
+
     // Engine loads in the background so startup is instant; the UI shows a
     // loading banner until it is ready.
     let engine: Arc<Mutex<Option<SttEngine>>> = Arc::new(Mutex::new(None));
@@ -145,6 +160,8 @@ pub fn run() -> anyhow::Result<()> {
             last_delivered_len: Mutex::new(0),
             history: Mutex::new(history),
             history_path,
+            insights: Mutex::new(insights),
+            insights_path,
             session_dev_mode: Mutex::new(None),
             #[cfg(windows)]
             previous_foreground: Mutex::new(0),
@@ -195,6 +212,7 @@ pub fn run() -> anyhow::Result<()> {
             commands::mark_whats_new_seen,
             commands::mcp_install,
             commands::get_usage_stats,
+            commands::get_records,
             commands::learn_vocabulary,
             command_mode::run_command,
             command_mode::confirm_pending,

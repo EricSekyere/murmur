@@ -276,6 +276,39 @@ async function renderUsageStats() {
   }
 }
 
+// Personal records, derived on the backend from the per-day insights
+// aggregate (which outlives the capped history log).
+async function renderRecords() {
+  let records;
+  try {
+    records = await invoke('get_records');
+  } catch (err) {
+    return; // aggregate may be empty or unreadable; leave the placeholders
+  }
+  const set = (id, val) => {
+    const el = document.getElementById(id);
+    if (el) el.textContent = val;
+  };
+  const weekdays = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+  const tracked = records.tracked_days || 0;
+  const bestWords = records.best_day_words || 0;
+
+  set('records-best-day', bestWords > 0 ? formatNumber(bestWords) : '--');
+  set('records-best-day-date',
+    bestWords > 0 ? new Date(records.best_day * 86400000).toLocaleDateString() : '--');
+  set('records-streak', String(records.longest_streak || 0));
+  set('records-weekday',
+    tracked > 0 ? (weekdays[records.most_active_weekday] || '--') : '--');
+
+  const note = document.getElementById('records-note');
+  if (note) {
+    note.textContent = tracked > 0
+      ? `Reflects ${tracked} tracked day${tracked === 1 ? '' : 's'} of dictation`
+      : 'Start dictating to build records';
+    note.hidden = false;
+  }
+}
+
 analyticsToggle.addEventListener('click', () => {
   const expanded = analyticsToggle.getAttribute('aria-expanded') === 'true';
   analyticsToggle.setAttribute('aria-expanded', String(!expanded));
@@ -283,6 +316,7 @@ analyticsToggle.addEventListener('click', () => {
   if (!expanded) {
     renderAnalytics();
     renderUsageStats();
+    renderRecords();
   }
 });
 
