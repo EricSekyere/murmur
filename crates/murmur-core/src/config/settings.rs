@@ -226,6 +226,12 @@ pub struct Settings {
     #[serde(default = "default_true")]
     pub mcp_dictation_enabled: bool,
 
+    /// Expose a localhost-only WebSocket API that streams live dictation
+    /// events to editor plugins (VS Code, Neovim). Token-authenticated.
+    /// Off by default: it opens a network listener, even if loopback-only.
+    #[serde(default)]
+    pub local_api_enabled: bool,
+
     /// Use the OS voice-capture path (echo cancellation + noise suppression) so
     /// the mic doesn't pick up audio from your own speakers. Windows only for
     /// now; falls back to the raw mic elsewhere or if it can't be opened.
@@ -460,6 +466,7 @@ impl Default for Settings {
             save_history: true,
             clean_speech: true,
             mcp_dictation_enabled: true,
+            local_api_enabled: false,
             echo_cancellation: true,
             indexer: IndexerSettings::default(),
             cloud: None,
@@ -987,6 +994,26 @@ mod tests {
         let text = toml::to_string_pretty(&settings).unwrap();
         let reloaded: Settings = toml::from_str(&text).unwrap();
         assert!(!reloaded.mcp_dictation_enabled);
+    }
+
+    #[test]
+    fn old_config_without_local_api_field_loads_disabled() {
+        let old = r#"hotkey = "ctrl+shift+space""#;
+        let settings: Settings = toml::from_str(old).unwrap();
+        assert!(!settings.local_api_enabled);
+        // An opt-in network listener must also default off on a fresh config.
+        assert!(!Settings::default().local_api_enabled);
+    }
+
+    #[test]
+    fn local_api_setting_round_trips_through_toml() {
+        let settings = Settings {
+            local_api_enabled: true,
+            ..Settings::default()
+        };
+        let text = toml::to_string_pretty(&settings).unwrap();
+        let reloaded: Settings = toml::from_str(&text).unwrap();
+        assert!(reloaded.local_api_enabled);
     }
 
     #[test]

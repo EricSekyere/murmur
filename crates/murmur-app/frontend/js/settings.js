@@ -84,6 +84,9 @@ settingsToggle.addEventListener('click', async () => {
     if (status.mcp_dictation_enabled != null) {
       mcpDictationToggle.checked = status.mcp_dictation_enabled;
     }
+    if (status.local_api_enabled != null) {
+      localApiToggle.checked = status.local_api_enabled;
+    }
     codebaseVocabToggle.checked = !!status.codebase_vocab_enabled;
     codebaseRoots = Array.isArray(status.codebase_vocab_roots)
       ? status.codebase_vocab_roots.slice()
@@ -524,6 +527,17 @@ mcpDictationToggle.addEventListener('change', async () => {
     showToast(enabled ? 'Agents can start dictation' : 'Agent-started dictation off', 'success');
   } catch (err) {
     mcpDictationToggle.checked = !enabled;
+    showToast(`Failed: ${err}`, 'error');
+  }
+});
+
+localApiToggle.addEventListener('change', async () => {
+  const enabled = localApiToggle.checked;
+  try {
+    await invoke('update_settings', { local_api_enabled: enabled });
+    showToast(enabled ? 'Local API on after next restart' : 'Local API off after next restart', 'success');
+  } catch (err) {
+    localApiToggle.checked = !enabled;
     showToast(`Failed: ${err}`, 'error');
   }
 });

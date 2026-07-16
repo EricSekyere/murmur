@@ -97,6 +97,7 @@ pub(crate) fn get_status(state: State<'_, AppState>) -> serde_json::Value {
         "save_history": settings.save_history,
         "clean_speech": settings.clean_speech,
         "mcp_dictation_enabled": settings.mcp_dictation_enabled,
+        "local_api_enabled": settings.local_api_enabled,
         "codebase_vocab_enabled": settings.indexer.enabled,
         "codebase_vocab_roots": settings
             .indexer
@@ -408,6 +409,7 @@ pub(crate) fn update_settings(
     save_history: Option<bool>,
     clean_speech: Option<bool>,
     mcp_dictation_enabled: Option<bool>,
+    local_api_enabled: Option<bool>,
 ) -> Result<(), String> {
     let mut settings = state.settings.lock().unwrap_or_else(|e| e.into_inner());
     // Only warn about a model/language mismatch if those fields were touched.
@@ -580,6 +582,11 @@ pub(crate) fn update_settings(
     }
     if let Some(md) = mcp_dictation_enabled {
         settings.mcp_dictation_enabled = md;
+    }
+    // The server only starts/stops with the app, so this takes effect on the
+    // next launch (the UI hint says so).
+    if let Some(la) = local_api_enabled {
+        settings.local_api_enabled = la;
     }
 
     // Same gate the loader uses, so the UI can't persist a config it would reject.
