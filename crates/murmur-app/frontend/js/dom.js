@@ -85,6 +85,7 @@ const codebaseVocabStatus = document.getElementById('codebase-vocab-status');
 const codebaseVocabList   = document.getElementById('codebase-vocab-list');
 const mcpInstallBtn       = document.getElementById('mcp-install-btn');
 const mcpInstallStatus    = document.getElementById('mcp-install-status');
+const mcpDictationToggle  = document.getElementById('mcp-dictation-toggle');
 const whatsNewModal       = document.getElementById('whats-new');
 const whatsNewBody        = document.getElementById('whats-new-body');
 const whatsNewVersion     = document.getElementById('whats-new-version');

@@ -8,6 +8,7 @@ mod caption;
 pub mod command_exec;
 mod command_mode;
 mod commands;
+mod dictation_trigger;
 mod focus;
 mod input;
 mod model_setup;
@@ -303,6 +304,7 @@ fn setup_app(
 
     model_setup::spawn_download_and_init(app.handle().clone(), engine, model);
     input::spawn_global_input_listener(app.handle().clone());
+    dictation_trigger::spawn(app.handle().clone());
     updater::spawn_startup_check(app.handle().clone());
     spawn_project_index(app.handle().clone());
     #[cfg(feature = "full")]

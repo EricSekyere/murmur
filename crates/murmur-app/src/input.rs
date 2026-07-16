@@ -41,7 +41,7 @@ fn hotkey_hold_mode(app: &tauri::AppHandle) -> bool {
         .unwrap_or(false)
 }
 
-fn show_widget_window(app: &tauri::AppHandle) {
+pub(crate) fn show_widget_window(app: &tauri::AppHandle) {
     if let Some(widget) = app.get_webview_window("widget") {
         let _ = widget.show();
     }
