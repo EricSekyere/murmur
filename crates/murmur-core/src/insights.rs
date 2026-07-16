@@ -49,6 +49,13 @@ pub struct Records {
     pub tracked_days: usize,
 }
 
+/// One active day's word total, for the activity heatmap.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct DayActivity {
+    pub day: u64,
+    pub words: usize,
+}
+
 /// Per-day totals persisted to disk, sorted by `day` ascending with one row
 /// per active day.
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -135,6 +142,18 @@ impl Insights {
         for entry in history.entries() {
             self.record(&entry.text, entry.timestamp_ms);
         }
+    }
+
+    /// Per-day word totals for the activity heatmap, sorted by `day`
+    /// ascending. Only active days are returned; the frontend fills the gaps.
+    pub fn daily_activity(&self) -> Vec<DayActivity> {
+        self.days
+            .iter()
+            .map(|stat| DayActivity {
+                day: stat.day,
+                words: stat.words,
+            })
+            .collect()
     }
 
     /// Derive the personal records from the stored rows.
@@ -234,6 +253,27 @@ mod tests {
         // Day 102: (((102 % 7) + 4) % 7) = 1 → Monday carried the most words.
         assert_eq!(r.most_active_weekday, 1);
         assert_eq!(r.tracked_days, 4);
+    }
+
+    #[test]
+    fn daily_activity_returns_sorted_word_totals_per_day() {
+        let mut insights = Insights::default();
+        insights.record("after the gap", 105 * MS_PER_DAY + 5_000);
+        insights.record("hello world", 100 * MS_PER_DAY + 5_000);
+        insights.record("three little words", 100 * MS_PER_DAY + 9_000);
+
+        assert_eq!(
+            insights.daily_activity(),
+            vec![
+                DayActivity { day: 100, words: 5 },
+                DayActivity { day: 105, words: 3 },
+            ]
+        );
+    }
+
+    #[test]
+    fn empty_insights_yield_empty_daily_activity() {
+        assert!(Insights::default().daily_activity().is_empty());
     }
 
     #[test]

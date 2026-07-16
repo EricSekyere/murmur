@@ -1374,6 +1374,55 @@ footer {
   box-shadow: 0 0 8px -2px var(--color-accent);
 }
 
+/* Activity calendar heatmap: week columns x weekday rows (Sunday on top),
+   scrolling horizontally inside its container instead of widening the panel. */
+.heatmap {
+  display: grid;
+  grid-auto-flow: column;
+  grid-template-rows: repeat(7, 11px);
+  grid-auto-columns: 11px;
+  gap: 3px;
+  margin-top: 12px;
+  overflow-x: auto;
+  padding-bottom: 4px; /* keep the scrollbar off the bottom row */
+}
+.heatmap__cell {
+  width: 11px;
+  height: 11px;
+  border-radius: 2px;
+  background: var(--color-surface-raised);
+  border: 1px solid var(--color-border);
+}
+/* Intensity graduates through the existing accent ramp; .is-l4 echoes the
+   .usage-streak .hi glow. An explicit .is-l0 stays the empty base. */
+.heatmap__cell.is-l1 {
+  background: var(--color-accent-dim);
+  border-color: var(--color-accent-glow);
+}
+.heatmap__cell.is-l2 {
+  background: var(--color-accent-glow);
+  border-color: var(--color-accent);
+}
+.heatmap__cell.is-l3 {
+  background: var(--color-accent);
+  border-color: var(--color-accent);
+}
+.heatmap__cell.is-l4 {
+  background: var(--color-accent-light);
+  border-color: var(--color-accent-light);
+  box-shadow: 0 0 8px -2px var(--color-accent);
+}
+.heatmap-legend {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.62rem;
+  color: var(--color-text-muted);
+}
+.heatmap-legend .heatmap__cell {
+  display: inline-block;
+}
+
 /* ── Settings ───────────────────────────────────────────────────────────────
    Model cards in a responsive grid with a metrics row and a selected violet
    ring; grouped section labels stay mono/uppercase/tracked. */
