@@ -87,6 +87,9 @@ settingsToggle.addEventListener('click', async () => {
     if (status.local_api_enabled != null) {
       localApiToggle.checked = status.local_api_enabled;
     }
+    if (status.context_injection_enabled != null) {
+      contextInjectionToggle.checked = status.context_injection_enabled;
+    }
     codebaseVocabToggle.checked = !!status.codebase_vocab_enabled;
     codebaseRoots = Array.isArray(status.codebase_vocab_roots)
       ? status.codebase_vocab_roots.slice()
@@ -542,6 +545,17 @@ localApiToggle.addEventListener('change', async () => {
   }
 });
 
+contextInjectionToggle.addEventListener('change', async () => {
+  const enabled = contextInjectionToggle.checked;
+  try {
+    await invoke('update_settings', { context_injection_enabled: enabled });
+    showToast(enabled ? 'Context-aware rewrites on — stays on this device' : 'Context-aware rewrites off', 'success');
+  } catch (err) {
+    contextInjectionToggle.checked = !enabled;
+    showToast(`Failed: ${err}`, 'error');
+  }
+});
+
 captionPositionSelect.addEventListener('change', async () => {
   const caption_position = captionPositionSelect.value;
   try {
@@ -629,17 +643,22 @@ snippetsSave.addEventListener('click', async () => {
 
 const OUTPUT_MODES = ['auto', 'keyboard', 'clipboard_paste', 'clipboard'];
 
-// Render a profile object back to its "app = options" line.
+// Render a profile object back to its "app = options" line. The custom
+// rewrite prompt is double-quoted; the syntax cannot carry a double quote
+// inside the prompt, so any (config-file-authored) ones become apostrophes
+// to keep the line round-trippable through parseAppProfiles.
 function formatAppProfile(p) {
   const opts = [];
   if (p.developer_mode === true) opts.push('dev');
   else if (p.developer_mode === false) opts.push('plain');
   if (p.output_mode) opts.push(p.output_mode);
+  if (p.rewrite_prompt) opts.push(`prompt = "${p.rewrite_prompt.replace(/"/g, "'")}"`);
   return opts.length ? `${p.app} = ${opts.join(', ')}` : p.app;
 }
 
-// Parse "app = dev, clipboard_paste" lines into profile objects. Unknown
-// tokens are ignored; a line needs an app and at least one valid override.
+// Parse "app = dev, clipboard_paste, prompt = \"…\"" lines into profile
+// objects. Unknown tokens are ignored; a line needs an app and at least one
+// valid override. Lines without a prompt parse exactly as before.
 function parseAppProfiles(text) {
   return text
     .split('\n')
@@ -648,7 +667,14 @@ function parseAppProfiles(text) {
       if (eq === -1) return null;
       const app = line.slice(0, eq).trim();
       if (!app) return null;
-      const tokens = line.slice(eq + 1).split(',').map(t => t.trim().toLowerCase()).filter(Boolean);
+      // Pull the quoted prompt out before splitting on commas, so a prompt
+      // containing ',' or '=' cannot corrupt the token parse.
+      let rewrite_prompt = null;
+      const rest = line.slice(eq + 1).replace(/prompt\s*=\s*"([^"]*)"/i, (_, prompt) => {
+        rewrite_prompt = prompt.trim() || null;
+        return '';
+      });
+      const tokens = rest.split(',').map(t => t.trim().toLowerCase()).filter(Boolean);
       let output_mode = null;
       let developer_mode = null;
       for (const t of tokens) {
@@ -656,8 +682,8 @@ function parseAppProfiles(text) {
         else if (t === 'plain' || t === 'nodev') developer_mode = false;
         else if (OUTPUT_MODES.includes(t)) output_mode = t;
       }
-      if (output_mode === null && developer_mode === null) return null;
-      return { app, output_mode, developer_mode };
+      if (output_mode === null && developer_mode === null && rewrite_prompt === null) return null;
+      return { app, output_mode, developer_mode, rewrite_prompt };
     })
     .filter(Boolean);
 }
