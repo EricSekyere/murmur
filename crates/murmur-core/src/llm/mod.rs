@@ -4,8 +4,9 @@
 //! pattern, catalog-pinned model, checksum-verified download, CPU-only.
 //!
 //! The model runtime (engine, catalog, model-backed [`rewrite`]) sits behind
-//! the `llm` feature. [`RewriteMode`] and [`instruction`] are plain data and
-//! stay unconditional so config can reference them without llama.cpp.
+//! the `llm` feature. [`RewriteMode`], [`RewriteInstruction`], [`instruction`],
+//! and [`assemble_context`] are plain data/formatting and stay unconditional
+//! so config and the app layer can reference them without llama.cpp.
 
 #[cfg(feature = "llm")]
 mod catalog;
@@ -20,6 +21,6 @@ pub use catalog::{
 };
 #[cfg(feature = "llm")]
 pub use engine::{LlmEngine, LlmError};
+pub use rewrite::{RewriteInstruction, RewriteMode, assemble_context, instruction};
 #[cfg(feature = "llm")]
-pub use rewrite::rewrite;
-pub use rewrite::{RewriteMode, assemble_context, instruction};
+pub use rewrite::{rewrite, rewrite_instructed};

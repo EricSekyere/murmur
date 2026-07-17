@@ -24,6 +24,11 @@ pub struct AppProfile {
     /// the global `default_rewrite_mode`).
     #[serde(default)]
     pub rewrite_mode: Option<RewriteMode>,
+    /// Custom rewrite instruction used instead of the built-in mode text when
+    /// rewriting a selection in this app (e.g. "Rewrite as a Conventional
+    /// Commit message"). Trimmed and capped on load; None = built-in text.
+    #[serde(default)]
+    pub rewrite_prompt: Option<String>,
 }
 
 /// Transcription filtering profile.
@@ -246,6 +251,14 @@ pub struct Settings {
     #[serde(default)]
     pub local_api_enabled: bool,
 
+    /// Add local context (the target app's name and the current clipboard
+    /// text) to the selection-rewrite prompt. Strictly on-device: the context
+    /// only ever enters the local model's prompt and is never logged or
+    /// transmitted. Off by default because clipboard text is sensitive even
+    /// when it stays local.
+    #[serde(default)]
+    pub context_injection_enabled: bool,
+
     /// Use the OS voice-capture path (echo cancellation + noise suppression) so
     /// the mic doesn't pick up audio from your own speakers. Windows only for
     /// now; falls back to the raw mic elsewhere or if it can't be opened.
@@ -368,6 +381,7 @@ const MAX_VOCAB_ENTRY_CHARS: usize = 100;
 const MAX_SNIPPET_TRIGGER_CHARS: usize = 100;
 const MAX_SNIPPET_EXPANSION_CHARS: usize = 2_000;
 const MAX_APP_PATTERN_CHARS: usize = 100;
+const MAX_REWRITE_PROMPT_CHARS: usize = 500;
 const MAX_CLIPBOARD_PLACEHOLDER_CHARS: usize = 100;
 const MAX_PATH_ALIAS_SPOKEN_CHARS: usize = 100;
 const MAX_PATH_ALIAS_PATH_CHARS: usize = 260;
@@ -492,6 +506,7 @@ impl Default for Settings {
             clean_speech: true,
             mcp_dictation_enabled: true,
             local_api_enabled: false,
+            context_injection_enabled: false,
             echo_cancellation: true,
             indexer: IndexerSettings::default(),
             path_aliases: Vec::new(),
@@ -664,6 +679,12 @@ impl Settings {
         self.app_profiles.truncate(MAX_APP_PROFILES);
         for p in &mut self.app_profiles {
             truncate_chars(&mut p.app, MAX_APP_PATTERN_CHARS);
+            // Custom rewrite prompt: drop blank ones, trim and cap the rest.
+            p.rewrite_prompt = p.rewrite_prompt.take().and_then(|prompt| {
+                let mut prompt = prompt.trim().to_string();
+                truncate_chars(&mut prompt, MAX_REWRITE_PROMPT_CHARS);
+                (!prompt.is_empty()).then_some(prompt)
+            });
         }
         // Placeholders match case-insensitively, so store them normalized;
         // drop empties and duplicates the matcher would never use.
@@ -706,6 +727,16 @@ impl Settings {
             .find(|p| p.matches(process_name))
             .and_then(|p| p.rewrite_mode)
             .or(self.default_rewrite_mode)
+    }
+
+    /// Custom rewrite instruction for the foreground process: the first
+    /// matching profile that carries a prompt wins. None = use the built-in
+    /// mode text.
+    pub fn rewrite_prompt_for(&self, process_name: &str) -> Option<&str> {
+        self.app_profiles
+            .iter()
+            .filter(|p| p.matches(process_name))
+            .find_map(|p| p.rewrite_prompt.as_deref())
     }
 
     /// Validate settings values.
@@ -809,6 +840,7 @@ mod tests {
             output_mode: None,
             developer_mode: Some(true),
             rewrite_mode: None,
+            rewrite_prompt: None,
         }
     }
 
@@ -818,6 +850,14 @@ mod tests {
             output_mode: None,
             developer_mode: None,
             rewrite_mode: mode,
+            rewrite_prompt: None,
+        }
+    }
+
+    fn prompt_profile(app: &str, prompt: &str) -> AppProfile {
+        AppProfile {
+            rewrite_prompt: Some(prompt.to_string()),
+            ..rewrite_profile(app, None)
         }
     }
 
@@ -902,6 +942,76 @@ mod tests {
         assert_eq!(settings.default_rewrite_mode, None);
         assert_eq!(settings.app_profiles[0].rewrite_mode, None);
         assert_eq!(settings.app_profiles[0].developer_mode, Some(true));
+        // Later additions must also default off/empty on an old config.
+        assert_eq!(settings.app_profiles[0].rewrite_prompt, None);
+        assert!(!settings.context_injection_enabled);
+    }
+
+    #[test]
+    fn rewrite_prompt_and_context_injection_round_trip_through_toml() {
+        let settings = Settings {
+            context_injection_enabled: true,
+            app_profiles: vec![prompt_profile("code", "Rewrite as a commit message.")],
+            ..Settings::default()
+        };
+        let text = toml::to_string_pretty(&settings).unwrap();
+        let reloaded: Settings = toml::from_str(&text).unwrap();
+        assert!(reloaded.context_injection_enabled);
+        assert_eq!(
+            reloaded.app_profiles[0].rewrite_prompt.as_deref(),
+            Some("Rewrite as a commit message.")
+        );
+        // Clipboard entering a prompt is opt-in: a fresh config stays off.
+        assert!(!Settings::default().context_injection_enabled);
+    }
+
+    #[test]
+    fn clamp_trims_caps_and_drops_rewrite_prompts() {
+        let mut settings = Settings {
+            app_profiles: vec![
+                prompt_profile("code", "  Rewrite as a commit message.  "),
+                prompt_profile("slack", "   "),
+                prompt_profile("term", &"é".repeat(600)),
+            ],
+            ..Settings::default()
+        };
+        settings.clamp_collections();
+        assert_eq!(
+            settings.app_profiles[0].rewrite_prompt.as_deref(),
+            Some("Rewrite as a commit message.")
+        );
+        // Whitespace-only prompts are dropped, not stored as empty strings.
+        assert_eq!(settings.app_profiles[1].rewrite_prompt, None);
+        // Over-long prompts are capped on a char boundary.
+        assert_eq!(
+            settings.app_profiles[2]
+                .rewrite_prompt
+                .as_deref()
+                .map(|p| p.chars().count()),
+            Some(500)
+        );
+    }
+
+    #[test]
+    fn rewrite_prompt_for_takes_first_matching_profile_with_a_prompt() {
+        let settings = Settings {
+            app_profiles: vec![
+                rewrite_profile("code", Some(RewriteMode::Formal)),
+                prompt_profile("code", "Rewrite as a commit message."),
+                prompt_profile("slack", "Match a friendly Slack tone."),
+            ],
+            ..Settings::default()
+        };
+        // The first matching profile has no prompt; the next matching one wins.
+        assert_eq!(
+            settings.rewrite_prompt_for("Code.exe"),
+            Some("Rewrite as a commit message.")
+        );
+        assert_eq!(
+            settings.rewrite_prompt_for("slack.exe"),
+            Some("Match a friendly Slack tone.")
+        );
+        assert_eq!(settings.rewrite_prompt_for("chrome.exe"), None);
     }
 
     #[test]

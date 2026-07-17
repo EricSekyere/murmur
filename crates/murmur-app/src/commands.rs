@@ -99,6 +99,7 @@ pub(crate) fn get_status(state: State<'_, AppState>) -> serde_json::Value {
         "clean_speech": settings.clean_speech,
         "mcp_dictation_enabled": settings.mcp_dictation_enabled,
         "local_api_enabled": settings.local_api_enabled,
+        "context_injection_enabled": settings.context_injection_enabled,
         "codebase_vocab_enabled": settings.indexer.enabled,
         "codebase_vocab_roots": settings
             .indexer
@@ -412,6 +413,7 @@ pub(crate) fn update_settings(
     clean_speech: Option<bool>,
     mcp_dictation_enabled: Option<bool>,
     local_api_enabled: Option<bool>,
+    context_injection_enabled: Option<bool>,
 ) -> Result<(), String> {
     let mut settings = state.settings.lock().unwrap_or_else(|e| e.into_inner());
     // Only warn about a model/language mismatch if those fields were touched.
@@ -534,12 +536,17 @@ pub(crate) fn update_settings(
                 output_mode: p.output_mode,
                 developer_mode: p.developer_mode,
                 rewrite_mode: p.rewrite_mode,
+                rewrite_prompt: p
+                    .rewrite_prompt
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty()),
             })
             .filter(|p| {
                 !p.app.is_empty()
                     && (p.output_mode.is_some()
                         || p.developer_mode.is_some()
-                        || p.rewrite_mode.is_some())
+                        || p.rewrite_mode.is_some()
+                        || p.rewrite_prompt.is_some())
             })
             .collect();
     }
@@ -594,6 +601,9 @@ pub(crate) fn update_settings(
     // next launch (the UI hint says so).
     if let Some(la) = local_api_enabled {
         settings.local_api_enabled = la;
+    }
+    if let Some(ci) = context_injection_enabled {
+        settings.context_injection_enabled = ci;
     }
 
     // Same gate the loader uses, so the UI can't persist a config it would reject.

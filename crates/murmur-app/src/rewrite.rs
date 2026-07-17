@@ -10,7 +10,8 @@
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use murmur_core::llm::RewriteMode;
+use murmur_core::config::Settings;
+use murmur_core::llm::{RewriteInstruction, RewriteMode};
 use tauri::State;
 
 use crate::state::AppState;
@@ -44,6 +45,10 @@ pub(crate) trait ClipboardPort {
     /// Current clipboard text; `None` when empty or non-text.
     fn text(&mut self) -> Option<String>;
     fn clear(&mut self);
+    /// Text content of a snapshot; `None` for image or empty snapshots. Lets
+    /// context injection reuse the capture's snapshot instead of reading the
+    /// clipboard a second time.
+    fn snapshot_text(snapshot: &Self::Snapshot) -> Option<&str>;
 }
 
 /// Capture the current selection: snapshot the clipboard, clear it, send the
@@ -51,13 +56,15 @@ pub(crate) trait ClipboardPort {
 /// Clearing first is what makes "no selection" detectable: after a copy that
 /// produced nothing the clipboard is still empty, whereas comparing before
 /// and after would misread a selection identical to the old clipboard.
-/// Returns `None` when nothing (or only whitespace) was copied.
+/// The selection is `None` when nothing (or only whitespace) was copied. The
+/// snapshot of the user's pre-capture clipboard is returned too, so opt-in
+/// context injection can use its text without a second clipboard read.
 fn capture_selection<C: ClipboardPort>(
     clipboard: &mut C,
     send_copy: impl FnOnce(&mut C) -> Result<()>,
     poll_interval: Duration,
     poll_attempts: u32,
-) -> Result<Option<String>> {
+) -> Result<(Option<String>, C::Snapshot)> {
     let saved = clipboard.snapshot();
     clipboard.clear();
     let copy_sent = send_copy(clipboard);
@@ -69,7 +76,7 @@ fn capture_selection<C: ClipboardPort>(
     // even a failed copy.
     clipboard.restore(&saved);
     copy_sent?;
-    Ok(copied.filter(|text| !text.trim().is_empty()))
+    Ok((copied.filter(|text| !text.trim().is_empty()), saved))
 }
 
 /// Poll the cleared clipboard until the copied text appears or the budget
@@ -140,6 +147,13 @@ impl ClipboardPort for SystemClipboard {
         // sees the old text and the capture may report it, never crash.
         let _ = self.inner.clear();
     }
+
+    fn snapshot_text(snapshot: &SystemSnapshot) -> Option<&str> {
+        match snapshot {
+            SystemSnapshot::Text(text) => Some(text),
+            SystemSnapshot::Image(_) | SystemSnapshot::Empty => None,
+        }
+    }
 }
 
 /// What the model layer produced for a captured selection.
@@ -150,6 +164,30 @@ impl ClipboardPort for SystemClipboard {
 enum RewriteRun {
     Rewritten(String),
     Unavailable(String),
+}
+
+/// Resolve the instruction the model receives. The frontend always sends the
+/// style picker's current value, so an explicit choice is indistinguishable
+/// from the untouched default; the deterministic rule: the target app's
+/// profile `rewrite_prompt` replaces the instruction only when the invoked
+/// mode equals that app's effective default mode (profile mode, else the
+/// global default, else CleanUp — the picker's initial selection). Picking
+/// any other style is an explicit request and wins over the profile prompt.
+fn resolve_instruction(
+    settings: &Settings,
+    target_app: Option<&str>,
+    invoked: RewriteMode,
+) -> RewriteInstruction {
+    let Some(app) = target_app else {
+        return RewriteInstruction::Mode(invoked);
+    };
+    let effective_default = settings.rewrite_mode_for(app).unwrap_or_default();
+    match settings.rewrite_prompt_for(app) {
+        Some(prompt) if invoked == effective_default => {
+            RewriteInstruction::Custom(prompt.to_string())
+        }
+        _ => RewriteInstruction::Mode(invoked),
+    }
 }
 
 /// Output-token budget for a rewrite: roughly the input's token count
@@ -167,7 +205,8 @@ fn rewrite_token_budget(text: &str) -> usize {
 fn run_rewrite(
     engine_slot: &std::sync::Mutex<Option<murmur_core::llm::LlmEngine>>,
     text: &str,
-    mode: RewriteMode,
+    instruction: &RewriteInstruction,
+    context: &str,
 ) -> Result<RewriteRun> {
     use murmur_core::llm;
 
@@ -189,13 +228,23 @@ fn run_rewrite(
         .as_ref()
         .context("rewrite engine unavailable after load")?;
 
-    let rewritten = llm::rewrite(engine, text, mode, rewrite_token_budget(text))
-        .context("rewriting the selection")?;
+    let rewritten = llm::rewrite_instructed(
+        engine,
+        text,
+        instruction,
+        context,
+        rewrite_token_budget(text),
+    )
+    .context("rewriting the selection")?;
     Ok(RewriteRun::Rewritten(rewritten))
 }
 
 #[cfg(not(feature = "llm"))]
-fn run_rewrite(_text: &str, _mode: RewriteMode) -> Result<RewriteRun> {
+fn run_rewrite(
+    _text: &str,
+    _instruction: &RewriteInstruction,
+    _context: &str,
+) -> Result<RewriteRun> {
     Ok(RewriteRun::Unavailable(
         "The local LLM is not available in this build of Murmur (built without the llm feature)."
             .to_string(),
@@ -208,6 +257,7 @@ fn run_rewrite(_text: &str, _mode: RewriteMode) -> Result<RewriteRun> {
 /// inference) blocks.
 fn rewrite_selection_blocking(
     mode: RewriteMode,
+    settings: &Settings,
     #[cfg(windows)] fallback_hwnd: usize,
     #[cfg(feature = "llm")] engine_slot: &std::sync::Mutex<Option<murmur_core::llm::LlmEngine>>,
 ) -> Result<RewriteOutcomeDto> {
@@ -225,9 +275,18 @@ fn rewrite_selection_blocking(
     #[cfg(windows)]
     let target_hwnd = crate::focus::foreground_window();
 
-    let selected = {
+    // The focus call above put the target in the foreground, so the current
+    // foreground process IS the target app (mirrors session::current_app_name).
+    // Needed for the profile prompt lookup, and for context injection.
+    #[cfg(windows)]
+    let target_app = murmur_core::output::keyboard::foreground_window_info_public()
+        .and_then(|info| info.process_name);
+    #[cfg(not(windows))]
+    let target_app: Option<String> = None;
+
+    let (selected, prior_clipboard) = {
         let mut clipboard = SystemClipboard::new()?;
-        capture_selection(
+        let (selected, saved) = capture_selection(
             &mut clipboard,
             |_| {
                 // A hotkey-held modifier would corrupt the chord, same as the
@@ -238,22 +297,40 @@ fn rewrite_selection_blocking(
             },
             COPY_POLL_INTERVAL,
             COPY_POLL_ATTEMPTS,
-        )?
+        )?;
+        // The capture already snapshotted the user's clipboard; reuse that
+        // snapshot for context instead of reading the clipboard again. When
+        // injection is off, no clipboard text is retained at all.
+        let prior_clipboard = settings
+            .context_injection_enabled
+            .then(|| SystemClipboard::snapshot_text(&saved).map(str::to_string))
+            .flatten();
+        (selected, prior_clipboard)
     };
     let Some(selected) = selected else {
         tracing::info!("rewrite: no selection captured");
         return Ok(RewriteOutcomeDto::NoSelection);
     };
+
+    let instruction = resolve_instruction(settings, target_app.as_deref(), mode);
+    let context = if settings.context_injection_enabled {
+        murmur_core::llm::assemble_context(target_app.as_deref(), prior_clipboard.as_deref())
+    } else {
+        String::new()
+    };
+    // Shape only: the selection, prompt, and context stay out of the log.
     tracing::debug!(
         chars = selected.chars().count(),
         ?mode,
+        custom_prompt = matches!(instruction, RewriteInstruction::Custom(_)),
+        has_context = !context.is_empty(),
         "rewriting selection"
     );
 
     #[cfg(feature = "llm")]
-    let run = run_rewrite(engine_slot, &selected, mode)?;
+    let run = run_rewrite(engine_slot, &selected, &instruction, &context)?;
     #[cfg(not(feature = "llm"))]
-    let run = run_rewrite(&selected, mode)?;
+    let run = run_rewrite(&selected, &instruction, &context)?;
 
     match run {
         RewriteRun::Unavailable(reason) => {
@@ -295,6 +372,14 @@ pub(crate) async fn rewrite_selection(
     if *state.recording.lock().unwrap_or_else(|e| e.into_inner()) {
         return Err("stop dictation before rewriting a selection".to_string());
     }
+    // Snapshot the settings so profile prompts and the context toggle are
+    // resolved consistently for this one rewrite, without holding the lock
+    // across the blocking work.
+    let settings = state
+        .settings
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone();
     #[cfg(windows)]
     let fallback_hwnd = *state
         .last_external_foreground
@@ -306,6 +391,7 @@ pub(crate) async fn rewrite_selection(
     tauri::async_runtime::spawn_blocking(move || {
         rewrite_selection_blocking(
             mode,
+            &settings,
             #[cfg(windows)]
             fallback_hwnd,
             #[cfg(feature = "llm")]
@@ -320,6 +406,7 @@ pub(crate) async fn rewrite_selection(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use murmur_core::config::AppProfile;
 
     /// In-memory clipboard that records every operation in order, plus an
     /// optional delayed arrival (`incoming`) to exercise the poll loop.
@@ -370,13 +457,17 @@ mod tests {
             self.ops.push("clear");
             self.content = None;
         }
+
+        fn snapshot_text(snapshot: &Option<String>) -> Option<&str> {
+            snapshot.as_deref()
+        }
     }
 
     fn capture(
         clipboard: &mut MockClipboard,
         send_copy: impl FnOnce(&mut MockClipboard) -> Result<()>,
     ) -> Result<Option<String>> {
-        capture_selection(clipboard, send_copy, Duration::ZERO, 3)
+        capture_selection(clipboard, send_copy, Duration::ZERO, 3).map(|(selected, _)| selected)
     }
 
     #[test]
@@ -446,6 +537,102 @@ mod tests {
         assert!(result.is_err());
         assert_eq!(clipboard.content.as_deref(), Some("previous contents"));
         assert_eq!(clipboard.ops.last(), Some(&"restore"));
+    }
+
+    #[test]
+    fn snapshot_from_capture_exposes_the_prior_clipboard_text() {
+        let mut clipboard = MockClipboard::holding("previous contents");
+        let (selected, saved) = capture_selection(
+            &mut clipboard,
+            |c| {
+                c.content = Some("selected words".to_string());
+                Ok(())
+            },
+            Duration::ZERO,
+            3,
+        )
+        .expect("capture");
+
+        assert_eq!(selected.as_deref(), Some("selected words"));
+        // The context clipboard comes from the snapshot the capture already
+        // took, never from a fresh read after the round-trip.
+        assert_eq!(
+            MockClipboard::snapshot_text(&saved),
+            Some("previous contents")
+        );
+    }
+
+    fn profile(app: &str, mode: Option<RewriteMode>, prompt: Option<&str>) -> AppProfile {
+        AppProfile {
+            app: app.to_string(),
+            output_mode: None,
+            developer_mode: None,
+            rewrite_mode: mode,
+            rewrite_prompt: prompt.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn profile_prompt_replaces_the_default_mode_instruction() {
+        let settings = Settings {
+            app_profiles: vec![profile("code", None, Some("Rewrite as a commit message."))],
+            ..Settings::default()
+        };
+        // No profile/global mode: the effective default is CleanUp.
+        assert_eq!(
+            resolve_instruction(&settings, Some("Code.exe"), RewriteMode::CleanUp),
+            RewriteInstruction::Custom("Rewrite as a commit message.".to_string())
+        );
+    }
+
+    #[test]
+    fn explicit_non_default_mode_wins_over_the_profile_prompt() {
+        let settings = Settings {
+            app_profiles: vec![profile("code", None, Some("Rewrite as a commit message."))],
+            ..Settings::default()
+        };
+        assert_eq!(
+            resolve_instruction(&settings, Some("Code.exe"), RewriteMode::Summarize),
+            RewriteInstruction::Mode(RewriteMode::Summarize)
+        );
+    }
+
+    #[test]
+    fn profile_prompt_follows_the_apps_effective_default_mode() {
+        let settings = Settings {
+            app_profiles: vec![profile(
+                "slack",
+                Some(RewriteMode::Casual),
+                Some("Match a friendly Slack tone."),
+            )],
+            ..Settings::default()
+        };
+        // The app's own default is Casual, so invoking Casual uses the prompt
+        // while CleanUp (non-default here) keeps its built-in instruction.
+        assert_eq!(
+            resolve_instruction(&settings, Some("slack.exe"), RewriteMode::Casual),
+            RewriteInstruction::Custom("Match a friendly Slack tone.".to_string())
+        );
+        assert_eq!(
+            resolve_instruction(&settings, Some("slack.exe"), RewriteMode::CleanUp),
+            RewriteInstruction::Mode(RewriteMode::CleanUp)
+        );
+    }
+
+    #[test]
+    fn no_target_app_or_no_prompt_keeps_the_invoked_mode() {
+        let settings = Settings {
+            app_profiles: vec![profile("code", None, Some("Rewrite as a commit message."))],
+            ..Settings::default()
+        };
+        assert_eq!(
+            resolve_instruction(&settings, None, RewriteMode::CleanUp),
+            RewriteInstruction::Mode(RewriteMode::CleanUp)
+        );
+        assert_eq!(
+            resolve_instruction(&settings, Some("chrome.exe"), RewriteMode::CleanUp),
+            RewriteInstruction::Mode(RewriteMode::CleanUp)
+        );
     }
 
     #[test]

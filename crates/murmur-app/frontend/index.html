@@ -780,11 +780,21 @@
               <div class="settings-group">
                 <div class="settings-row__text">
                   <label class="settings-label" for="app-profiles-input">App Profiles</label>
-                  <span class="settings-hint">Override settings per app. One per line as <code>app = options</code>. Options: <code>dev</code> / <code>plain</code> for developer mode, and <code>auto</code> / <code>keyboard</code> / <code>clipboard_paste</code> / <code>clipboard</code> for output. The app is matched against the focused window's process name.</span>
+                  <span class="settings-hint">Override settings per app. One per line as <code>app = options</code>. Options: <code>dev</code> / <code>plain</code> for developer mode, <code>auto</code> / <code>keyboard</code> / <code>clipboard_paste</code> / <code>clipboard</code> for output, and <code>prompt = "…"</code> for a custom Rewrite Selection instruction in that app. The app is matched against the focused window's process name.</span>
                 </div>
-                <textarea id="app-profiles-input" class="settings-textarea" rows="4" placeholder="code = dev&#10;windowsterminal = dev, clipboard&#10;slack = plain"></textarea>
+                <textarea id="app-profiles-input" class="settings-textarea" rows="4" placeholder="code = dev&#10;windowsterminal = dev, clipboard&#10;slack = plain, prompt = &quot;Match a friendly Slack tone&quot;"></textarea>
                 <div class="settings-actions">
                   <button id="app-profiles-save" class="btn-small" disabled>Save Profiles</button>
+                </div>
+                <div class="settings-row">
+                  <div class="settings-row__text">
+                    <label class="settings-label" for="context-injection-toggle">Context-aware rewrites</label>
+                    <span class="settings-hint">Adds the target app's name and your clipboard to the local rewrite prompt. Everything stays on this device.</span>
+                  </div>
+                  <label class="toggle-switch">
+                    <input type="checkbox" id="context-injection-toggle">
+                    <span class="toggle-switch__slider"></span>
+                  </label>
                 </div>
               </div>
 
