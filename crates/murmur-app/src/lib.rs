@@ -1,8 +1,8 @@
 //! Murmur desktop app: tray, windows, and wiring between the audio worker,
 //! STT engine, and frontend.
 
-// get_status builds one large `serde_json::json!` object; its recursive
-// expansion outgrew the default limit of 128.
+// `commands::get_status` builds one large `serde_json::json!` map whose
+// token-by-token expansion overflows the default limit of 128.
 #![recursion_limit = "256"]
 
 mod audio_worker;

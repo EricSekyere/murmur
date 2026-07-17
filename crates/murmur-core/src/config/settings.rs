@@ -82,6 +82,20 @@ fn default_index_max_symbols() -> usize {
     64
 }
 
+/// A spoken-form → path-segment alias for spoken file/directory navigation
+/// ("source" → `src`). Defined here rather than in the indexer module so
+/// configs still load with the `indexer` feature off; the built-in defaults
+/// are compiled into `indexer::apply_aliases`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PathAlias {
+    /// The spoken phrase, matched case-insensitively on whole words.
+    #[serde(default)]
+    pub spoken: String,
+    /// The path segment that replaces it (e.g. `src`, `package.json`).
+    #[serde(default)]
+    pub path: String,
+}
+
 /// Application settings, loaded from TOML config file.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Settings {
@@ -255,6 +269,14 @@ pub struct Settings {
     #[serde(default)]
     pub indexer: IndexerSettings,
 
+    /// Spoken path aliases for command mode's "open the … file" / "go to the
+    /// … folder": each maps a spoken phrase to a path segment before the query
+    /// is resolved against the project index. Built-ins (source → src,
+    /// package json → package.json, …) are always active; an entry with the
+    /// same spoken form overrides its builtin.
+    #[serde(default)]
+    pub path_aliases: Vec<PathAlias>,
+
     /// Opt-in BYO-key cloud rewrite backend. None or a
     /// disabled table means fully local operation, the default. The API key is
     /// never stored here: it is read from the MURMUR_CLOUD_API_KEY environment
@@ -354,12 +376,15 @@ pub const MAX_VOCAB_ENTRIES: usize = 100;
 pub const MAX_SNIPPETS: usize = 100;
 pub const MAX_APP_PROFILES: usize = 50;
 pub const MAX_CLIPBOARD_PLACEHOLDERS: usize = 16;
+pub const MAX_PATH_ALIASES: usize = 100;
 const MAX_VOCAB_ENTRY_CHARS: usize = 100;
 const MAX_SNIPPET_TRIGGER_CHARS: usize = 100;
 const MAX_SNIPPET_EXPANSION_CHARS: usize = 2_000;
 const MAX_APP_PATTERN_CHARS: usize = 100;
 const MAX_REWRITE_PROMPT_CHARS: usize = 500;
 const MAX_CLIPBOARD_PLACEHOLDER_CHARS: usize = 100;
+const MAX_PATH_ALIAS_SPOKEN_CHARS: usize = 100;
+const MAX_PATH_ALIAS_PATH_CHARS: usize = 260;
 
 /// Truncate a string to at most `max` characters, on a UTF-8 boundary.
 fn truncate_chars(s: &mut String, max: usize) {
@@ -484,6 +509,7 @@ impl Default for Settings {
             context_injection_enabled: false,
             echo_cancellation: true,
             indexer: IndexerSettings::default(),
+            path_aliases: Vec::new(),
             cloud: None,
             whats_new_seen_version: None,
             daily_word_goal: 0,
@@ -675,6 +701,20 @@ impl Settings {
         self.indexer.max_symbols = self.indexer.max_symbols.clamp(1, MAX_INDEX_SYMBOLS);
         self.indexer.extensions.truncate(MAX_INDEX_EXTENSIONS);
         self.indexer.project_roots.truncate(MAX_INDEX_ROOTS);
+        // Aliases match case-insensitively, so store the spoken form
+        // normalized; an entry missing either side can never fire, drop it.
+        let mut aliases: Vec<PathAlias> = Vec::new();
+        for mut alias in std::mem::take(&mut self.path_aliases) {
+            alias.spoken = alias.spoken.trim().to_lowercase();
+            alias.path = alias.path.trim().to_string();
+            truncate_chars(&mut alias.spoken, MAX_PATH_ALIAS_SPOKEN_CHARS);
+            truncate_chars(&mut alias.path, MAX_PATH_ALIAS_PATH_CHARS);
+            if !alias.spoken.is_empty() && !alias.path.is_empty() {
+                aliases.push(alias);
+            }
+        }
+        aliases.truncate(MAX_PATH_ALIASES);
+        self.path_aliases = aliases;
         self.daily_word_goal = self.daily_word_goal.min(MAX_DAILY_WORD_GOAL);
     }
 
@@ -1086,6 +1126,75 @@ mod tests {
         };
         in_range.clamp_collections();
         assert_eq!(in_range.daily_word_goal, 500);
+    }
+
+    #[test]
+    fn old_config_without_path_aliases_loads_empty() {
+        let old = r#"hotkey = "ctrl+shift+space""#;
+        let settings: Settings = toml::from_str(old).unwrap();
+        assert!(settings.path_aliases.is_empty());
+        assert!(Settings::default().path_aliases.is_empty());
+    }
+
+    #[test]
+    fn path_aliases_round_trip_through_toml() {
+        let settings = Settings {
+            path_aliases: vec![
+                PathAlias {
+                    spoken: "utils".into(),
+                    path: "src/utils".into(),
+                },
+                PathAlias {
+                    spoken: "dot env".into(),
+                    path: ".env".into(),
+                },
+            ],
+            ..Settings::default()
+        };
+        let text = toml::to_string_pretty(&settings).unwrap();
+        let reloaded: Settings = toml::from_str(&text).unwrap();
+        assert_eq!(reloaded.path_aliases, settings.path_aliases);
+    }
+
+    #[test]
+    fn clamp_normalizes_and_caps_path_aliases() {
+        let mut settings = Settings {
+            path_aliases: vec![
+                PathAlias {
+                    spoken: "  Package JSON  ".into(),
+                    path: " package.json ".into(),
+                },
+                PathAlias {
+                    spoken: "".into(),
+                    path: "src".into(),
+                },
+                PathAlias {
+                    spoken: "source".into(),
+                    path: "   ".into(),
+                },
+            ],
+            ..Settings::default()
+        };
+        settings.clamp_collections();
+        assert_eq!(
+            settings.path_aliases,
+            vec![PathAlias {
+                spoken: "package json".into(),
+                path: "package.json".into(),
+            }]
+        );
+
+        let mut oversized = Settings {
+            path_aliases: (0..150)
+                .map(|i| PathAlias {
+                    spoken: format!("alias {i}"),
+                    path: format!("path{i}"),
+                })
+                .collect(),
+            ..Settings::default()
+        };
+        oversized.clamp_collections();
+        assert_eq!(oversized.path_aliases.len(), MAX_PATH_ALIASES);
     }
 
     #[test]
