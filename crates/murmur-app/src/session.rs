@@ -102,6 +102,25 @@ fn start_session(app: &tauri::AppHandle, state: &AppState, generation: u64) {
         .engine_loaded
         .load(std::sync::atomic::Ordering::Acquire)
     {
+        // Idle-unloaded (or panic-dropped) engine: kick the reload now so the
+        // "still loading" moment below ends by itself — the UX is exactly the
+        // startup load (progress events, then model-changed ready). The swap
+        // makes the kick one-shot even across rapid activations.
+        if state
+            .idle_unloaded
+            .swap(false, std::sync::atomic::Ordering::AcqRel)
+        {
+            let model = state
+                .settings
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .model;
+            crate::model_setup::spawn_download_and_init(
+                app.clone(),
+                std::sync::Arc::clone(&state.engine),
+                model,
+            );
+        }
         release_if_current(app, state, generation);
         emit_hotkey_error(app, "Model still loading, please wait");
         return;
@@ -766,6 +785,8 @@ fn finish_streaming(
     keep_final_caption: bool,
     generation: u64,
 ) {
+    // A session just ended: restart the model idle-unload clock from here.
+    crate::idle_unload::touch(state);
     // A superseded worker (the user already stopped and restarted) must not play
     // the stop cue, surface this session's diagnostics, or clear the live
     // session's flag/UI. release_if_current clears the flag iff still current.

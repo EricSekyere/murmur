@@ -303,6 +303,13 @@ pub struct Settings {
     /// (0 = disabled). Clamped to [`MAX_DAILY_WORD_GOAL`] on load.
     #[serde(default)]
     pub daily_word_goal: usize,
+
+    /// Unload the STT (and rewrite) model after this many seconds without
+    /// activity, freeing its RAM; it reloads automatically on the next use.
+    /// 0 = keep the model loaded forever (the default). Non-zero values must
+    /// fall in [`MODEL_IDLE_UNLOAD_MIN_SECS`]..=[`MODEL_IDLE_UNLOAD_MAX_SECS`].
+    #[serde(default)]
+    pub model_idle_unload_secs: u64,
 }
 
 impl AppProfile {
@@ -378,6 +385,8 @@ pub const PHRASE_PAUSE_MIN_SECS: f32 = 0.3;
 pub const PHRASE_PAUSE_MAX_SECS: f32 = 10.0;
 pub const SESSION_TIMEOUT_MAX_SECS: f32 = 300.0;
 pub const MAX_DAILY_WORD_GOAL: usize = 100_000;
+pub const MODEL_IDLE_UNLOAD_MIN_SECS: u64 = 60;
+pub const MODEL_IDLE_UNLOAD_MAX_SECS: u64 = 86_400;
 
 // Collection caps: bound user text reaching the decoder prompt / keystrokes.
 pub const MAX_VOCAB_ENTRIES: usize = 100;
@@ -522,6 +531,7 @@ impl Default for Settings {
             cloud: None,
             whats_new_seen_version: None,
             daily_word_goal: 0,
+            model_idle_unload_secs: 0,
         }
     }
 }
@@ -787,6 +797,18 @@ impl Settings {
                 "session_timeout_secs must be between 0.0 (disabled) and {}, got {}",
                 SESSION_TIMEOUT_MAX_SECS,
                 self.session_timeout_secs
+            );
+        }
+
+        if self.model_idle_unload_secs != 0
+            && !(MODEL_IDLE_UNLOAD_MIN_SECS..=MODEL_IDLE_UNLOAD_MAX_SECS)
+                .contains(&self.model_idle_unload_secs)
+        {
+            anyhow::bail!(
+                "model_idle_unload_secs must be 0 (never) or between {} and {}, got {}",
+                MODEL_IDLE_UNLOAD_MIN_SECS,
+                MODEL_IDLE_UNLOAD_MAX_SECS,
+                self.model_idle_unload_secs
             );
         }
 
@@ -1135,6 +1157,57 @@ mod tests {
         };
         in_range.clamp_collections();
         assert_eq!(in_range.daily_word_goal, 500);
+    }
+
+    #[test]
+    fn model_idle_unload_round_trips_through_toml() {
+        let settings = Settings {
+            model_idle_unload_secs: 900,
+            ..Settings::default()
+        };
+        let text = toml::to_string_pretty(&settings).unwrap();
+        let reloaded: Settings = toml::from_str(&text).unwrap();
+        assert_eq!(reloaded.model_idle_unload_secs, 900);
+    }
+
+    #[test]
+    fn old_config_without_model_idle_unload_loads_disabled() {
+        let old = r#"hotkey = "ctrl+shift+space""#;
+        let settings: Settings = toml::from_str(old).unwrap();
+        assert_eq!(settings.model_idle_unload_secs, 0);
+        // Freeing a loaded model is opt-in; a fresh config must default off.
+        assert_eq!(Settings::default().model_idle_unload_secs, 0);
+    }
+
+    #[test]
+    fn model_idle_unload_validation_accepts_zero_and_the_range_bounds() {
+        for secs in [
+            0,
+            MODEL_IDLE_UNLOAD_MIN_SECS,
+            900,
+            MODEL_IDLE_UNLOAD_MAX_SECS,
+        ] {
+            let settings = Settings {
+                model_idle_unload_secs: secs,
+                ..Settings::default()
+            };
+            assert!(settings.validate().is_ok(), "should accept {secs}");
+        }
+    }
+
+    #[test]
+    fn model_idle_unload_validation_rejects_out_of_range_values() {
+        for secs in [
+            1,
+            MODEL_IDLE_UNLOAD_MIN_SECS - 1,
+            MODEL_IDLE_UNLOAD_MAX_SECS + 1,
+        ] {
+            let settings = Settings {
+                model_idle_unload_secs: secs,
+                ..Settings::default()
+            };
+            assert!(settings.validate().is_err(), "should reject {secs}");
+        }
     }
 
     #[test]

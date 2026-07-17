@@ -39,6 +39,12 @@ settingsToggle.addEventListener('click', async () => {
       sessionTimeoutRange.value = status.session_timeout_secs;
       sessionTimeoutValue.textContent = formatTimeout(status.session_timeout_secs);
     }
+    if (status.model_idle_unload_secs != null) {
+      modelIdleUnloadSelect.value = String(status.model_idle_unload_secs);
+      // A hand-edited config value outside the presets falls back visually
+      // to Never without changing the stored setting.
+      if (modelIdleUnloadSelect.value === '') modelIdleUnloadSelect.value = '0';
+    }
     if (status.daily_word_goal != null) {
       dailyWordGoalInput.value = status.daily_word_goal;
     }
@@ -574,6 +580,17 @@ contextInjectionToggle.addEventListener('change', async () => {
     showToast(enabled ? 'Context-aware rewrites on — stays on this device' : 'Context-aware rewrites off', 'success');
   } catch (err) {
     contextInjectionToggle.checked = !enabled;
+    showToast(`Failed: ${err}`, 'error');
+  }
+});
+
+modelIdleUnloadSelect.addEventListener('change', async () => {
+  const model_idle_unload_secs = parseInt(modelIdleUnloadSelect.value, 10);
+  try {
+    await invoke('update_settings', { model_idle_unload_secs });
+    const label = modelIdleUnloadSelect.options[modelIdleUnloadSelect.selectedIndex].text;
+    showToast(`Idle model unload: ${label}`, 'success');
+  } catch (err) {
     showToast(`Failed: ${err}`, 'error');
   }
 });

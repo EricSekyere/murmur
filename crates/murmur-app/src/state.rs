@@ -17,6 +17,14 @@ pub(crate) struct AppState {
     /// Lock-free "engine ready" flag so UI paths never block on the engine
     /// mutex, which transcription holds for the duration of an inference.
     pub engine_loaded: AtomicBool,
+    /// Instant of the last model activity (engine load, end of an inference,
+    /// session end, rewrite end). The idle-unload watcher measures idleness
+    /// from it; see `idle_unload`.
+    pub last_activity: Mutex<Instant>,
+    /// Set when the idle watcher (or inference-panic recovery) dropped the
+    /// engine, so the next activation kicks a reload instead of waiting for a
+    /// load nobody started. Cleared once a fresh engine is committed.
+    pub idle_unloaded: AtomicBool,
     pub recording: Mutex<bool>,
     /// Monotonic id bumped under the `recording` lock each time a session
     /// starts. A streaming worker captures its id and only mutates the shared

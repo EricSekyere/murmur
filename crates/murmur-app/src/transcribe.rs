@@ -296,7 +296,11 @@ fn run_engine(
         prepared.duration_secs,
         engine.model_path()
     );
-    match engine.transcribe(&prepared.samples) {
+    let outcome = engine.transcribe(&prepared.samples);
+    // An inference just ran, whatever its outcome: reset the idle-unload
+    // clock so idleness is measured from the end of the last real work.
+    crate::idle_unload::touch(state);
+    match outcome {
         Ok(result) if result.text.is_empty() => {
             tracing::warn!(
                 "Engine returned empty text ({}ms, peak={:.4}, rms={:.4})",
@@ -320,6 +324,28 @@ fn run_engine(
         Err(e) => {
             let msg = format!("Transcription engine error: {:#}", e);
             tracing::error!("{}", msg);
+            if e.downcast_ref::<murmur_core::stt::engine::InferencePanic>()
+                .is_some()
+            {
+                // The panic unwound through the native whisper/ORT context,
+                // which may now be corrupt: take the engine out under the
+                // lock, release it, then drop outside it (teardown of a
+                // wedged context can be slow), and mark it idle-unloaded so
+                // the next session reloads a fresh engine through the same
+                // on-demand path an idle unload uses.
+                let broken = engine_guard.take();
+                drop(engine_guard);
+                drop(broken);
+                state
+                    .engine_loaded
+                    .store(false, std::sync::atomic::Ordering::Release);
+                state
+                    .idle_unloaded
+                    .store(true, std::sync::atomic::Ordering::Release);
+                tracing::error!(
+                    "Inference panicked; dropped the engine so the next session loads a fresh one"
+                );
+            }
             emit_transcription_error(app, &msg);
             emit_diag(app, "rejected", "engine_error", prepared);
             None
