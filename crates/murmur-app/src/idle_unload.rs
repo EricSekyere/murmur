@@ -135,9 +135,13 @@ mod tests {
 
     const IDLE: u64 = 300;
 
+    /// Build (now, last_activity) that are `idle_for_secs` apart by ADDING to
+    /// a base instant: subtracting from `Instant::now()` panics on a
+    /// freshly booted machine (CI runners), where the clock's epoch is only
+    /// seconds in the past.
     fn instants(idle_for_secs: u64) -> (Instant, Instant) {
-        let now = Instant::now();
-        (now, now - Duration::from_secs(idle_for_secs))
+        let last = Instant::now();
+        (last + Duration::from_secs(idle_for_secs), last)
     }
 
     #[test]
@@ -151,8 +155,7 @@ mod tests {
 
     #[test]
     fn zero_setting_means_never() {
-        // A day of idleness, far past any real window; huge values would
-        // overflow Instant subtraction (it cannot precede the boot epoch).
+        // A day of idleness, far past any real window.
         let (now, last) = instants(86_400);
         assert!(!should_unload(now, last, false, true, 0));
     }
