@@ -1,4 +1,6 @@
 #[cfg(feature = "audio")]
+pub(crate) mod aec_health;
+#[cfg(feature = "audio")]
 pub mod capture;
 pub(crate) mod dsp;
 #[cfg(all(feature = "audio", target_os = "linux"))]

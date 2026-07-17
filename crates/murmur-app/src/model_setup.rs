@@ -61,6 +61,10 @@ fn resync_to_loaded(app: &tauri::AppHandle, state: &AppState, loaded: SttModel) 
     state
         .engine_loaded
         .store(true, std::sync::atomic::Ordering::Release);
+    state
+        .idle_unloaded
+        .store(false, std::sync::atomic::Ordering::Release);
+    crate::idle_unload::touch(state);
     let _ = app.emit(
         "model-changed",
         ModelChangedEvent {
@@ -153,6 +157,12 @@ async fn download_and_init_model(
         app_state
             .engine_loaded
             .store(true, std::sync::atomic::Ordering::Release);
+        // A fresh engine starts a fresh idle window; clearing the marker also
+        // prevents a later activation from kicking a duplicate load.
+        app_state
+            .idle_unloaded
+            .store(false, std::sync::atomic::Ordering::Release);
+        crate::idle_unload::touch(&app_state);
     }
 
     emit_progress(app, 100, "Model ready", true, None);

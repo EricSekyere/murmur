@@ -40,6 +40,19 @@ pub struct Segment {
     pub avg_token_prob: Option<f32>,
 }
 
+/// Marker error for a panic caught inside backend inference. Unwinding
+/// through the native whisper/ggml or ONNX stack can leave the engine's
+/// context corrupt, so callers should drop the engine and load a fresh one
+/// rather than reuse it. Detect it with `err.downcast_ref::<InferencePanic>()`.
+#[derive(Debug, thiserror::Error)]
+#[error("{backend} inference panicked: {message}")]
+pub struct InferencePanic {
+    /// Which backend panicked ("Whisper" or "Parakeet").
+    pub backend: &'static str,
+    /// The caught panic payload, when it carried a message.
+    pub message: String,
+}
+
 /// Speech-to-text engine supporting multiple backends.
 pub struct SttEngine {
     inner: EngineInner,
@@ -539,7 +552,12 @@ impl SttEngine {
                     "unknown panic".to_string()
                 };
                 tracing::error!("Whisper inference panicked: {}", msg);
-                return Err(anyhow::anyhow!("Whisper inference panicked: {}", msg));
+                // Typed marker: the whisper/ggml state may be corrupt, so the
+                // caller can drop this engine and reload instead of reusing it.
+                return Err(anyhow::Error::new(InferencePanic {
+                    backend: "Whisper",
+                    message: msg,
+                }));
             }
         }
 
@@ -644,11 +662,13 @@ impl SttEngine {
                     "unknown panic".to_string()
                 };
                 tracing::error!("Parakeet inference panicked: {}", msg);
-                return Err(anyhow::anyhow!(
-                    "Parakeet inference panicked: {}. \
-                     This is usually a GPU/DirectML driver issue.",
-                    msg
-                ));
+                // Typed marker (see the whisper path): the ORT/DirectML state
+                // may be corrupt; the caller should reload the engine.
+                return Err(anyhow::Error::new(InferencePanic {
+                    backend: "Parakeet",
+                    message: msg,
+                })
+                .context("This is usually a GPU/DirectML driver issue."));
             }
         };
 
