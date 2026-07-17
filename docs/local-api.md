@@ -107,3 +107,7 @@ frame-level error, also without closing:
 ```json
 { "type": "error", "error": "invalid JSON: expected value at line 1 column 2" }
 ```
+
+## Reference clients
+
+- [`editors/vscode/`](../editors/vscode/) — first-party VS Code extension consuming this API.
