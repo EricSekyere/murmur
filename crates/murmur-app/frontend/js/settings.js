@@ -93,6 +93,9 @@ settingsToggle.addEventListener('click', async () => {
     if (status.local_api_enabled != null) {
       localApiToggle.checked = status.local_api_enabled;
     }
+    if (status.mic_warm_start != null) {
+      micWarmStartToggle.checked = status.mic_warm_start;
+    }
     if (status.context_injection_enabled != null) {
       contextInjectionToggle.checked = status.context_injection_enabled;
     }
@@ -547,6 +550,19 @@ localApiToggle.addEventListener('change', async () => {
     showToast(enabled ? 'Local API on after next restart' : 'Local API off after next restart', 'success');
   } catch (err) {
     localApiToggle.checked = !enabled;
+    showToast(`Failed: ${err}`, 'error');
+  }
+});
+
+micWarmStartToggle.addEventListener('change', async () => {
+  const enabled = micWarmStartToggle.checked;
+  try {
+    await invoke('update_settings', { mic_warm_start: enabled });
+    showToast(enabled
+      ? 'Instant mic start on — mic stays open, audio discarded until you dictate'
+      : 'Instant mic start off', 'success');
+  } catch (err) {
+    micWarmStartToggle.checked = !enabled;
     showToast(`Failed: ${err}`, 'error');
   }
 });

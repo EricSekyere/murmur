@@ -5,6 +5,8 @@ pub(crate) mod dsp;
 pub mod pulse_aec;
 pub mod silence;
 pub mod vad;
+#[cfg(feature = "audio")]
+pub(crate) mod warm;
 #[cfg(all(feature = "audio", windows))]
 pub mod wasapi;
 

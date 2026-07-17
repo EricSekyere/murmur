@@ -293,6 +293,22 @@ fn setup_app(
     let handle = audio_worker::Handle::spawn(app.handle().clone());
     let _ = state.audio.set(handle);
 
+    // Pre-warm the mic at launch when the user opted in, so even the first
+    // dictation of the run skips the cold device open. Send failure only
+    // means the worker thread died, which its own error path surfaces.
+    {
+        let settings = state.settings.lock().unwrap_or_else(|e| e.into_inner());
+        if settings.mic_warm_start
+            && let Some(audio) = state.audio.get()
+        {
+            let _ = audio.send_set_warm(audio_worker::WarmParams {
+                enabled: true,
+                audio_device: settings.audio_device.clone(),
+                echo_cancellation: settings.echo_cancellation,
+            });
+        }
+    }
+
     #[cfg(windows)]
     focus::spawn_foreground_tracker(app.handle().clone());
 

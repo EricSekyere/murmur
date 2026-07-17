@@ -53,6 +53,7 @@ const languageHint       = document.getElementById('language-hint');
 const translateToggle    = document.getElementById('translate-toggle');
 const translatedCaptionToggle = document.getElementById('translated-caption-toggle');
 const audioDeviceSelect  = document.getElementById('audio-device-select');
+const micWarmStartToggle = document.getElementById('mic-warm-start-toggle');
 const phrasePauseRange   = document.getElementById('phrase-pause-range');
 const phrasePauseValue   = document.getElementById('phrase-pause-value');
 const micSensitivityRange = document.getElementById('mic-sensitivity-range');
