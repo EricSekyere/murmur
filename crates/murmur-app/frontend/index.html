@@ -720,6 +720,18 @@
                 <span class="settings-hint" id="codebase-vocab-status">No project folders selected.</span>
               </div>
 
+              <!-- Spoken Path Aliases -->
+              <div class="settings-group">
+                <div class="settings-row__text">
+                  <label class="settings-label" for="path-aliases-input">Spoken Path Aliases</label>
+                  <span class="settings-hint">Map spoken phrases to path segments for "go to the &hellip; folder" and "open the &hellip; file", e.g. <code>source = src</code>. One per line as <code>spoken = path</code>. Built-in aliases (source, package json, dot env&hellip;) work without configuration.</span>
+                </div>
+                <textarea id="path-aliases-input" class="settings-textarea" rows="4" placeholder="source = src&#10;utils = src/utils&#10;end to end tests = tests/e2e"></textarea>
+                <div class="settings-actions">
+                  <button id="path-aliases-save" class="btn-small" disabled>Save Aliases</button>
+                </div>
+              </div>
+
               <!-- Editor integration (MCP) -->
               <div class="settings-group">
                 <div class="settings-row__text">

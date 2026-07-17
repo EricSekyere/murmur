@@ -11,14 +11,16 @@ use std::sync::atomic::Ordering;
 
 use anyhow::Context;
 use murmur_core::command::{Grammar, Match, PermissionStore, RouteOutcome, SlotValue};
+use murmur_core::indexer::FileMatch;
+use murmur_core::output::OutputMode;
 use murmur_mcp::ActionBackend;
 use serde_json::Value;
 use tauri::{Emitter, Manager, State};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut};
 
 use crate::command_exec::{
-    CMD_OPEN_FILE, ExecOutcome, Executor, PendingAction, ToolBackend, confirm_and_execute,
-    starter_grammar,
+    CMD_GO_TO_DIR, CMD_OPEN_FILE, ExecOutcome, Executor, PendingAction, ToolBackend,
+    confirm_and_execute, starter_grammar,
 };
 use crate::native_actions::{NativeActions, SystemActions};
 use crate::state::AppState;
@@ -161,33 +163,69 @@ async fn execute_and_split<A: NativeActions, B: ToolBackend>(
 // TODO: disambiguation overlay for near-tie scores and the Tier-2 embedding
 // fallback (viable-features.md §1.1); v1 types the single best match.
 fn run_open_file(state: &AppState, matched: &Match) -> anyhow::Result<ExecOutcomeDto> {
+    let (query, output_mode) = aliased_query(state, matched)?;
+    let best = {
+        let files = state
+            .project_files
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        murmur_core::indexer::resolve_file(&query, &files)
+            .into_iter()
+            .next()
+    };
+    type_best_match(best, output_mode)
+}
+
+/// The directory analog of [`run_open_file`]: resolve "go to the … folder"
+/// against the ancestor-directory set of the indexed files and type the best
+/// match's relative path. Same privacy rules.
+fn run_go_to_dir(state: &AppState, matched: &Match) -> anyhow::Result<ExecOutcomeDto> {
+    let (query, output_mode) = aliased_query(state, matched)?;
+    let dirs = {
+        let files = state
+            .project_files
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        murmur_core::indexer::directories(&files)
+    };
+    let best = murmur_core::indexer::resolve_file(&query, &dirs)
+        .into_iter()
+        .next();
+    type_best_match(best, output_mode)
+}
+
+/// The `query` slot with the user's spoken path aliases applied, plus the
+/// output mode. Both are read under one settings lock, dropped before the
+/// caller takes the file-index lock, so no two locks are ever held at once.
+fn aliased_query(state: &AppState, matched: &Match) -> anyhow::Result<(String, OutputMode)> {
     let Some(SlotValue::Text(query)) = matched.slots.get("query") else {
         anyhow::bail!(
             "command '{}' is missing text slot 'query'",
             matched.command_id
         );
     };
-    let best = {
-        let files = state
-            .project_files
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        murmur_core::indexer::resolve_file(query, &files)
-            .into_iter()
-            .next()
+    let (aliases, output_mode) = {
+        let settings = state.settings.lock().unwrap_or_else(|e| e.into_inner());
+        (settings.path_aliases.clone(), settings.output_mode)
     };
+    Ok((
+        murmur_core::indexer::apply_aliases(query, &aliases),
+        output_mode,
+    ))
+}
+
+/// Type the best match's relative path, or `NoAction` when nothing overlapped.
+fn type_best_match(
+    best: Option<FileMatch>,
+    output_mode: OutputMode,
+) -> anyhow::Result<ExecOutcomeDto> {
     let Some(best) = best else {
-        tracing::debug!("no indexed file matched the spoken open-file query");
+        tracing::debug!("no indexed path matched the spoken query");
         return Ok(ExecOutcomeDto::NoAction);
     };
-    tracing::trace!(path = %best.path, score = best.score, "open-file query resolved");
-    let output_mode = state
-        .settings
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .output_mode;
+    tracing::trace!(path = %best.path, score = best.score, "spoken path query resolved");
     murmur_core::output::dispatch_verbatim(&best.path, output_mode)
-        .context("typing the resolved file path")?;
+        .context("typing the resolved path")?;
     Ok(ExecOutcomeDto::Executed {
         result: Value::Null,
     })
@@ -210,13 +248,19 @@ pub(crate) async fn run_command(
         pending,
     } = &mut *command;
     let outcome = route_transcript(grammar, &transcript);
-    // open_file needs the project file index in app state, which the executor
-    // (pure native actions) can't reach, so it is resolved here.
+    // open_file/go_to_dir need the project file index in app state, which the
+    // executor (pure native actions) can't reach, so they are resolved here.
     if let RouteOutcome::Command(matched) = &outcome
         && matched.command_id == CMD_OPEN_FILE
     {
         pending.clear();
         return run_open_file(&state, matched).map_err(|e| format!("{e:#}"));
+    }
+    if let RouteOutcome::Command(matched) = &outcome
+        && matched.command_id == CMD_GO_TO_DIR
+    {
+        pending.clear();
+        return run_go_to_dir(&state, matched).map_err(|e| format!("{e:#}"));
     }
     let (mut dto, new_pending) = execute_and_split(executor, &*backend, outcome)
         .await
@@ -444,6 +488,15 @@ mod tests {
         match route_transcript(&grammar, "open the user controller test file") {
             RouteOutcome::Command(matched) => assert_eq!(matched.command_id, CMD_OPEN_FILE),
             _ => panic!("expected an open_file command match"),
+        }
+    }
+
+    #[test]
+    fn go_to_dir_routes_as_a_command_for_interception() {
+        let grammar = starter_grammar().expect("starter grammar compiles");
+        match route_transcript(&grammar, "navigate to the source components folder") {
+            RouteOutcome::Command(matched) => assert_eq!(matched.command_id, CMD_GO_TO_DIR),
+            _ => panic!("expected a go_to_dir command match"),
         }
     }
 

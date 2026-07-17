@@ -9,6 +9,7 @@
 //! a regex scan otherwise. The biasing only helps Whisper; Parakeet exposes no
 //! biasing API.
 
+mod aliases;
 mod extract;
 mod rank;
 mod resolve;
@@ -21,8 +22,9 @@ use std::time::SystemTime;
 use anyhow::{Result, bail};
 use ignore::WalkBuilder;
 
+pub use aliases::apply_aliases;
 pub use rank::RankedSymbol;
-pub use resolve::{FileMatch, resolve_file};
+pub use resolve::{FileMatch, directories, resolve_file};
 
 /// Source extensions scanned when [`IndexConfig::extensions`] is empty.
 const DEFAULT_EXTENSIONS: &[&str] = &["rs", "ts", "tsx", "js", "jsx", "py", "go", "java"];
