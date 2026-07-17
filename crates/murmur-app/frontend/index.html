@@ -539,6 +539,16 @@
                     <option value="">System Default</option>
                   </select>
                 </div>
+                <div class="settings-row">
+                  <div class="settings-row__text">
+                    <label class="settings-label" for="mic-warm-start-toggle">Instant mic start</label>
+                    <span class="settings-hint">Keep the microphone stream open between dictations so the first word is never clipped. Audio is discarded until you start dictating.</span>
+                  </div>
+                  <label class="toggle-switch">
+                    <input type="checkbox" id="mic-warm-start-toggle">
+                    <span class="toggle-switch__slider"></span>
+                  </label>
+                </div>
               </div>
 
               <!-- Mic Sensitivity -->
@@ -720,6 +730,18 @@
                 <span class="settings-hint" id="codebase-vocab-status">No project folders selected.</span>
               </div>
 
+              <!-- Spoken Path Aliases -->
+              <div class="settings-group">
+                <div class="settings-row__text">
+                  <label class="settings-label" for="path-aliases-input">Spoken Path Aliases</label>
+                  <span class="settings-hint">Map spoken phrases to path segments for "go to the &hellip; folder" and "open the &hellip; file", e.g. <code>source = src</code>. One per line as <code>spoken = path</code>. Built-in aliases (source, package json, dot env&hellip;) work without configuration.</span>
+                </div>
+                <textarea id="path-aliases-input" class="settings-textarea" rows="4" placeholder="source = src&#10;utils = src/utils&#10;end to end tests = tests/e2e"></textarea>
+                <div class="settings-actions">
+                  <button id="path-aliases-save" class="btn-small" disabled>Save Aliases</button>
+                </div>
+              </div>
+
               <!-- Editor integration (MCP) -->
               <div class="settings-group">
                 <div class="settings-row__text">
@@ -768,11 +790,21 @@
               <div class="settings-group">
                 <div class="settings-row__text">
                   <label class="settings-label" for="app-profiles-input">App Profiles</label>
-                  <span class="settings-hint">Override settings per app. One per line as <code>app = options</code>. Options: <code>dev</code> / <code>plain</code> for developer mode, and <code>auto</code> / <code>keyboard</code> / <code>clipboard_paste</code> / <code>clipboard</code> for output. The app is matched against the focused window's process name.</span>
+                  <span class="settings-hint">Override settings per app. One per line as <code>app = options</code>. Options: <code>dev</code> / <code>plain</code> for developer mode, <code>auto</code> / <code>keyboard</code> / <code>clipboard_paste</code> / <code>clipboard</code> for output, and <code>prompt = "…"</code> for a custom Rewrite Selection instruction in that app. The app is matched against the focused window's process name.</span>
                 </div>
-                <textarea id="app-profiles-input" class="settings-textarea" rows="4" placeholder="code = dev&#10;windowsterminal = dev, clipboard&#10;slack = plain"></textarea>
+                <textarea id="app-profiles-input" class="settings-textarea" rows="4" placeholder="code = dev&#10;windowsterminal = dev, clipboard&#10;slack = plain, prompt = &quot;Match a friendly Slack tone&quot;"></textarea>
                 <div class="settings-actions">
                   <button id="app-profiles-save" class="btn-small" disabled>Save Profiles</button>
+                </div>
+                <div class="settings-row">
+                  <div class="settings-row__text">
+                    <label class="settings-label" for="context-injection-toggle">Context-aware rewrites</label>
+                    <span class="settings-hint">Adds the target app's name and your clipboard to the local rewrite prompt. Everything stays on this device.</span>
+                  </div>
+                  <label class="toggle-switch">
+                    <input type="checkbox" id="context-injection-toggle">
+                    <span class="toggle-switch__slider"></span>
+                  </label>
                 </div>
               </div>
 

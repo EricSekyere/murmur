@@ -66,6 +66,12 @@ settingsToggle.addEventListener('click', async () => {
         .join('\n');
       snippetsSave.disabled = true;
     }
+    if (Array.isArray(status.path_aliases)) {
+      pathAliasesInput.value = status.path_aliases
+        .map(a => `${a.spoken} = ${a.path}`)
+        .join('\n');
+      pathAliasesSave.disabled = true;
+    }
     if (Array.isArray(status.app_profiles)) {
       appProfilesInput.value = status.app_profiles
         .map(formatAppProfile)
@@ -86,6 +92,12 @@ settingsToggle.addEventListener('click', async () => {
     }
     if (status.local_api_enabled != null) {
       localApiToggle.checked = status.local_api_enabled;
+    }
+    if (status.mic_warm_start != null) {
+      micWarmStartToggle.checked = status.mic_warm_start;
+    }
+    if (status.context_injection_enabled != null) {
+      contextInjectionToggle.checked = status.context_injection_enabled;
     }
     codebaseVocabToggle.checked = !!status.codebase_vocab_enabled;
     codebaseRoots = Array.isArray(status.codebase_vocab_roots)
@@ -542,6 +554,30 @@ localApiToggle.addEventListener('change', async () => {
   }
 });
 
+micWarmStartToggle.addEventListener('change', async () => {
+  const enabled = micWarmStartToggle.checked;
+  try {
+    await invoke('update_settings', { mic_warm_start: enabled });
+    showToast(enabled
+      ? 'Instant mic start on — mic stays open, audio discarded until you dictate'
+      : 'Instant mic start off', 'success');
+  } catch (err) {
+    micWarmStartToggle.checked = !enabled;
+    showToast(`Failed: ${err}`, 'error');
+  }
+});
+
+contextInjectionToggle.addEventListener('change', async () => {
+  const enabled = contextInjectionToggle.checked;
+  try {
+    await invoke('update_settings', { context_injection_enabled: enabled });
+    showToast(enabled ? 'Context-aware rewrites on — stays on this device' : 'Context-aware rewrites off', 'success');
+  } catch (err) {
+    contextInjectionToggle.checked = !enabled;
+    showToast(`Failed: ${err}`, 'error');
+  }
+});
+
 captionPositionSelect.addEventListener('change', async () => {
   const caption_position = captionPositionSelect.value;
   try {
@@ -627,19 +663,55 @@ snippetsSave.addEventListener('click', async () => {
   }
 });
 
+// Parse "spoken = path" alias lines; same convention as snippets, only the
+// first '=' splits so a path can itself contain '='.
+function parsePathAliases(text) {
+  return text
+    .split('\n')
+    .map(line => {
+      const eq = line.indexOf('=');
+      if (eq === -1) return null;
+      const spoken = line.slice(0, eq).trim();
+      const path = line.slice(eq + 1).trim();
+      return spoken && path ? { spoken, path } : null;
+    })
+    .filter(Boolean);
+}
+
+pathAliasesInput.addEventListener('input', () => {
+  pathAliasesSave.disabled = false;
+});
+
+pathAliasesSave.addEventListener('click', async () => {
+  const aliases = parsePathAliases(pathAliasesInput.value);
+  pathAliasesSave.disabled = true;
+  try {
+    await invoke('update_settings', { path_aliases: aliases });
+    showToast(`Path aliases saved (${aliases.length} ${aliases.length === 1 ? 'alias' : 'aliases'})`, 'success');
+  } catch (err) {
+    pathAliasesSave.disabled = false;
+    showToast(`Failed: ${err}`, 'error');
+  }
+});
+
 const OUTPUT_MODES = ['auto', 'keyboard', 'clipboard_paste', 'clipboard'];
 
-// Render a profile object back to its "app = options" line.
+// Render a profile object back to its "app = options" line. The custom
+// rewrite prompt is double-quoted; the syntax cannot carry a double quote
+// inside the prompt, so any (config-file-authored) ones become apostrophes
+// to keep the line round-trippable through parseAppProfiles.
 function formatAppProfile(p) {
   const opts = [];
   if (p.developer_mode === true) opts.push('dev');
   else if (p.developer_mode === false) opts.push('plain');
   if (p.output_mode) opts.push(p.output_mode);
+  if (p.rewrite_prompt) opts.push(`prompt = "${p.rewrite_prompt.replace(/"/g, "'")}"`);
   return opts.length ? `${p.app} = ${opts.join(', ')}` : p.app;
 }
 
-// Parse "app = dev, clipboard_paste" lines into profile objects. Unknown
-// tokens are ignored; a line needs an app and at least one valid override.
+// Parse "app = dev, clipboard_paste, prompt = \"…\"" lines into profile
+// objects. Unknown tokens are ignored; a line needs an app and at least one
+// valid override. Lines without a prompt parse exactly as before.
 function parseAppProfiles(text) {
   return text
     .split('\n')
@@ -648,7 +720,14 @@ function parseAppProfiles(text) {
       if (eq === -1) return null;
       const app = line.slice(0, eq).trim();
       if (!app) return null;
-      const tokens = line.slice(eq + 1).split(',').map(t => t.trim().toLowerCase()).filter(Boolean);
+      // Pull the quoted prompt out before splitting on commas, so a prompt
+      // containing ',' or '=' cannot corrupt the token parse.
+      let rewrite_prompt = null;
+      const rest = line.slice(eq + 1).replace(/prompt\s*=\s*"([^"]*)"/i, (_, prompt) => {
+        rewrite_prompt = prompt.trim() || null;
+        return '';
+      });
+      const tokens = rest.split(',').map(t => t.trim().toLowerCase()).filter(Boolean);
       let output_mode = null;
       let developer_mode = null;
       for (const t of tokens) {
@@ -656,8 +735,8 @@ function parseAppProfiles(text) {
         else if (t === 'plain' || t === 'nodev') developer_mode = false;
         else if (OUTPUT_MODES.includes(t)) output_mode = t;
       }
-      if (output_mode === null && developer_mode === null) return null;
-      return { app, output_mode, developer_mode };
+      if (output_mode === null && developer_mode === null && rewrite_prompt === null) return null;
+      return { app, output_mode, developer_mode, rewrite_prompt };
     })
     .filter(Boolean);
 }

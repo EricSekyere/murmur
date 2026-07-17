@@ -24,6 +24,11 @@ pub struct AppProfile {
     /// the global `default_rewrite_mode`).
     #[serde(default)]
     pub rewrite_mode: Option<RewriteMode>,
+    /// Custom rewrite instruction used instead of the built-in mode text when
+    /// rewriting a selection in this app (e.g. "Rewrite as a Conventional
+    /// Commit message"). Trimmed and capped on load; None = built-in text.
+    #[serde(default)]
+    pub rewrite_prompt: Option<String>,
 }
 
 /// Transcription filtering profile.
@@ -75,6 +80,20 @@ impl Default for IndexerSettings {
 
 fn default_index_max_symbols() -> usize {
     64
+}
+
+/// A spoken-form → path-segment alias for spoken file/directory navigation
+/// ("source" → `src`). Defined here rather than in the indexer module so
+/// configs still load with the `indexer` feature off; the built-in defaults
+/// are compiled into `indexer::apply_aliases`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PathAlias {
+    /// The spoken phrase, matched case-insensitively on whole words.
+    #[serde(default)]
+    pub spoken: String,
+    /// The path segment that replaces it (e.g. `src`, `package.json`).
+    #[serde(default)]
+    pub path: String,
 }
 
 /// Application settings, loaded from TOML config file.
@@ -232,15 +251,39 @@ pub struct Settings {
     #[serde(default)]
     pub local_api_enabled: bool,
 
+    /// Add local context (the target app's name and the current clipboard
+    /// text) to the selection-rewrite prompt. Strictly on-device: the context
+    /// only ever enters the local model's prompt and is never logged or
+    /// transmitted. Off by default because clipboard text is sensitive even
+    /// when it stays local.
+    #[serde(default)]
+    pub context_injection_enabled: bool,
+
     /// Use the OS voice-capture path (echo cancellation + noise suppression) so
     /// the mic doesn't pick up audio from your own speakers. Windows only for
     /// now; falls back to the raw mic elsewhere or if it can't be opened.
     #[serde(default = "default_true")]
     pub echo_cancellation: bool,
 
+    /// Keep the microphone stream open between dictations so the first word
+    /// is never clipped by a cold device open. While idle, audio is discarded
+    /// immediately — nothing is buffered or written anywhere until dictation
+    /// starts. Off by default: the OS mic-in-use indicator stays lit while
+    /// the stream is warm, which users must opt into knowingly.
+    #[serde(default)]
+    pub mic_warm_start: bool,
+
     /// Codebase-derived vocabulary settings (off by default).
     #[serde(default)]
     pub indexer: IndexerSettings,
+
+    /// Spoken path aliases for command mode's "open the … file" / "go to the
+    /// … folder": each maps a spoken phrase to a path segment before the query
+    /// is resolved against the project index. Built-ins (source → src,
+    /// package json → package.json, …) are always active; an entry with the
+    /// same spoken form overrides its builtin.
+    #[serde(default)]
+    pub path_aliases: Vec<PathAlias>,
 
     /// Opt-in BYO-key cloud rewrite backend. None or a
     /// disabled table means fully local operation, the default. The API key is
@@ -341,11 +384,15 @@ pub const MAX_VOCAB_ENTRIES: usize = 100;
 pub const MAX_SNIPPETS: usize = 100;
 pub const MAX_APP_PROFILES: usize = 50;
 pub const MAX_CLIPBOARD_PLACEHOLDERS: usize = 16;
+pub const MAX_PATH_ALIASES: usize = 100;
 const MAX_VOCAB_ENTRY_CHARS: usize = 100;
 const MAX_SNIPPET_TRIGGER_CHARS: usize = 100;
 const MAX_SNIPPET_EXPANSION_CHARS: usize = 2_000;
 const MAX_APP_PATTERN_CHARS: usize = 100;
+const MAX_REWRITE_PROMPT_CHARS: usize = 500;
 const MAX_CLIPBOARD_PLACEHOLDER_CHARS: usize = 100;
+const MAX_PATH_ALIAS_SPOKEN_CHARS: usize = 100;
+const MAX_PATH_ALIAS_PATH_CHARS: usize = 260;
 
 /// Truncate a string to at most `max` characters, on a UTF-8 boundary.
 fn truncate_chars(s: &mut String, max: usize) {
@@ -467,8 +514,11 @@ impl Default for Settings {
             clean_speech: true,
             mcp_dictation_enabled: true,
             local_api_enabled: false,
+            context_injection_enabled: false,
             echo_cancellation: true,
+            mic_warm_start: false,
             indexer: IndexerSettings::default(),
+            path_aliases: Vec::new(),
             cloud: None,
             whats_new_seen_version: None,
             daily_word_goal: 0,
@@ -638,6 +688,12 @@ impl Settings {
         self.app_profiles.truncate(MAX_APP_PROFILES);
         for p in &mut self.app_profiles {
             truncate_chars(&mut p.app, MAX_APP_PATTERN_CHARS);
+            // Custom rewrite prompt: drop blank ones, trim and cap the rest.
+            p.rewrite_prompt = p.rewrite_prompt.take().and_then(|prompt| {
+                let mut prompt = prompt.trim().to_string();
+                truncate_chars(&mut prompt, MAX_REWRITE_PROMPT_CHARS);
+                (!prompt.is_empty()).then_some(prompt)
+            });
         }
         // Placeholders match case-insensitively, so store them normalized;
         // drop empties and duplicates the matcher would never use.
@@ -654,6 +710,20 @@ impl Settings {
         self.indexer.max_symbols = self.indexer.max_symbols.clamp(1, MAX_INDEX_SYMBOLS);
         self.indexer.extensions.truncate(MAX_INDEX_EXTENSIONS);
         self.indexer.project_roots.truncate(MAX_INDEX_ROOTS);
+        // Aliases match case-insensitively, so store the spoken form
+        // normalized; an entry missing either side can never fire, drop it.
+        let mut aliases: Vec<PathAlias> = Vec::new();
+        for mut alias in std::mem::take(&mut self.path_aliases) {
+            alias.spoken = alias.spoken.trim().to_lowercase();
+            alias.path = alias.path.trim().to_string();
+            truncate_chars(&mut alias.spoken, MAX_PATH_ALIAS_SPOKEN_CHARS);
+            truncate_chars(&mut alias.path, MAX_PATH_ALIAS_PATH_CHARS);
+            if !alias.spoken.is_empty() && !alias.path.is_empty() {
+                aliases.push(alias);
+            }
+        }
+        aliases.truncate(MAX_PATH_ALIASES);
+        self.path_aliases = aliases;
         self.daily_word_goal = self.daily_word_goal.min(MAX_DAILY_WORD_GOAL);
     }
 
@@ -666,6 +736,16 @@ impl Settings {
             .find(|p| p.matches(process_name))
             .and_then(|p| p.rewrite_mode)
             .or(self.default_rewrite_mode)
+    }
+
+    /// Custom rewrite instruction for the foreground process: the first
+    /// matching profile that carries a prompt wins. None = use the built-in
+    /// mode text.
+    pub fn rewrite_prompt_for(&self, process_name: &str) -> Option<&str> {
+        self.app_profiles
+            .iter()
+            .filter(|p| p.matches(process_name))
+            .find_map(|p| p.rewrite_prompt.as_deref())
     }
 
     /// Validate settings values.
@@ -769,6 +849,7 @@ mod tests {
             output_mode: None,
             developer_mode: Some(true),
             rewrite_mode: None,
+            rewrite_prompt: None,
         }
     }
 
@@ -778,6 +859,14 @@ mod tests {
             output_mode: None,
             developer_mode: None,
             rewrite_mode: mode,
+            rewrite_prompt: None,
+        }
+    }
+
+    fn prompt_profile(app: &str, prompt: &str) -> AppProfile {
+        AppProfile {
+            rewrite_prompt: Some(prompt.to_string()),
+            ..rewrite_profile(app, None)
         }
     }
 
@@ -862,6 +951,76 @@ mod tests {
         assert_eq!(settings.default_rewrite_mode, None);
         assert_eq!(settings.app_profiles[0].rewrite_mode, None);
         assert_eq!(settings.app_profiles[0].developer_mode, Some(true));
+        // Later additions must also default off/empty on an old config.
+        assert_eq!(settings.app_profiles[0].rewrite_prompt, None);
+        assert!(!settings.context_injection_enabled);
+    }
+
+    #[test]
+    fn rewrite_prompt_and_context_injection_round_trip_through_toml() {
+        let settings = Settings {
+            context_injection_enabled: true,
+            app_profiles: vec![prompt_profile("code", "Rewrite as a commit message.")],
+            ..Settings::default()
+        };
+        let text = toml::to_string_pretty(&settings).unwrap();
+        let reloaded: Settings = toml::from_str(&text).unwrap();
+        assert!(reloaded.context_injection_enabled);
+        assert_eq!(
+            reloaded.app_profiles[0].rewrite_prompt.as_deref(),
+            Some("Rewrite as a commit message.")
+        );
+        // Clipboard entering a prompt is opt-in: a fresh config stays off.
+        assert!(!Settings::default().context_injection_enabled);
+    }
+
+    #[test]
+    fn clamp_trims_caps_and_drops_rewrite_prompts() {
+        let mut settings = Settings {
+            app_profiles: vec![
+                prompt_profile("code", "  Rewrite as a commit message.  "),
+                prompt_profile("slack", "   "),
+                prompt_profile("term", &"é".repeat(600)),
+            ],
+            ..Settings::default()
+        };
+        settings.clamp_collections();
+        assert_eq!(
+            settings.app_profiles[0].rewrite_prompt.as_deref(),
+            Some("Rewrite as a commit message.")
+        );
+        // Whitespace-only prompts are dropped, not stored as empty strings.
+        assert_eq!(settings.app_profiles[1].rewrite_prompt, None);
+        // Over-long prompts are capped on a char boundary.
+        assert_eq!(
+            settings.app_profiles[2]
+                .rewrite_prompt
+                .as_deref()
+                .map(|p| p.chars().count()),
+            Some(500)
+        );
+    }
+
+    #[test]
+    fn rewrite_prompt_for_takes_first_matching_profile_with_a_prompt() {
+        let settings = Settings {
+            app_profiles: vec![
+                rewrite_profile("code", Some(RewriteMode::Formal)),
+                prompt_profile("code", "Rewrite as a commit message."),
+                prompt_profile("slack", "Match a friendly Slack tone."),
+            ],
+            ..Settings::default()
+        };
+        // The first matching profile has no prompt; the next matching one wins.
+        assert_eq!(
+            settings.rewrite_prompt_for("Code.exe"),
+            Some("Rewrite as a commit message.")
+        );
+        assert_eq!(
+            settings.rewrite_prompt_for("slack.exe"),
+            Some("Match a friendly Slack tone.")
+        );
+        assert_eq!(settings.rewrite_prompt_for("chrome.exe"), None);
     }
 
     #[test]
@@ -979,6 +1138,75 @@ mod tests {
     }
 
     #[test]
+    fn old_config_without_path_aliases_loads_empty() {
+        let old = r#"hotkey = "ctrl+shift+space""#;
+        let settings: Settings = toml::from_str(old).unwrap();
+        assert!(settings.path_aliases.is_empty());
+        assert!(Settings::default().path_aliases.is_empty());
+    }
+
+    #[test]
+    fn path_aliases_round_trip_through_toml() {
+        let settings = Settings {
+            path_aliases: vec![
+                PathAlias {
+                    spoken: "utils".into(),
+                    path: "src/utils".into(),
+                },
+                PathAlias {
+                    spoken: "dot env".into(),
+                    path: ".env".into(),
+                },
+            ],
+            ..Settings::default()
+        };
+        let text = toml::to_string_pretty(&settings).unwrap();
+        let reloaded: Settings = toml::from_str(&text).unwrap();
+        assert_eq!(reloaded.path_aliases, settings.path_aliases);
+    }
+
+    #[test]
+    fn clamp_normalizes_and_caps_path_aliases() {
+        let mut settings = Settings {
+            path_aliases: vec![
+                PathAlias {
+                    spoken: "  Package JSON  ".into(),
+                    path: " package.json ".into(),
+                },
+                PathAlias {
+                    spoken: "".into(),
+                    path: "src".into(),
+                },
+                PathAlias {
+                    spoken: "source".into(),
+                    path: "   ".into(),
+                },
+            ],
+            ..Settings::default()
+        };
+        settings.clamp_collections();
+        assert_eq!(
+            settings.path_aliases,
+            vec![PathAlias {
+                spoken: "package json".into(),
+                path: "package.json".into(),
+            }]
+        );
+
+        let mut oversized = Settings {
+            path_aliases: (0..150)
+                .map(|i| PathAlias {
+                    spoken: format!("alias {i}"),
+                    path: format!("path{i}"),
+                })
+                .collect(),
+            ..Settings::default()
+        };
+        oversized.clamp_collections();
+        assert_eq!(oversized.path_aliases.len(), MAX_PATH_ALIASES);
+    }
+
+    #[test]
     fn old_config_without_mcp_dictation_field_loads_enabled() {
         let old = r#"hotkey = "ctrl+shift+space""#;
         let settings: Settings = toml::from_str(old).unwrap();
@@ -1014,6 +1242,26 @@ mod tests {
         let text = toml::to_string_pretty(&settings).unwrap();
         let reloaded: Settings = toml::from_str(&text).unwrap();
         assert!(reloaded.local_api_enabled);
+    }
+
+    #[test]
+    fn old_config_without_mic_warm_start_field_loads_disabled() {
+        let old = r#"hotkey = "ctrl+shift+space""#;
+        let settings: Settings = toml::from_str(old).unwrap();
+        assert!(!settings.mic_warm_start);
+        // Keeping the mic stream open is opt-in; a fresh config must default off.
+        assert!(!Settings::default().mic_warm_start);
+    }
+
+    #[test]
+    fn mic_warm_start_setting_round_trips_through_toml() {
+        let settings = Settings {
+            mic_warm_start: true,
+            ..Settings::default()
+        };
+        let text = toml::to_string_pretty(&settings).unwrap();
+        let reloaded: Settings = toml::from_str(&text).unwrap();
+        assert!(reloaded.mic_warm_start);
     }
 
     #[test]

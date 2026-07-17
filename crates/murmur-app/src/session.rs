@@ -125,6 +125,7 @@ fn start_session(app: &tauri::AppHandle, state: &AppState, generation: u64) {
             session_timeout: Duration::from_secs_f32(settings.session_timeout_secs),
             live_preview: settings.live_preview,
             echo_cancellation: settings.echo_cancellation,
+            mic_warm_start: settings.mic_warm_start,
         }
     };
     let send_result = match state.audio.get() {

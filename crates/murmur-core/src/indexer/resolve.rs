@@ -66,9 +66,30 @@ fn score_path(query_tokens: &[String], path: &str) -> Option<f64> {
 }
 
 /// The file name without its final extension: `a/b/user.test.ts` -> `user.test`.
+/// Dot-prefixed names (`.env`, `.github`) keep the whole name: an empty stem
+/// would cost them the stem bonus and let any path with the same token outrank
+/// the exact hit.
 fn file_stem(path: &str) -> &str {
     let name = path.rsplit('/').next().unwrap_or(path);
-    name.rsplit_once('.').map_or(name, |(stem, _)| stem)
+    name.rsplit_once('.')
+        .filter(|(stem, _)| !stem.is_empty())
+        .map_or(name, |(stem, _)| stem)
+}
+
+/// Every distinct ancestor directory of `files` (relative, forward-slash, no
+/// leading `./`, no empty root entry), sorted and deduped. Pure derivation:
+/// the file index stays the single source of truth, so directory resolution
+/// (`resolve_file` over this list) never needs its own file-system walk.
+pub fn directories(files: &[String]) -> Vec<String> {
+    let mut dirs = std::collections::BTreeSet::new();
+    for file in files {
+        for (i, ch) in file.char_indices() {
+            if ch == '/' && i > 0 {
+                dirs.insert(file[..i].to_string());
+            }
+        }
+    }
+    dirs.into_iter().collect()
 }
 
 /// Query words minus fillers, singularized alongside path tokens so
@@ -194,5 +215,61 @@ mod tests {
     #[test]
     fn empty_file_list_yields_empty() {
         assert!(resolve_file("user controller", &[]).is_empty());
+    }
+
+    #[test]
+    fn dotfile_exact_hit_outranks_paths_sharing_its_token() {
+        let files = files(&[".env", "docs/env-setup.md"]);
+        let ranked = resolve_file("env", &files);
+        assert_eq!(ranked[0].path, ".env");
+    }
+
+    #[test]
+    fn directories_yield_all_ancestors_sorted_and_deduped() {
+        let files = files(&[
+            "src/components/Header.tsx",
+            "src/components/Footer.tsx",
+            "src/user.ts",
+            "tests/api/user_controller.test.ts",
+            "README.md",
+        ]);
+        assert_eq!(
+            directories(&files),
+            vec![
+                "src".to_string(),
+                "src/components".to_string(),
+                "tests".to_string(),
+                "tests/api".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn directories_have_no_empty_or_dot_entries() {
+        let files = files(&["top.rs", "/rooted/file.rs", "a/b/c.rs"]);
+        let dirs = directories(&files);
+        assert!(!dirs.iter().any(|d| d.is_empty() || d == "."));
+        assert_eq!(
+            dirs,
+            vec!["/rooted".to_string(), "a".to_string(), "a/b".to_string(),]
+        );
+    }
+
+    #[test]
+    fn directory_resolution_ranks_the_named_leaf_first() {
+        let files = files(&[
+            "src/components/Header.tsx",
+            "src/user.ts",
+            "vendor/components/x.ts",
+        ]);
+        let dirs = directories(&files);
+        let ranked = resolve_file("src components", &dirs);
+        assert_eq!(ranked[0].path, "src/components");
+        assert!(ranked[0].score > ranked[1].score);
+    }
+
+    #[test]
+    fn directories_of_empty_index_is_empty() {
+        assert!(directories(&[]).is_empty());
     }
 }

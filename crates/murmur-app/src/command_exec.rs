@@ -76,6 +76,9 @@ const CMD_PASTE: &str = "native.paste";
 /// file index, so `command_mode::run_command` intercepts it before the
 /// executor.
 pub(crate) const CMD_OPEN_FILE: &str = "open_file";
+/// Spoken directory navigation; intercepted in `command_mode::run_command`
+/// like [`CMD_OPEN_FILE`] and resolved against the same file index.
+pub(crate) const CMD_GO_TO_DIR: &str = "go_to_dir";
 
 /// The paste chord "paste" sends, in [`NativeActions::send_keys`] syntax.
 #[cfg(target_os = "macos")]
@@ -93,8 +96,14 @@ pub fn starter_grammar() -> Result<Grammar> {
     for (id, pattern) in [
         // Before the launch/focus catch-alls: first added pattern wins, so
         // "open the user controller file" resolves a file rather than
-        // launching an app named "the user controller file".
-        (CMD_OPEN_FILE, "(open|go to) [the] {query} file"),
+        // launching an app named "the user controller file". The trailing
+        // "file" vs "(folder|directory)" literals keep the two path commands
+        // disjoint from each other.
+        (CMD_OPEN_FILE, "(open|go to|navigate to) [the] {query} file"),
+        (
+            CMD_GO_TO_DIR,
+            "(open|go to|navigate to) [the] {query} (folder|directory)",
+        ),
         (CMD_LAUNCH, "(open|launch|start) {target}"),
         (CMD_FOCUS, "(switch|go) to [the] {query}"),
         (CMD_FOCUS, "focus [on] [the] {query}"),
@@ -206,8 +215,11 @@ impl<A: NativeActions> Executor<A> {
             CMD_PASTE => self.actions.send_keys(PASTE_KEYS)?,
             // Resolved in command_mode::run_command against the app's file
             // index; reaching the executor means that interception broke.
-            CMD_OPEN_FILE => {
-                tracing::warn!("open_file reached the executor instead of command_mode");
+            CMD_OPEN_FILE | CMD_GO_TO_DIR => {
+                tracing::warn!(
+                    command_id = %matched.command_id,
+                    "path command reached the executor instead of command_mode"
+                );
                 return Ok(ExecOutcome::NoAction);
             }
             other => {
@@ -521,6 +533,7 @@ mod tests {
         for phrase in [
             "open the user controller test file",
             "go to the user controller test file",
+            "navigate to the user controller test file",
             "open user controller test file",
         ] {
             let matched = grammar
@@ -535,9 +548,29 @@ mod tests {
     }
 
     #[test]
-    fn open_file_pattern_does_not_shadow_launch_or_focus() {
+    fn go_to_dir_pattern_captures_the_spoken_query() {
         let grammar = starter_grammar().expect("starter grammar compiles");
-        // No trailing "file": these stay app launch / window focus.
+        for phrase in [
+            "go to the source components folder",
+            "open the source components directory",
+            "navigate to source components folder",
+        ] {
+            let matched = grammar
+                .match_phrase(phrase)
+                .unwrap_or_else(|| panic!("phrase {phrase:?} should match"));
+            assert_eq!(matched.command_id, CMD_GO_TO_DIR, "phrase {phrase:?}");
+            assert_eq!(
+                matched.slots.get("query"),
+                Some(&SlotValue::Text("source components".into()))
+            );
+        }
+    }
+
+    #[test]
+    fn path_patterns_do_not_shadow_launch_focus_or_each_other() {
+        let grammar = starter_grammar().expect("starter grammar compiles");
+        // No trailing "file"/"folder"/"directory": these stay app launch /
+        // window focus.
         assert_eq!(
             grammar.match_phrase("open firefox").unwrap().command_id,
             CMD_LAUNCH
@@ -549,16 +582,40 @@ mod tests {
                 .command_id,
             CMD_FOCUS
         );
+        // The trailing literal routes each path phrase to its own command.
+        assert_eq!(
+            grammar
+                .match_phrase("open the readme file")
+                .unwrap()
+                .command_id,
+            CMD_OPEN_FILE
+        );
+        assert_eq!(
+            grammar
+                .match_phrase("go to the tests folder")
+                .unwrap()
+                .command_id,
+            CMD_GO_TO_DIR
+        );
+        assert_eq!(
+            grammar
+                .match_phrase("navigate to the src directory")
+                .unwrap()
+                .command_id,
+            CMD_GO_TO_DIR
+        );
     }
 
     #[tokio::test]
-    async fn open_file_reaching_the_executor_is_no_action() {
-        // run_command resolves open_file before the executor; the executor
-        // deliberately maps it to nothing rather than guessing an action.
-        let exec = executor_with(vec![], &[]);
-        let outcome = run_phrase(&exec, "open the readme file").await;
-        assert_eq!(outcome, ExecOutcome::NoAction);
-        assert!(exec.actions.calls().is_empty());
+    async fn path_commands_reaching_the_executor_are_no_action() {
+        // run_command resolves open_file/go_to_dir before the executor; the
+        // executor deliberately maps them to nothing rather than guessing.
+        for phrase in ["open the readme file", "go to the tests folder"] {
+            let exec = executor_with(vec![], &[]);
+            let outcome = run_phrase(&exec, phrase).await;
+            assert_eq!(outcome, ExecOutcome::NoAction, "phrase {phrase:?}");
+            assert!(exec.actions.calls().is_empty());
+        }
     }
 
     #[tokio::test]

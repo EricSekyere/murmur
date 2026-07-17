@@ -45,11 +45,24 @@ pub(crate) struct StartParams {
     pub live_preview: bool,
     /// Use the OS echo-cancelling capture path when available.
     pub echo_cancellation: bool,
+    /// Keep the mic stream open between sessions (audio discarded while idle).
+    pub mic_warm_start: bool,
+}
+
+/// Warm-start reconfiguration pushed from the settings path, so toggling the
+/// setting (or changing the input device) takes effect immediately instead of
+/// waiting for the next session.
+#[derive(Clone)]
+pub(crate) struct WarmParams {
+    pub enabled: bool,
+    pub audio_device: Option<String>,
+    pub echo_cancellation: bool,
 }
 
 enum Cmd {
     StartStreaming(StartParams),
     Stop,
+    SetWarm(WarmParams),
 }
 
 pub(crate) enum AudioResult {
@@ -141,6 +154,15 @@ impl Handle {
             .map_err(|e| format!("Audio worker channel closed: {}", e))
     }
 
+    /// Push a warm-start reconfiguration to the worker. Non-blocking; applied
+    /// between sessions (or, mid-session, the enabled flag alone so a disable
+    /// releases the mic when the session ends).
+    pub fn send_set_warm(&self, params: WarmParams) -> Result<(), String> {
+        self.cmd_tx
+            .send(Cmd::SetWarm(params))
+            .map_err(|e| format!("Audio worker channel closed: {}", e))
+    }
+
     /// Blocking receive for the next streaming result.
     pub fn recv_result(&self) -> Result<AudioResult, String> {
         let rx = self.result_rx.lock().unwrap_or_else(|e| e.into_inner());
@@ -184,7 +206,11 @@ fn run_worker(cmd_rx: &mpsc::Receiver<Cmd>, result_tx: &mpsc::Sender<AudioResult
                     let msg = panic_message(panic_info, "panic in recording session");
                     tracing::error!("Recording session panicked, recovering: {}", msg);
                     // Best-effort cleanup, then unblock the app-side streaming
-                    // worker so the UI returns to idle.
+                    // worker so the UI returns to idle. Don't keep a stream
+                    // that just panicked warm — drop it and let the next
+                    // session rebuild from scratch (it re-enables warm mode
+                    // from its params).
+                    capture.set_warm_start(false);
                     stop_capture(&mut capture, "panic recovery");
                     let _ = result_tx.send(AudioResult::StreamingDone);
                 }
@@ -192,7 +218,31 @@ fn run_worker(cmd_rx: &mpsc::Receiver<Cmd>, result_tx: &mpsc::Sender<AudioResult
             Cmd::Stop => {
                 tracing::debug!("Stop received outside monitoring loop, ignoring");
             }
+            Cmd::SetWarm(params) => apply_warm(&mut capture, &params),
         }
+    }
+}
+
+/// Apply a warm-start reconfiguration while idle: flip the mode, then open
+/// (or retarget) the idle pre-warm stream so even the next session of the run
+/// skips the cold device open. Failure is non-fatal — the next session simply
+/// cold-starts as before.
+fn apply_warm(capture: &mut AudioCapture, params: &WarmParams) {
+    capture.set_warm_start(params.enabled);
+    if !params.enabled {
+        return;
+    }
+    // CPAL's native backend can panic on some drivers; contain it like start.
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        capture.prewarm(params.audio_device.as_deref(), params.echo_cancellation)
+    }));
+    match result {
+        Ok(Ok(())) => {}
+        Ok(Err(e)) => tracing::warn!("Mic pre-warm failed; next session will cold-start: {}", e),
+        Err(panic_info) => tracing::warn!(
+            "Mic pre-warm panicked; next session will cold-start: {}",
+            panic_message(panic_info, "native audio panic")
+        ),
     }
 }
 
@@ -204,6 +254,9 @@ fn run_session(
     cmd_rx: &mpsc::Receiver<Cmd>,
     result_tx: &mpsc::Sender<AudioResult>,
 ) {
+    // Sync the warm mode with the setting each session, so a change made
+    // while no SetWarm command was processed still applies here.
+    capture.set_warm_start(params.mic_warm_start);
     if let Err(msg) = start_capture(
         capture,
         params.audio_device.as_deref(),
@@ -418,6 +471,13 @@ impl Monitor<'_> {
             Ok(Cmd::Stop) => {
                 self.flush_remaining();
                 self.finish_session("manual stop")
+            }
+            Ok(Cmd::SetWarm(params)) => {
+                // Mid-session only the mode flag applies (so a disable
+                // releases the mic at session end); a device or echo-
+                // cancellation change retargets on the next session start.
+                self.capture.set_warm_start(params.enabled);
+                Flow::Continue
             }
         }
     }
