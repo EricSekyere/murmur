@@ -265,6 +265,14 @@ pub struct Settings {
     #[serde(default = "default_true")]
     pub echo_cancellation: bool,
 
+    /// Keep the microphone stream open between dictations so the first word
+    /// is never clipped by a cold device open. While idle, audio is discarded
+    /// immediately — nothing is buffered or written anywhere until dictation
+    /// starts. Off by default: the OS mic-in-use indicator stays lit while
+    /// the stream is warm, which users must opt into knowingly.
+    #[serde(default)]
+    pub mic_warm_start: bool,
+
     /// Codebase-derived vocabulary settings (off by default).
     #[serde(default)]
     pub indexer: IndexerSettings,
@@ -508,6 +516,7 @@ impl Default for Settings {
             local_api_enabled: false,
             context_injection_enabled: false,
             echo_cancellation: true,
+            mic_warm_start: false,
             indexer: IndexerSettings::default(),
             path_aliases: Vec::new(),
             cloud: None,
@@ -1233,6 +1242,26 @@ mod tests {
         let text = toml::to_string_pretty(&settings).unwrap();
         let reloaded: Settings = toml::from_str(&text).unwrap();
         assert!(reloaded.local_api_enabled);
+    }
+
+    #[test]
+    fn old_config_without_mic_warm_start_field_loads_disabled() {
+        let old = r#"hotkey = "ctrl+shift+space""#;
+        let settings: Settings = toml::from_str(old).unwrap();
+        assert!(!settings.mic_warm_start);
+        // Keeping the mic stream open is opt-in; a fresh config must default off.
+        assert!(!Settings::default().mic_warm_start);
+    }
+
+    #[test]
+    fn mic_warm_start_setting_round_trips_through_toml() {
+        let settings = Settings {
+            mic_warm_start: true,
+            ..Settings::default()
+        };
+        let text = toml::to_string_pretty(&settings).unwrap();
+        let reloaded: Settings = toml::from_str(&text).unwrap();
+        assert!(reloaded.mic_warm_start);
     }
 
     #[test]

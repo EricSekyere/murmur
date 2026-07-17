@@ -99,6 +99,7 @@ pub(crate) fn get_status(state: State<'_, AppState>) -> serde_json::Value {
         "clean_speech": settings.clean_speech,
         "mcp_dictation_enabled": settings.mcp_dictation_enabled,
         "local_api_enabled": settings.local_api_enabled,
+        "mic_warm_start": settings.mic_warm_start,
         "context_injection_enabled": settings.context_injection_enabled,
         "codebase_vocab_enabled": settings.indexer.enabled,
         "codebase_vocab_roots": settings
@@ -414,10 +415,13 @@ pub(crate) fn update_settings(
     mcp_dictation_enabled: Option<bool>,
     local_api_enabled: Option<bool>,
     context_injection_enabled: Option<bool>,
+    mic_warm_start: Option<bool>,
 ) -> Result<(), String> {
     let mut settings = state.settings.lock().unwrap_or_else(|e| e.into_inner());
     // Only warn about a model/language mismatch if those fields were touched.
     let language_touched = language.is_some() || translate_to_english.is_some();
+    // The warm stream must follow both the toggle and the device it targets.
+    let warm_inputs_touched = mic_warm_start.is_some() || audio_device.is_some();
 
     if let Some(ref new_hotkey) = hotkey {
         apply_hotkey(&app, &mut settings, new_hotkey)?;
@@ -605,6 +609,9 @@ pub(crate) fn update_settings(
     if let Some(ci) = context_injection_enabled {
         settings.context_injection_enabled = ci;
     }
+    if let Some(mw) = mic_warm_start {
+        settings.mic_warm_start = mw;
+    }
 
     // Same gate the loader uses, so the UI can't persist a config it would reject.
     settings.clamp_collections();
@@ -619,6 +626,18 @@ pub(crate) fn update_settings(
 
     if let Ok(path) = Settings::default_path() {
         settings.save(&path).map_err(|e| e.to_string())?;
+    }
+
+    // Apply warm-start changes to the audio worker right away: enabling
+    // pre-warms the mic now, disabling releases it, and a device change
+    // retargets the idle stream. Send failure only means the worker thread
+    // is gone, which its own error path already surfaces — safe to drop.
+    if warm_inputs_touched && let Some(audio) = state.audio.get() {
+        let _ = audio.send_set_warm(crate::audio_worker::WarmParams {
+            enabled: settings.mic_warm_start,
+            audio_device: settings.audio_device.clone(),
+            echo_cancellation: settings.echo_cancellation,
+        });
     }
     Ok(())
 }
