@@ -3,6 +3,8 @@ pub(crate) mod aec_health;
 #[cfg(feature = "audio")]
 pub mod capture;
 pub(crate) mod dsp;
+#[cfg(feature = "audio")]
+pub mod loopback;
 #[cfg(all(feature = "audio", target_os = "linux"))]
 pub mod pulse_aec;
 pub mod silence;
