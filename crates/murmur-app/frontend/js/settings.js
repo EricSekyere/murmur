@@ -93,6 +93,9 @@ settingsToggle.addEventListener('click', async () => {
     if (status.clean_speech != null) {
       cleanSpeechToggle.checked = status.clean_speech;
     }
+    if (status.smart_punctuation != null) {
+      smartPunctuationToggle.checked = status.smart_punctuation;
+    }
     if (status.mcp_dictation_enabled != null) {
       mcpDictationToggle.checked = status.mcp_dictation_enabled;
     }
@@ -534,6 +537,17 @@ cleanSpeechToggle.addEventListener('change', async () => {
     showToast(enabled ? 'Speech cleanup on' : 'Verbatim — no cleanup', 'success');
   } catch (err) {
     cleanSpeechToggle.checked = !enabled;
+    showToast(`Failed: ${err}`, 'error');
+  }
+});
+
+smartPunctuationToggle.addEventListener('change', async () => {
+  const enabled = smartPunctuationToggle.checked;
+  try {
+    await invoke('update_settings', { smart_punctuation: enabled });
+    showToast(enabled ? 'Smart punctuation on' : 'Smart punctuation off', 'success');
+  } catch (err) {
+    smartPunctuationToggle.checked = !enabled;
     showToast(`Failed: ${err}`, 'error');
   }
 });

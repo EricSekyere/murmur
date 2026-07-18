@@ -239,6 +239,13 @@ pub struct Settings {
     #[serde(default = "default_true")]
     pub clean_speech: bool,
 
+    /// Repair premature terminal punctuation at phrase junctions: when a
+    /// pause splits a sentence and the next phrase continues it, the stale
+    /// mark is backspaced and the phrases joined ("...store. And bought" ->
+    /// "...store and bought"). On by default; the toggle exists to opt out.
+    #[serde(default = "default_true")]
+    pub smart_punctuation: bool,
+
     /// Allow a connected coding agent (via the MCP `request_dictation` tool)
     /// to start voice capture so the user can answer a question by speaking.
     /// Off = the MCP server stays strictly read-only.
@@ -521,6 +528,7 @@ impl Default for Settings {
             caption_position: default_caption_position(),
             save_history: true,
             clean_speech: true,
+            smart_punctuation: true,
             mcp_dictation_enabled: true,
             local_api_enabled: false,
             context_injection_enabled: false,
@@ -1277,6 +1285,26 @@ mod tests {
         };
         oversized.clamp_collections();
         assert_eq!(oversized.path_aliases.len(), MAX_PATH_ALIASES);
+    }
+
+    #[test]
+    fn old_config_without_smart_punctuation_field_loads_enabled() {
+        let old = r#"hotkey = "ctrl+shift+space""#;
+        let settings: Settings = toml::from_str(old).unwrap();
+        assert!(settings.smart_punctuation);
+        // The fix is wanted by default; the setting exists only to opt out.
+        assert!(Settings::default().smart_punctuation);
+    }
+
+    #[test]
+    fn smart_punctuation_setting_round_trips_through_toml() {
+        let settings = Settings {
+            smart_punctuation: false,
+            ..Settings::default()
+        };
+        let text = toml::to_string_pretty(&settings).unwrap();
+        let reloaded: Settings = toml::from_str(&text).unwrap();
+        assert!(!reloaded.smart_punctuation);
     }
 
     #[test]

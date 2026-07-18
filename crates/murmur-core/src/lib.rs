@@ -4,6 +4,7 @@ pub mod command;
 pub mod commit;
 pub mod config;
 pub mod dictation;
+pub mod dictation_junction;
 pub mod dictation_request;
 pub mod emoji;
 pub mod filler;
