@@ -31,6 +31,11 @@ pub enum OutputMode {
 enum Separator {
     /// Append a space so consecutive dictated phrases don't run together.
     TrailingSpace,
+    /// Leading + trailing space: splices onto already-typed text after a
+    /// junction repair backspaced the previous phrase's mark and space.
+    /// A variant is needed because `deliver` trims the input, so a leading
+    /// space can never ride in on the text itself.
+    Joining,
     /// Type the text exactly as given (e.g. a resolved file path).
     Exact,
 }
@@ -47,6 +52,14 @@ pub fn dispatch_output(text: &str, mode: OutputMode) -> anyhow::Result<()> {
 #[cfg(feature = "keyboard")]
 pub fn dispatch_verbatim(text: &str, mode: OutputMode) -> anyhow::Result<()> {
     deliver(text, mode, Separator::Exact)
+}
+
+/// Junction-repair output: type `" " + text + " "` so the phrase joins onto
+/// already-typed text whose terminal mark and space were just backspaced
+/// away (see `crate::dictation_junction`).
+#[cfg(feature = "keyboard")]
+pub fn dispatch_joining(text: &str, mode: OutputMode) -> anyhow::Result<()> {
+    deliver(text, mode, Separator::Joining)
 }
 
 #[cfg(feature = "keyboard")]
@@ -66,6 +79,7 @@ fn deliver(text: &str, mode: OutputMode, separator: Separator) -> anyhow::Result
     // and stdout always emit the exact text.
     let typed = match separator {
         Separator::TrailingSpace => format!("{trimmed} "),
+        Separator::Joining => format!(" {trimmed} "),
         Separator::Exact => trimmed.to_string(),
     };
 

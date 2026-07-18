@@ -99,6 +99,7 @@ pub(crate) fn get_status(state: State<'_, AppState>) -> serde_json::Value {
         "caption_position": settings.caption_position,
         "save_history": settings.save_history,
         "clean_speech": settings.clean_speech,
+        "smart_punctuation": settings.smart_punctuation,
         "mcp_dictation_enabled": settings.mcp_dictation_enabled,
         "local_api_enabled": settings.local_api_enabled,
         "mic_warm_start": settings.mic_warm_start,
@@ -415,6 +416,7 @@ pub(crate) fn update_settings(
     caption_position: Option<String>,
     save_history: Option<bool>,
     clean_speech: Option<bool>,
+    smart_punctuation: Option<bool>,
     mcp_dictation_enabled: Option<bool>,
     local_api_enabled: Option<bool>,
     context_injection_enabled: Option<bool>,
@@ -609,6 +611,9 @@ pub(crate) fn update_settings(
     }
     if let Some(cs) = clean_speech {
         settings.clean_speech = cs;
+    }
+    if let Some(sp) = smart_punctuation {
+        settings.smart_punctuation = sp;
     }
     if let Some(md) = mcp_dictation_enabled {
         settings.mcp_dictation_enabled = md;
