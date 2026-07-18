@@ -1,25 +1,10 @@
 use super::AudioBuffer;
+use super::aec_health::AecHealth;
 use super::warm::{ConfigCache, SessionState, StreamKey};
 use anyhow::{Context, Result};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{SampleFormat, SupportedStreamConfig};
 use std::sync::{Arc, Mutex};
-
-/// Per-run AEC health: 0 = unknown (probe next session), 1 = delivers signal,
-/// -1 = only silence (use the raw mic for the rest of the run).
-#[cfg(windows)]
-static AEC_STATE: std::sync::atomic::AtomicI8 = std::sync::atomic::AtomicI8::new(0);
-
-/// Consecutive first-session AEC probes that saw only silence. The probe can
-/// misjudge a working AEC when the user simply hasn't spoken yet, so a single
-/// silent probe uses the raw mic for that session but re-tries AEC next
-/// session; only after this many silent probes is AEC given up on for the run.
-#[cfg(windows)]
-static AEC_SILENT_PROBES: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
-
-/// Give up on AEC for the run after this many consecutive silent probes.
-#[cfg(windows)]
-const AEC_MAX_SILENT_PROBES: u8 = 3;
 
 /// How long a probe waits for a signal-bearing sample before falling back to
 /// the raw mic for that session. Long enough to span the user's speech onset
@@ -28,12 +13,6 @@ const AEC_MAX_SILENT_PROBES: u8 = 3;
 /// genuinely broken AEC this is also the worst-case audio lost before fallback.
 #[cfg(windows)]
 const AEC_PROBE_DEADLINE_MS: u64 = 800;
-
-/// Per-run health of the Linux echo-cancel path, mirroring `AEC_STATE`:
-/// 0 = unprobed, 1 = working, -1 = unavailable (missing pactl/parec, or the
-/// server refused the module) — don't re-spawn subprocesses every session.
-#[cfg(target_os = "linux")]
-static PULSE_AEC_STATE: std::sync::atomic::AtomicI8 = std::sync::atomic::AtomicI8::new(0);
 
 /// Reserve enough live-buffer capacity for this many seconds of audio so the
 /// realtime cpal callback never reallocates during `extend`. A reallocating
@@ -90,6 +69,11 @@ pub struct AudioCapture {
     /// warm-reuse the stream when its key matches exactly.
     open_key: Option<StreamKey>,
     config_cache: ConfigCache<CachedDevice>,
+    /// Per-run health of the OS voice-capture (echo cancellation) path: after
+    /// a failed or persistently silent start, later sessions skip the attempt
+    /// (and its probe wait) and go straight to CPAL. Instance state, so an app
+    /// restart naturally resets it.
+    aec: AecHealth,
 }
 
 impl AudioCapture {
@@ -106,12 +90,14 @@ impl AudioCapture {
             warm_enabled: false,
             open_key: None,
             config_cache: ConfigCache::new(),
+            aec: AecHealth::new(),
         })
     }
 
     /// Start recording. With `echo_cancellation` on, prefer the OS voice-capture
     /// path (Windows AEC) on the default mic; otherwise, or on failure, use the
-    /// raw CPAL microphone.
+    /// raw CPAL microphone. A voice-capture path that failed this run stays
+    /// demoted (skipped) until the device or echo-cancellation input changes.
     pub fn start(&mut self, preferred_device: Option<&str>, echo_cancellation: bool) -> Result<()> {
         // Timestamp before any device work so a cold start's HAL queries and
         // stream build all count toward the time-to-first-chunk metric.
@@ -121,18 +107,33 @@ impl AudioCapture {
             self.voice = None;
         }
 
+        // A device or echo-cancellation change re-arms a demoted AEC path:
+        // the demotion belonged to the old configuration.
+        if self
+            .aec
+            .observe(&StreamKey::new(preferred_device, echo_cancellation))
+        {
+            tracing::info!("Capture configuration changed; re-enabling echo-cancellation attempts");
+        }
+
         let on_default = preferred_device
             .map(str::trim)
             .filter(|n| !n.is_empty())
             .is_none();
-        if echo_cancellation && on_default && self.try_start_voice_capture().is_some() {
-            // The voice path feeds the buffer from its own OS capture loop,
-            // bypassing the CPAL callback, so warm reuse and the armed gate
-            // don't apply to it; keeping a second, idle mic handle open next
-            // to it would buy nothing, so drop any warm stream.
-            self.stream = None;
-            self.open_key = None;
-            return Ok(());
+        if echo_cancellation && on_default {
+            if self.aec.is_demoted() {
+                tracing::debug!(
+                    "Echo cancellation demoted this run; skipping the attempt and using the raw microphone"
+                );
+            } else if self.try_start_voice_capture().is_some() {
+                // The voice path feeds the buffer from its own OS capture loop,
+                // bypassing the CPAL callback, so warm reuse and the armed gate
+                // don't apply to it; keeping a second, idle mic handle open next
+                // to it would buy nothing, so drop any warm stream.
+                self.stream = None;
+                self.open_key = None;
+                return Ok(());
+            }
         }
 
         self.start_cpal(preferred_device, echo_cancellation)
@@ -151,10 +152,11 @@ impl AudioCapture {
 
     /// Open the input stream idle (discarding every sample) so the next
     /// session skips the device open entirely. No-op unless warm-start is
-    /// enabled, and when a session is active. Skipped when the session would
+    /// enabled, and when a session is active. Skipped when the session might
     /// use the OS voice-capture path (echo cancellation on the default
-    /// device): that path opens its own capture, so a pre-warmed raw stream
-    /// would never be reused.
+    /// device, not yet demoted): that path opens its own capture, so a
+    /// pre-warmed raw stream would never be reused. Once the voice path is
+    /// demoted the session can only route to CPAL, so pre-warming proceeds.
     pub fn prewarm(
         &mut self,
         preferred_device: Option<&str>,
@@ -163,11 +165,21 @@ impl AudioCapture {
         if !self.warm_enabled || self.is_recording() {
             return Ok(());
         }
+        if self
+            .aec
+            .observe(&StreamKey::new(preferred_device, echo_cancellation))
+        {
+            tracing::info!("Capture configuration changed; re-enabling echo-cancellation attempts");
+        }
         let on_default = preferred_device
             .map(str::trim)
             .filter(|n| !n.is_empty())
             .is_none();
-        if echo_cancellation && on_default {
+        if echo_cancellation && on_default && !self.aec.is_demoted() {
+            // Demotion is only learned from a session's failed attempt, so
+            // the first pre-warm of a run is still skipped even on machines
+            // whose AEC always fails; from the first demoting session on,
+            // warm mode becomes effective for exactly those users.
             self.stream = None;
             self.open_key = None;
             return Ok(());
@@ -192,15 +204,14 @@ impl AudioCapture {
     /// PipeWire `module-echo-cancel` and captures its cancelled source. macOS
     /// has no implementation yet (returns `None`, so the caller falls back to
     /// the raw mic). Plan: the VoiceProcessingIO AudioUnit on macOS.
+    ///
+    /// Any start failure records itself in [`AecHealth`], so the caller skips
+    /// the attempt for the rest of the run (until a config-change reset).
     fn try_start_voice_capture(&mut self) -> Option<()> {
         #[cfg(windows)]
         {
-            use std::sync::atomic::Ordering;
+            use super::aec_health::{AEC_MAX_SILENT_PROBES, ProbeVerdict};
             const MAX_SAMPLES: usize = 60 * 48_000 * 2;
-            // This machine's Communications AEC already proved silent this run.
-            if AEC_STATE.load(Ordering::Relaxed) < 0 {
-                return None;
-            }
             if let Ok(mut buf) = self.buffer.lock() {
                 buf.clear();
                 let want = 30 * 48_000 * 2;
@@ -231,7 +242,7 @@ impl AudioCapture {
                     // raw mic for this session but re-tries AEC next session, so
                     // one silent start can't demote a working AEC for the whole
                     // run; AEC is abandoned only after AEC_MAX_SILENT_PROBES.
-                    if AEC_STATE.load(Ordering::Relaxed) == 0 {
+                    if self.aec.needs_probe() {
                         let deadline = std::time::Instant::now()
                             + std::time::Duration::from_millis(AEC_PROBE_DEADLINE_MS);
                         let mut alive = false;
@@ -247,23 +258,19 @@ impl AudioCapture {
                             }
                         }
                         if alive {
-                            AEC_STATE.store(1, Ordering::Relaxed);
-                            AEC_SILENT_PROBES.store(0, Ordering::Relaxed);
+                            self.aec.on_signal();
                         } else {
-                            let silent = AEC_SILENT_PROBES.fetch_add(1, Ordering::Relaxed) + 1;
-                            if silent >= AEC_MAX_SILENT_PROBES {
-                                AEC_STATE.store(-1, Ordering::Relaxed);
-                                tracing::warn!(
-                                    silent_probes = silent,
-                                    "Echo cancellation delivered only silence across probes; using the raw microphone for this run"
-                                );
-                            } else {
-                                tracing::info!(
-                                    probe = silent,
+                            match self.aec.on_silent_probe() {
+                                ProbeVerdict::Demoted => tracing::info!(
+                                    silent_probes = self.aec.silent_probes(),
+                                    "Echo cancellation delivered only silence across probes; demoted for this run, later sessions go straight to the raw microphone"
+                                ),
+                                ProbeVerdict::RetryNextSession => tracing::info!(
+                                    probe = self.aec.silent_probes(),
                                     max = AEC_MAX_SILENT_PROBES,
                                     "Echo cancellation delivered no signal within {}ms; using the raw microphone for this session, will retry AEC next session",
                                     AEC_PROBE_DEADLINE_MS
-                                );
+                                ),
                             }
                             self.voice = None;
                             if let Ok(mut b) = self.buffer.lock() {
@@ -275,20 +282,21 @@ impl AudioCapture {
                     Some(())
                 }
                 Err(e) => {
-                    tracing::warn!("Voice capture unavailable ({e}); using raw microphone");
+                    // An endpoint that failed to open will not fix itself this
+                    // run; demote so later sessions skip the attempt (and its
+                    // probe wait) entirely.
+                    self.aec.on_start_failure();
+                    tracing::info!(
+                        "Voice capture unavailable ({e}); echo cancellation demoted for this run, using the raw microphone"
+                    );
                     None
                 }
             }
         }
         #[cfg(target_os = "linux")]
         {
-            use std::sync::atomic::Ordering;
             // Mono at the fixed parec rate; same 60 s hard cap as the raw path.
             const MAX_SAMPLES: usize = 60 * super::pulse_aec::RATE as usize;
-            // This run already proved the pulse AEC path unusable.
-            if PULSE_AEC_STATE.load(Ordering::Relaxed) < 0 {
-                return None;
-            }
             if let Ok(mut buf) = self.buffer.lock() {
                 buf.clear();
                 let want = 30 * super::pulse_aec::RATE as usize;
@@ -304,14 +312,15 @@ impl AudioCapture {
                     // catches that. Silence is NOT treated as failure here (a
                     // muted mic is legitimate), unlike the Windows AEC probe
                     // which guards a known emit-zeros bug.
-                    if PULSE_AEC_STATE.load(Ordering::Relaxed) == 0 {
+                    if self.aec.needs_probe() {
                         std::thread::sleep(std::time::Duration::from_millis(250));
                         if cap.is_alive() {
-                            PULSE_AEC_STATE.store(1, Ordering::Relaxed);
+                            self.aec.on_signal();
                         } else {
-                            PULSE_AEC_STATE.store(-1, Ordering::Relaxed);
-                            tracing::warn!(
-                                "Echo-cancelled capture exited immediately; using the raw microphone instead"
+                            // A dead parec is a start failure: demote for the run.
+                            self.aec.on_start_failure();
+                            tracing::info!(
+                                "Echo-cancelled capture exited immediately; echo cancellation demoted for this run, using the raw microphone"
                             );
                             if let Ok(mut b) = self.buffer.lock() {
                                 b.clear();
@@ -331,11 +340,11 @@ impl AudioCapture {
                 }
                 Err(e) => {
                     // Missing pactl/parec or a refused module load will not fix
-                    // itself this run; remember so later sessions skip the
+                    // itself this run; demote so later sessions skip the
                     // subprocess round-trips.
-                    PULSE_AEC_STATE.store(-1, Ordering::Relaxed);
-                    tracing::warn!(
-                        "Echo-cancelled capture unavailable ({e}); using raw microphone"
+                    self.aec.on_start_failure();
+                    tracing::info!(
+                        "Echo-cancelled capture unavailable ({e}); echo cancellation demoted for this run, using the raw microphone"
                     );
                     None
                 }
@@ -343,6 +352,10 @@ impl AudioCapture {
         }
         #[cfg(not(any(windows, target_os = "linux")))]
         {
+            // No OS voice-capture implementation on this platform: demote so
+            // warm mode's pre-warm isn't skipped for a path that can never be
+            // taken.
+            self.aec.on_start_failure();
             None
         }
     }

@@ -591,6 +591,18 @@
                     <span id="session-timeout-value" class="settings-slider-val">60s</span>
                   </div>
                 </div>
+                <div class="settings-row">
+                  <div class="settings-row__text">
+                    <label class="settings-label" for="model-idle-unload-select">Unload Model When Idle</label>
+                    <span class="settings-hint">Free the speech model's memory after a period without dictation. It reloads automatically the next time you dictate.</span>
+                  </div>
+                  <select id="model-idle-unload-select" class="settings-select">
+                    <option value="0">Never</option>
+                    <option value="300">After 5 minutes</option>
+                    <option value="900">After 15 minutes</option>
+                    <option value="3600">After 1 hour</option>
+                  </select>
+                </div>
               </div>
 
               <!-- Daily Word Goal -->
@@ -669,6 +681,20 @@
                   </div>
                   <label class="toggle-switch">
                     <input type="checkbox" id="clean-speech-toggle" checked>
+                    <span class="toggle-switch__slider"></span>
+                  </label>
+                </div>
+              </div>
+
+              <!-- Smart punctuation -->
+              <div class="settings-group">
+                <div class="settings-row">
+                  <div class="settings-row__text">
+                    <label class="settings-label" for="smart-punctuation-toggle">Smart punctuation</label>
+                    <span class="settings-hint">Repairs premature sentence marks when you pause mid-sentence: '...store. and bought' becomes '...store and bought'.</span>
+                  </div>
+                  <label class="toggle-switch">
+                    <input type="checkbox" id="smart-punctuation-toggle" checked>
                     <span class="toggle-switch__slider"></span>
                   </label>
                 </div>

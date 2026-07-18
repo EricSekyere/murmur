@@ -388,7 +388,7 @@ pub(crate) async fn rewrite_selection(
     #[cfg(feature = "llm")]
     let engine_slot = std::sync::Arc::clone(&state.llm);
 
-    tauri::async_runtime::spawn_blocking(move || {
+    let outcome = tauri::async_runtime::spawn_blocking(move || {
         rewrite_selection_blocking(
             mode,
             &settings,
@@ -400,7 +400,11 @@ pub(crate) async fn rewrite_selection(
     })
     .await
     .map_err(|e| format!("rewrite task failed: {e}"))?
-    .map_err(|e| format!("{e:#}"))
+    .map_err(|e| format!("{e:#}"));
+    // A rewrite is model activity: restart the idle-unload clock so the
+    // watcher never reclaims an engine the user is actively using.
+    crate::idle_unload::touch(&state);
+    outcome
 }
 
 #[cfg(test)]

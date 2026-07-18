@@ -14,6 +14,7 @@ mod command_mode;
 mod commands;
 mod dictation_trigger;
 mod focus;
+mod idle_unload;
 mod input;
 mod local_api;
 mod model_setup;
@@ -157,6 +158,8 @@ pub fn run() -> anyhow::Result<()> {
             audio: std::sync::OnceLock::new(),
             engine,
             engine_loaded: std::sync::atomic::AtomicBool::new(false),
+            last_activity: Mutex::new(Instant::now()),
+            idle_unloaded: std::sync::atomic::AtomicBool::new(false),
             recording: Mutex::new(false),
             session_generation: std::sync::atomic::AtomicU64::new(0),
             streaming_worker: Mutex::new(None),
@@ -326,6 +329,7 @@ fn setup_app(
     model_setup::spawn_download_and_init(app.handle().clone(), engine, model);
     input::spawn_global_input_listener(app.handle().clone());
     dictation_trigger::spawn(app.handle().clone());
+    idle_unload::spawn(app.handle().clone());
     local_api::spawn(app.handle().clone());
     updater::spawn_startup_check(app.handle().clone());
     spawn_project_index(app.handle().clone());

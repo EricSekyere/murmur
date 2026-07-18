@@ -102,6 +102,25 @@ fn start_session(app: &tauri::AppHandle, state: &AppState, generation: u64) {
         .engine_loaded
         .load(std::sync::atomic::Ordering::Acquire)
     {
+        // Idle-unloaded (or panic-dropped) engine: kick the reload now so the
+        // "still loading" moment below ends by itself — the UX is exactly the
+        // startup load (progress events, then model-changed ready). The swap
+        // makes the kick one-shot even across rapid activations.
+        if state
+            .idle_unloaded
+            .swap(false, std::sync::atomic::Ordering::AcqRel)
+        {
+            let model = state
+                .settings
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .model;
+            crate::model_setup::spawn_download_and_init(
+                app.clone(),
+                std::sync::Arc::clone(&state.engine),
+                model,
+            );
+        }
         release_if_current(app, state, generation);
         emit_hotkey_error(app, "Model still loading, please wait");
         return;
@@ -202,6 +221,45 @@ struct SessionStats {
     saw_signal: bool,
     had_phrase_audio: bool,
     saw_no_signal: bool,
+}
+
+/// Session-constant delivery parameters, bundled so the phrase pipeline
+/// doesn't thread each one separately.
+#[derive(Clone, Copy)]
+struct DeliveryContext {
+    output_mode: OutputMode,
+    /// Caption anchor when delivered phrases show a translated caption.
+    translated_caption: Option<crate::caption::CaptionAnchor>,
+    /// Window dictation started in — the delivery target (Windows).
+    #[cfg(windows)]
+    previous_hwnd: usize,
+}
+
+/// Whether a delivery is ordinary dictation, eligible for punctuation
+/// junction repair, or special output (literal escape, commit line, snippet
+/// expansion, clipboard substitution) that must never be repaired and blocks
+/// repairing the following phrase against it.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PhraseKind {
+    PlainDictation,
+    Special,
+}
+
+/// Record of the previous delivery in this session, consulted before typing
+/// the next phrase to decide a punctuation junction repair. Worker-local:
+/// delivery is strictly sequential inside `streaming_worker`, and a fresh
+/// worker per session gives session isolation for free.
+struct LastDelivery {
+    /// The delivered text, trimmed (the on-screen text minus the trailing
+    /// auto-space). Held in memory only — never logged.
+    text: String,
+    delivered_at: Instant,
+    /// Whether the delivery typed keystrokes (Auto/Keyboard modes).
+    typed: bool,
+    kind: PhraseKind,
+    /// Target window the delivery went to (Windows).
+    #[cfg(windows)]
+    target_hwnd: usize,
 }
 
 /// Background thread: receive phrases from the audio worker, transcribe
@@ -338,21 +396,19 @@ fn streaming_worker(app: &tauri::AppHandle, generation: u64) {
     let mut preview = (live_preview && engine_can_preview)
         .then(|| crate::preview::spawn(app.clone(), caption_target));
 
+    let ctx = DeliveryContext {
+        output_mode,
+        translated_caption,
+        #[cfg(windows)]
+        previous_hwnd,
+    };
     let mut stats = SessionStats::default();
+    let mut last_delivery: Option<LastDelivery> = None;
     loop {
         match audio.recv_result() {
             Ok(AudioResult::PhraseReady(buffer)) => {
                 stats.had_phrase_audio = true;
-                handle_phrase(
-                    app,
-                    &state,
-                    &buffer,
-                    output_mode,
-                    translated_caption,
-                    #[cfg(windows)]
-                    previous_hwnd,
-                    &mut stats,
-                );
+                handle_phrase(app, &state, &buffer, &ctx, &mut stats, &mut last_delivery);
             }
             Ok(AudioResult::PartialPhrase(buffer)) => {
                 if let Some((tx, _)) = &preview {
@@ -410,16 +466,13 @@ fn streaming_worker(app: &tauri::AppHandle, generation: u64) {
 
 /// Transcribe one phrase and deliver the result. Phrases that arrive after
 /// a manual stop are still delivered — the speech already happened.
-/// `translated_caption` carries the caption anchor when the delivered phrase's
-/// translated text should be shown in the roaming caption.
 fn handle_phrase(
     app: &tauri::AppHandle,
     state: &AppState,
     buffer: &murmur_core::audio::AudioBuffer,
-    output_mode: OutputMode,
-    translated_caption: Option<crate::caption::CaptionAnchor>,
-    #[cfg(windows)] previous_hwnd: usize,
+    ctx: &DeliveryContext,
     stats: &mut SessionStats,
+    last_delivery: &mut Option<LastDelivery>,
 ) {
     tracing::info!(
         "Phrase ready: {} samples ({:.1}s)",
@@ -437,6 +490,8 @@ fn handle_phrase(
             .suppress_output
             .load(std::sync::atomic::Ordering::Acquire)
         {
+            // No coherent previous delivery to join onto after skipped output.
+            *last_delivery = None;
             let _ = app.emit(
                 "streaming-phrase",
                 serde_json::json!({ "text": text, "processing_time_ms": processing_time_ms }),
@@ -458,6 +513,8 @@ fn handle_phrase(
             .command_mode
             .load(std::sync::atomic::Ordering::Acquire)
         {
+            // A command may edit arbitrary text; don't repair across it.
+            *last_delivery = None;
             crate::caption::hide(app);
             let _ = app.emit("command-transcript", serde_json::json!({ "text": &text }));
             let still_recording = *state.recording.lock().unwrap_or_else(|e| e.into_inner());
@@ -476,11 +533,10 @@ fn handle_phrase(
                 app,
                 state,
                 &literal_text,
-                output_mode,
+                ctx,
                 processing_time_ms,
-                translated_caption,
-                #[cfg(windows)]
-                previous_hwnd,
+                PhraseKind::Special,
+                last_delivery,
             );
         } else {
             match voice_commands::parse(&text) {
@@ -494,11 +550,10 @@ fn handle_phrase(
                             app,
                             state,
                             &commit_line,
-                            output_mode,
+                            ctx,
                             processing_time_ms,
-                            translated_caption,
-                            #[cfg(windows)]
-                            previous_hwnd,
+                            PhraseKind::Special,
+                            last_delivery,
                         );
                     } else {
                         // A user snippet expands to its replacement text; otherwise
@@ -529,6 +584,14 @@ fn handle_phrase(
                                     }
                                 }
                             });
+                        // Snippet/clipboard rewrites are not the user's spoken
+                        // sentence, so junction repair skips them; a spoken
+                        // emoji substitution keeps the sentence intact.
+                        let kind = if expansion.is_none() && substituted.is_none() {
+                            PhraseKind::PlainDictation
+                        } else {
+                            PhraseKind::Special
+                        };
                         let delivered = substituted.as_deref().unwrap_or(delivered);
                         // Spoken emoji ("emoji fire" -> 🔥) composes after
                         // clipboard substitution; None means no emoji spoken.
@@ -537,11 +600,10 @@ fn handle_phrase(
                             app,
                             state,
                             with_emoji.as_deref().unwrap_or(delivered),
-                            output_mode,
+                            ctx,
                             processing_time_ms,
-                            translated_caption,
-                            #[cfg(windows)]
-                            previous_hwnd,
+                            kind,
+                            last_delivery,
                         );
                     }
                 }
@@ -549,6 +611,9 @@ fn handle_phrase(
                     // A command isn't phrase text, so there is nothing to caption.
                     crate::caption::hide(app);
                     execute_command(app, state, command);
+                    // The command edited the target (enter, backspaces, ...):
+                    // the previous delivery no longer ends at the caret.
+                    *last_delivery = None;
                 }
             }
         }
@@ -569,39 +634,45 @@ fn deliver_text(
     app: &tauri::AppHandle,
     state: &AppState,
     text: &str,
-    output_mode: OutputMode,
+    ctx: &DeliveryContext,
     processing_time_ms: u64,
-    translated_caption: Option<crate::caption::CaptionAnchor>,
-    #[cfg(windows)] previous_hwnd: usize,
+    kind: PhraseKind,
+    last_delivery: &mut Option<LastDelivery>,
 ) {
-    deliver_output(
-        app,
-        state,
-        text,
-        output_mode,
-        #[cfg(windows)]
-        previous_hwnd,
-    );
+    // A repaired junction has already backspaced the previous phrase's mark
+    // and space; the phrase then lands lowercased with joining spaces.
+    let repaired = attempt_junction_repair(state, text, ctx, kind, last_delivery.as_ref());
+    let join = match repaired {
+        Some(_) => crate::focus::TextJoin::Joining,
+        None => crate::focus::TextJoin::Phrase,
+    };
+    let text: &str = repaired.as_deref().unwrap_or(text);
 
-    // Focused modes append a trailing space (dispatch_output); clipboard-only
-    // doesn't type, so there is nothing to scratch. Count grapheme clusters,
-    // not scalar values or UTF-16 units, so one backspace per visible character:
-    // emoji, combining marks, and newlines in a snippet expansion each erase as
-    // one. This is correct for grapheme-aware targets (browsers, Electron
-    // editors, terminals — the developer audience). A legacy Win32 Edit control
-    // deletes one UTF-16 unit per backspace, so it would under-delete a
-    // multi-unit grapheme and leave a visible stray glyph — the safer failure
-    // mode than over-deleting real text the user did not intend to remove.
-    let delivered = if matches!(output_mode, OutputMode::Clipboard | OutputMode::Stdout) {
+    deliver_output(app, state, text, ctx, join);
+
+    // Focused modes append a trailing space (dispatch_output) — and a leading
+    // one on a repaired junction; clipboard-only doesn't type, so there is
+    // nothing to scratch. Count grapheme clusters, not scalar values or UTF-16
+    // units, so one backspace per visible character: emoji, combining marks,
+    // and newlines in a snippet expansion each erase as one. This is correct
+    // for grapheme-aware targets (browsers, Electron editors, terminals — the
+    // developer audience). A legacy Win32 Edit control deletes one UTF-16 unit
+    // per backspace, so it would under-delete a multi-unit grapheme and leave
+    // a visible stray glyph — the safer failure mode than over-deleting real
+    // text the user did not intend to remove.
+    let spaces = if repaired.is_some() { 2 } else { 1 };
+    let delivered = if matches!(ctx.output_mode, OutputMode::Clipboard | OutputMode::Stdout) {
         0
     } else {
-        text.trim().graphemes(true).count() + 1
+        text.trim().graphemes(true).count() + spaces
     };
     *state
         .last_delivered_len
         .lock()
         .unwrap_or_else(|e| e.into_inner()) = delivered;
 
+    // History, events, and captions all mirror what actually landed on
+    // screen, so a repaired junction records the lowercased text.
     record_history(state, text);
 
     let _ = app.emit(
@@ -609,13 +680,81 @@ fn deliver_text(
         serde_json::json!({ "text": text, "processing_time_ms": processing_time_ms }),
     );
 
+    *last_delivery = Some(LastDelivery {
+        text: text.trim().to_string(),
+        delivered_at: Instant::now(),
+        typed: matches!(ctx.output_mode, OutputMode::Auto | OutputMode::Keyboard),
+        kind,
+        #[cfg(windows)]
+        target_hwnd: ctx.previous_hwnd,
+    });
+
     // The phrase has landed in the target. Normally the caption clears until
     // the next phrase's first partial; with translated captions active it
     // instead shows the final English rendering for a reading-time hold.
-    match &translated_caption {
+    match &ctx.translated_caption {
         Some(anchor) => crate::caption::show_final(app, anchor, text),
         None => crate::caption::hide(app),
     }
+}
+
+/// Decide a punctuation junction repair against the previous delivery and,
+/// when it applies, perform the backspace half (removing the stale terminal
+/// mark and its trailing space). Returns the replacement text to deliver
+/// with joining spaces, or None to deliver unchanged (every gate failure
+/// falls back to today's behavior). See `murmur_core::dictation_junction`.
+fn attempt_junction_repair(
+    state: &AppState,
+    text: &str,
+    ctx: &DeliveryContext,
+    kind: PhraseKind,
+    prev: Option<&LastDelivery>,
+) -> Option<String> {
+    use murmur_core::dictation_junction::{JunctionAction, JunctionGates, junction_action};
+
+    let prev = prev?;
+    let enabled = state
+        .settings
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .smart_punctuation;
+
+    // The repair backspaces into text we typed earlier, so it must only run
+    // when the caret is still where we left it: same target window, still in
+    // the foreground. v1 can verify that only on Windows; elsewhere the gate
+    // is unsatisfiable and delivery proceeds unchanged.
+    #[cfg(windows)]
+    let same_target = prev.target_hwnd != 0
+        && prev.target_hwnd == ctx.previous_hwnd
+        && crate::focus::foreground_window() == prev.target_hwnd
+        && !crate::focus::is_own_window(prev.target_hwnd);
+    #[cfg(not(windows))]
+    let same_target = false;
+
+    let gates = JunctionGates {
+        enabled,
+        prev_typed: prev.typed,
+        prev_plain_dictation: prev.kind == PhraseKind::PlainDictation,
+        next_plain_dictation: kind == PhraseKind::PlainDictation,
+        typing_mode: matches!(ctx.output_mode, OutputMode::Auto | OutputMode::Keyboard),
+        same_target,
+    };
+    let action = junction_action(&prev.text, text, prev.delivered_at.elapsed(), &gates);
+    let JunctionAction::Repair {
+        backspaces,
+        replacement,
+    } = action
+    else {
+        return None;
+    };
+
+    // Booleans/counts only — phrase text never reaches the log.
+    tracing::debug!(backspaces, "repairing punctuation junction");
+    if let Err(e) = murmur_core::output::keyboard::press_backspace(backspaces) {
+        tracing::warn!("Junction backspace failed; delivering unchanged: {}", e);
+        return None;
+    }
+    Some(replacement)
 }
 
 /// Append a delivered phrase to the persistent history and per-day insights
@@ -722,8 +861,8 @@ fn deliver_output(
     app: &tauri::AppHandle,
     state: &AppState,
     text: &str,
-    output_mode: OutputMode,
-    #[cfg(windows)] previous_hwnd: usize,
+    ctx: &DeliveryContext,
+    join: crate::focus::TextJoin,
 ) {
     #[cfg(not(windows))]
     let _ = state;
@@ -737,9 +876,10 @@ fn deliver_output(
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         crate::focus::output_text(
             text,
-            output_mode,
+            ctx.output_mode,
+            join,
             #[cfg(windows)]
-            previous_hwnd,
+            ctx.previous_hwnd,
             #[cfg(windows)]
             last_external_hwnd,
         )
@@ -766,6 +906,8 @@ fn finish_streaming(
     keep_final_caption: bool,
     generation: u64,
 ) {
+    // A session just ended: restart the model idle-unload clock from here.
+    crate::idle_unload::touch(state);
     // A superseded worker (the user already stopped and restarted) must not play
     // the stop cue, surface this session's diagnostics, or clear the live
     // session's flag/UI. release_if_current clears the flag iff still current.

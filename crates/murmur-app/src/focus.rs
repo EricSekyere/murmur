@@ -9,11 +9,21 @@ use murmur_core::output::OutputMode;
 #[cfg(windows)]
 use crate::state::AppState;
 
+/// How dispatched text is spaced relative to surrounding text.
+pub(crate) enum TextJoin {
+    /// Normal dictation: the phrase plus a trailing space.
+    Phrase,
+    /// Junction repair: leading + trailing space, splicing onto text whose
+    /// terminal mark and space were just backspaced away.
+    Joining,
+}
+
 /// Output transcribed text according to the configured output mode,
 /// restoring focus to the user's target window first when necessary.
 pub(crate) fn output_text(
     text: &str,
     mode: OutputMode,
+    join: TextJoin,
     #[cfg(windows)] previous_hwnd: usize,
     #[cfg(windows)] last_external_hwnd: usize,
 ) -> anyhow::Result<()> {
@@ -29,7 +39,10 @@ pub(crate) fn output_text(
         }
     }
 
-    murmur_core::output::dispatch_output(text, mode)
+    match join {
+        TextJoin::Phrase => murmur_core::output::dispatch_output(text, mode),
+        TextJoin::Joining => murmur_core::output::dispatch_joining(text, mode),
+    }
 }
 
 /// Make sure the window dictation started in receives the text. With a real

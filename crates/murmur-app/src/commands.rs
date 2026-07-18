@@ -3,8 +3,9 @@
 use std::sync::Arc;
 
 use murmur_core::config::settings::{
-    MAX_DAILY_WORD_GOAL, PHRASE_PAUSE_MAX_SECS, PHRASE_PAUSE_MIN_SECS, SESSION_TIMEOUT_MAX_SECS,
-    VAD_THRESHOLD_MAX, VAD_THRESHOLD_MIN,
+    MAX_DAILY_WORD_GOAL, MODEL_IDLE_UNLOAD_MAX_SECS, MODEL_IDLE_UNLOAD_MIN_SECS,
+    PHRASE_PAUSE_MAX_SECS, PHRASE_PAUSE_MIN_SECS, SESSION_TIMEOUT_MAX_SECS, VAD_THRESHOLD_MAX,
+    VAD_THRESHOLD_MIN,
 };
 use murmur_core::config::{AppProfile, PathAlias, Settings, TranscriptionProfile};
 use murmur_core::output::OutputMode;
@@ -73,6 +74,7 @@ pub(crate) fn get_status(state: State<'_, AppState>) -> serde_json::Value {
         "transcription_profile": settings.transcription_profile,
         "phrase_pause_secs": settings.phrase_pause_secs,
         "session_timeout_secs": settings.session_timeout_secs,
+        "model_idle_unload_secs": settings.model_idle_unload_secs,
         "daily_word_goal": settings.daily_word_goal,
         "click_to_stop": settings.click_to_stop,
         "show_widget": settings.show_widget,
@@ -97,6 +99,7 @@ pub(crate) fn get_status(state: State<'_, AppState>) -> serde_json::Value {
         "caption_position": settings.caption_position,
         "save_history": settings.save_history,
         "clean_speech": settings.clean_speech,
+        "smart_punctuation": settings.smart_punctuation,
         "mcp_dictation_enabled": settings.mcp_dictation_enabled,
         "local_api_enabled": settings.local_api_enabled,
         "mic_warm_start": settings.mic_warm_start,
@@ -394,6 +397,7 @@ pub(crate) fn update_settings(
     transcription_profile: Option<String>,
     phrase_pause_secs: Option<f32>,
     session_timeout_secs: Option<f32>,
+    model_idle_unload_secs: Option<u64>,
     daily_word_goal: Option<usize>,
     click_to_stop: Option<bool>,
     show_widget: Option<bool>,
@@ -412,6 +416,7 @@ pub(crate) fn update_settings(
     caption_position: Option<String>,
     save_history: Option<bool>,
     clean_speech: Option<bool>,
+    smart_punctuation: Option<bool>,
     mcp_dictation_enabled: Option<bool>,
     local_api_enabled: Option<bool>,
     context_injection_enabled: Option<bool>,
@@ -453,6 +458,15 @@ pub(crate) fn update_settings(
             ));
         }
         settings.session_timeout_secs = st;
+    }
+    if let Some(idle) = model_idle_unload_secs {
+        if idle != 0 && !(MODEL_IDLE_UNLOAD_MIN_SECS..=MODEL_IDLE_UNLOAD_MAX_SECS).contains(&idle) {
+            return Err(format!(
+                "model_idle_unload_secs must be 0 (never) or {}-{}, got {}",
+                MODEL_IDLE_UNLOAD_MIN_SECS, MODEL_IDLE_UNLOAD_MAX_SECS, idle
+            ));
+        }
+        settings.model_idle_unload_secs = idle;
     }
     if let Some(goal) = daily_word_goal {
         if goal > MAX_DAILY_WORD_GOAL {
@@ -597,6 +611,9 @@ pub(crate) fn update_settings(
     }
     if let Some(cs) = clean_speech {
         settings.clean_speech = cs;
+    }
+    if let Some(sp) = smart_punctuation {
+        settings.smart_punctuation = sp;
     }
     if let Some(md) = mcp_dictation_enabled {
         settings.mcp_dictation_enabled = md;
