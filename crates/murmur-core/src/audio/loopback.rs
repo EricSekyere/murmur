@@ -53,10 +53,13 @@ use std::sync::{Arc, Mutex};
 /// WASAPI callback never reallocates while appending (a reallocating `Vec` on
 /// the audio thread is the classic dropout cause). Loopback sessions can run
 /// long, so this is a high-water mark, not a limit.
+// Windows-only alongside the real `start()`: the stub path opens no stream.
+#[cfg(windows)]
 const RESERVE_SECS: usize = 30;
 
 /// Hard cap on the live buffer so a stalled consumer can never grow it without
 /// bound (or OOM) on the realtime thread. Well above the reserve.
+#[cfg(windows)]
 const MAX_BUFFER_SECS: usize = 60;
 
 /// Captures the system render mix (what is playing out of the speakers) via
@@ -222,6 +225,7 @@ impl LoopbackCapture {
 
     /// Clear the live buffer and pre-reserve [`RESERVE_SECS`] of capacity at the
     /// current native config so the realtime callback never reallocates.
+    #[cfg(windows)]
     fn prepare_buffer(&self) {
         let reserve =
             RESERVE_SECS * self.native_rate as usize * self.native_channels.max(1) as usize;

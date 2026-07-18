@@ -155,3 +155,9 @@ windows = { version = "0.58", features = [
     "Win32_System_Com",
     "Win32_System_Threading",
 ] }
+
+# The loopback probe drives audio::loopback, which only exists with `audio`;
+# required-features makes cargo skip it (instead of failing) without them.
+[[example]]
+name = "loopback_probe"
+required-features = ["audio"]
