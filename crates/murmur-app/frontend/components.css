@@ -1998,3 +1998,66 @@ footer {
   flex: 0 1 200px;
 }
 
+
+/* ─── Meetings ──────────────────────────────────────────────────────────────
+   Start/Stop control with a recording indicator, the live chunk transcript,
+   and the saved-meetings list (which reuses the history list styles).
+   ──────────────────────────────────────────────────────────────────────────── */
+#meetings-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+#meetings-panel[hidden] {
+  display: none;
+}
+
+.meeting-controls {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.meeting-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.85rem;
+  color: var(--color-text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.meeting-indicator__dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--color-record);
+  animation: meeting-dot 1.2s ease-in-out infinite;
+}
+
+@keyframes meeting-dot {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .meeting-indicator__dot { animation: none; }
+}
+
+.meeting-audio-badge {
+  font-size: 0.72rem;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--color-record-dim);
+  color: var(--color-record);
+  white-space: nowrap;
+}
+
+.meeting-live {
+  overflow-y: auto;
+}
+
+.meeting-live__line {
+  margin-bottom: 4px;
+}

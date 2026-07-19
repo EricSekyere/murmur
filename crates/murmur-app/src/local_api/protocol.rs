@@ -24,6 +24,12 @@ pub(crate) struct ApiEvent {
 pub(crate) trait ApiBackend: Send + Sync {
     fn toggle_recording(&self);
     fn status(&self) -> Value;
+    /// Start recording a meeting; `Err` carries the refusal reason (already
+    /// recording, dictation active, model still loading).
+    fn start_meeting(&self) -> Result<(), String>;
+    /// Signal the running meeting to stop. Returns as soon as shutdown is
+    /// underway; the final chunk transcribes and saves in the background.
+    fn stop_meeting(&self) -> Result<(), String>;
 }
 
 /// A parsed client frame.
@@ -102,6 +108,14 @@ fn handle_request(backend: &dyn ApiBackend, id: &Value, method: &str) -> String 
             response_ok(id, json!({ "ok": true }))
         }
         "get_status" => response_ok(id, backend.status()),
+        "start_meeting" => match backend.start_meeting() {
+            Ok(()) => response_ok(id, json!({ "ok": true })),
+            Err(reason) => response_error(id, &reason),
+        },
+        "stop_meeting" => match backend.stop_meeting() {
+            Ok(()) => response_ok(id, json!({ "ok": true })),
+            Err(reason) => response_error(id, &reason),
+        },
         other => response_error(id, &format!("unknown method: {other}")),
     }
 }
@@ -139,6 +153,14 @@ mod tests {
 
         fn status(&self) -> Value {
             json!({ "recording": true, "processing": false })
+        }
+
+        fn start_meeting(&self) -> Result<(), String> {
+            Ok(())
+        }
+
+        fn stop_meeting(&self) -> Result<(), String> {
+            Err("No meeting is being recorded".to_string())
         }
     }
 
@@ -255,6 +277,24 @@ mod tests {
             })
         );
         assert_eq!(backend.toggles.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn meeting_methods_route_and_surface_refusals() {
+        let backend = MockBackend::new();
+        let ok = as_json(&handle_client_text(
+            &backend,
+            r#"{"type":"request","id":5,"method":"start_meeting"}"#,
+        ));
+        assert_eq!(ok["result"], json!({ "ok": true }));
+        // The mock refuses stop like the app does with no meeting running;
+        // refusals surface as error responses, never closed connections.
+        let refused = as_json(&handle_client_text(
+            &backend,
+            r#"{"type":"request","id":6,"method":"stop_meeting"}"#,
+        ));
+        assert_eq!(refused["id"], 6);
+        assert_eq!(refused["error"], "No meeting is being recorded");
     }
 
     #[test]

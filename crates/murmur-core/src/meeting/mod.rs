@@ -16,6 +16,8 @@
 //! core the app layer will drive.
 
 pub mod assembly;
+pub mod mixer;
+pub mod record;
 
 #[cfg(feature = "diarization")]
 mod diarize;

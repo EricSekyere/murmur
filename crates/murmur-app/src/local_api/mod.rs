@@ -100,6 +100,54 @@ impl ApiBackend for TauriBackend {
         crate::session::handle_toggle(&self.app);
     }
 
+    fn start_meeting(&self) -> Result<(), String> {
+        let state = self
+            .app
+            .try_state::<AppState>()
+            .ok_or("app state unavailable")?;
+        // Same claim discipline as the meeting_commands entry point: evaluate
+        // the blocker and set the flag under the recording lock, so a racing
+        // dictation toggle sees a consistent pair.
+        let recording = state.recording.lock().unwrap_or_else(|e| e.into_inner());
+        let blocker = crate::meeting_worker::meeting_start_blocker(
+            *recording,
+            state
+                .meeting_active
+                .load(std::sync::atomic::Ordering::Acquire),
+            state
+                .engine_loaded
+                .load(std::sync::atomic::Ordering::Acquire),
+        );
+        if let Some(reason) = blocker {
+            return Err(reason.to_string());
+        }
+        state
+            .meeting_active
+            .store(true, std::sync::atomic::Ordering::Release);
+        drop(recording);
+        let handle = crate::meeting_worker::spawn(self.app.clone());
+        *state.meeting.lock().unwrap_or_else(|e| e.into_inner()) = Some(handle);
+        Ok(())
+    }
+
+    fn stop_meeting(&self) -> Result<(), String> {
+        let state = self
+            .app
+            .try_state::<AppState>()
+            .ok_or("app state unavailable")?;
+        let handle = state
+            .meeting
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take()
+            .ok_or("No meeting is being recorded")?;
+        // Fire-and-forget shutdown: the final chunk may take seconds of
+        // inference, and this trait method must not block the client's
+        // event pump. The worker saves the record on its own thread.
+        tauri::async_runtime::spawn_blocking(move || handle.stop_and_join());
+        Ok(())
+    }
+
     fn status(&self) -> Value {
         let Some(state) = self.app.try_state::<AppState>() else {
             return serde_json::json!({ "recording": false, "processing": false });

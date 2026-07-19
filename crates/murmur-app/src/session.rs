@@ -98,6 +98,21 @@ fn stop_session(app: &tauri::AppHandle, state: &AppState) {
 fn start_session(app: &tauri::AppHandle, state: &AppState, generation: u64) {
     // The caller has already claimed the recording flag; release it on any
     // path that does not actually start a session.
+    //
+    // A live meeting owns the mic and the STT engine — dictation must wait.
+    // (start_meeting checks `recording` under the same lock the callers used
+    // to claim it, so the two modes can never both start.)
+    if state
+        .meeting_active
+        .load(std::sync::atomic::Ordering::Acquire)
+    {
+        release_if_current(app, state, generation);
+        emit_hotkey_error(
+            app,
+            "Stop the meeting first — dictation is paused while a meeting is recording",
+        );
+        return;
+    }
     if !state
         .engine_loaded
         .load(std::sync::atomic::Ordering::Acquire)

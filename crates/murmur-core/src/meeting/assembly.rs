@@ -14,13 +14,18 @@ use super::SpeakerSegment;
 ///
 /// This is the assembly input, decoupled from the STT engine's centisecond
 /// [`crate::stt::engine::Segment`]; a `From` conversion bridges the two.
-#[derive(Debug, Clone, PartialEq)]
+/// Serde derives let [`super::record`] persist meeting transcripts as-is;
+/// `#[serde(default)]` keeps old record files loadable if fields grow.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct TranscriptSegment {
     /// Segment start, seconds from the audio start.
+    #[serde(default)]
     pub start_secs: f32,
     /// Segment end, seconds from the audio start.
+    #[serde(default)]
     pub end_secs: f32,
     /// The segment's transcribed text.
+    #[serde(default)]
     pub text: String,
 }
 

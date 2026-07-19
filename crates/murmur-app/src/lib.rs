@@ -17,6 +17,8 @@ mod focus;
 mod idle_unload;
 mod input;
 mod local_api;
+mod meeting_commands;
+mod meeting_worker;
 mod model_setup;
 pub mod native_actions;
 mod preview;
@@ -161,6 +163,8 @@ pub fn run() -> anyhow::Result<()> {
             last_activity: Mutex::new(Instant::now()),
             idle_unloaded: std::sync::atomic::AtomicBool::new(false),
             recording: Mutex::new(false),
+            meeting_active: std::sync::atomic::AtomicBool::new(false),
+            meeting: Mutex::new(None),
             session_generation: std::sync::atomic::AtomicU64::new(0),
             streaming_worker: Mutex::new(None),
             settings: Mutex::new(settings),
@@ -224,6 +228,12 @@ pub fn run() -> anyhow::Result<()> {
             commands::get_records,
             commands::get_daily_activity,
             commands::learn_vocabulary,
+            meeting_commands::start_meeting,
+            meeting_commands::stop_meeting,
+            meeting_commands::list_meetings,
+            meeting_commands::get_meeting,
+            meeting_commands::export_meeting,
+            meeting_commands::delete_meeting,
             command_mode::run_command,
             command_mode::confirm_pending,
             command_mode::cancel_pending,
