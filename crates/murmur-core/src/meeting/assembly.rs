@@ -14,13 +14,18 @@ use super::SpeakerSegment;
 ///
 /// This is the assembly input, decoupled from the STT engine's centisecond
 /// [`crate::stt::engine::Segment`]; a `From` conversion bridges the two.
-#[derive(Debug, Clone, PartialEq)]
+/// Serde derives let [`super::record`] persist meeting transcripts as-is;
+/// `#[serde(default)]` keeps old record files loadable if fields grow.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct TranscriptSegment {
     /// Segment start, seconds from the audio start.
+    #[serde(default)]
     pub start_secs: f32,
     /// Segment end, seconds from the audio start.
+    #[serde(default)]
     pub end_secs: f32,
     /// The segment's transcribed text.
+    #[serde(default)]
     pub text: String,
 }
 
@@ -47,7 +52,9 @@ impl From<&crate::stt::engine::Segment> for TranscriptSegment {
 }
 
 /// A contiguous run of transcript attributed to a single speaker.
-#[derive(Debug, Clone, PartialEq)]
+/// Serialize lets the app hand precomputed blocks straight to the frontend,
+/// so the UI never reimplements speaker assignment.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct LabeledBlock {
     /// The attributed 0-based speaker, or `None` when no diarization span
     /// overlapped any of the block's segments.

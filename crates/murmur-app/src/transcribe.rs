@@ -311,7 +311,18 @@ fn run_engine(
             emit_diag(app, "rejected", "engine_empty", prepared);
             None
         }
-        Ok(result) => {
+        Ok(mut result) => {
+            // Vocabulary correction runs on the output of BOTH engines:
+            // whisper keeps its prompt biasing (this fixes what biasing
+            // missed), and Parakeet has no biasing API at all, so this is
+            // the only way the Personal Dictionary reaches it.
+            let (corrected, corrections) =
+                murmur_core::vocab_correct::correct_counted(&result.text, vocabulary);
+            if corrections > 0 {
+                // Count only: transcript content never appears above trace.
+                tracing::debug!(corrections, "applied vocabulary corrections");
+                result.text = corrected;
+            }
             tracing::info!(
                 "Engine returned {} chars ({}ms, {} segments)",
                 result.text.chars().count(),

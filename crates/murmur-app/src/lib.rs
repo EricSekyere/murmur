@@ -17,6 +17,8 @@ mod focus;
 mod idle_unload;
 mod input;
 mod local_api;
+mod meeting_commands;
+mod meeting_worker;
 mod model_setup;
 pub mod native_actions;
 mod preview;
@@ -161,6 +163,8 @@ pub fn run() -> anyhow::Result<()> {
             last_activity: Mutex::new(Instant::now()),
             idle_unloaded: std::sync::atomic::AtomicBool::new(false),
             recording: Mutex::new(false),
+            meeting_active: std::sync::atomic::AtomicBool::new(false),
+            meeting: Mutex::new(None),
             session_generation: std::sync::atomic::AtomicU64::new(0),
             streaming_worker: Mutex::new(None),
             settings: Mutex::new(settings),
@@ -224,6 +228,14 @@ pub fn run() -> anyhow::Result<()> {
             commands::get_records,
             commands::get_daily_activity,
             commands::learn_vocabulary,
+            meeting_commands::start_meeting,
+            meeting_commands::stop_meeting,
+            meeting_commands::list_meetings,
+            meeting_commands::get_meeting,
+            meeting_commands::export_meeting,
+            meeting_commands::delete_meeting,
+            meeting_commands::summarize_saved_meeting,
+            meeting_commands::download_diarization_model,
             command_mode::run_command,
             command_mode::confirm_pending,
             command_mode::cancel_pending,
@@ -295,6 +307,16 @@ fn setup_app(
     let state = app.state::<AppState>();
     let handle = audio_worker::Handle::spawn(app.handle().clone());
     let _ = state.audio.set(handle);
+
+    // PRIVACY-CRITICAL startup cleanup: a crash mid-meeting can leave the
+    // raw-audio diarization spool (`<meetings dir>/*.audio.tmp`) on disk.
+    // Delete any leftovers before anything else can record.
+    if let Ok(meetings_dir) = murmur_core::meeting::record::MeetingRecord::default_dir() {
+        let removed = murmur_core::meeting::spool::sweep(&meetings_dir);
+        if removed > 0 {
+            tracing::warn!(removed, "Removed leftover meeting audio spool file(s)");
+        }
+    }
 
     // Pre-warm the mic at launch when the user opted in, so even the first
     // dictation of the run skips the cold device open. Send failure only

@@ -229,6 +229,42 @@
             </div>
             <ul id="history-list" class="history-list"></ul>
           </section>
+
+          <!-- Meetings: record both sides of a call, live transcript, saved records -->
+          <section id="meetings-section" class="collapsible">
+            <button class="collapsible__trigger" id="meetings-toggle" aria-expanded="false">
+              <span class="collapsible__title">Meetings</span>
+              <span class="history-count" id="meetings-count" hidden>0</span>
+              <svg class="collapsible__chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <polyline points="6 9 12 15 18 9"/>
+              </svg>
+            </button>
+            <div id="meetings-panel" hidden>
+              <div class="section-header section-header--panel">
+                <h2>Meetings</h2>
+              </div>
+              <span class="settings-hint">
+                Meeting recording captures your microphone AND system audio — what
+                others in the call say through your speakers. Everything stays on
+                this device, and recording starts only when you press Start.
+              </span>
+              <div class="meeting-controls">
+                <button id="meeting-start-btn" class="btn-small" type="button">Start Meeting</button>
+                <span id="meeting-indicator" class="meeting-indicator" hidden>
+                  <span class="meeting-indicator__dot" aria-hidden="true"></span>
+                  <span id="meeting-elapsed">0:00</span>
+                  <span id="meeting-audio-badge" class="meeting-audio-badge">mic + system audio</span>
+                </span>
+              </div>
+              <!-- Speaker-label (diarization) model: shown only when this build supports it -->
+              <div class="meeting-controls" id="meeting-diar-row" hidden>
+                <button id="meeting-diar-btn" class="btn-small" type="button">Enable speaker labels (469 MB download)</button>
+                <span id="meeting-diar-ready" class="settings-hint" hidden>Speaker labels ready — new meetings get per-speaker transcripts.</span>
+              </div>
+              <div id="meeting-live" class="transcription-output meeting-live" hidden aria-live="polite"></div>
+              <ul id="meetings-list" class="history-list"></ul>
+            </div>
+          </section>
         </div>
 
         <!-- ── Analytics View ── -->
@@ -1085,6 +1121,7 @@
   <script src="js/ui.js"></script>
   <script src="js/viz.js"></script>
   <script src="js/transcription.js"></script>
+  <script src="js/meetings.js"></script>
   <script src="js/settings.js"></script>
   <script src="js/analytics.js"></script>
   <script src="js/help.js"></script>

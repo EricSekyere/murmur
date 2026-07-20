@@ -16,6 +16,9 @@
 //! core the app layer will drive.
 
 pub mod assembly;
+pub mod mixer;
+pub mod record;
+pub mod spool;
 
 #[cfg(feature = "diarization")]
 mod diarize;
@@ -32,13 +35,19 @@ pub use summary::summarize_meeting;
 /// Speaker indices are 0-based and stable within a single diarization run
 /// (Sortformer v2 resolves up to four speakers). Produced by [`diarize`] and
 /// consumed by [`assembly`]; kept free of any backend type so the assembly
-/// logic tests without the `diarization` feature.
-#[derive(Debug, Clone, PartialEq)]
+/// logic tests without the `diarization` feature. Serde derives let
+/// [`record`] persist speaker spans; `#[serde(default)]` keeps old record
+/// files loadable if fields grow (same convention as
+/// [`assembly::TranscriptSegment`]).
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SpeakerSegment {
     /// Segment start, seconds from the audio start.
+    #[serde(default)]
     pub start_secs: f32,
     /// Segment end, seconds from the audio start.
+    #[serde(default)]
     pub end_secs: f32,
     /// 0-based speaker index within this run.
+    #[serde(default)]
     pub speaker: u32,
 }
