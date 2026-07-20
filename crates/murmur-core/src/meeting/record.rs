@@ -10,15 +10,16 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
-use super::assembly::TranscriptSegment;
+use super::SpeakerSegment;
+use super::assembly::{self, TranscriptSegment};
 
 /// Bumped when the record layout changes incompatibly; readers can branch on
-/// it. `#[serde(default)]` everywhere keeps additive changes version-free.
-pub const SCHEMA_VERSION: u32 = 1;
+/// it. `#[serde(default)]` everywhere keeps additive changes version-free:
+/// v2 added `speakers` + `summary`, and v1 files still load with both empty.
+pub const SCHEMA_VERSION: u32 = 2;
 
-/// One recorded meeting: when it started, how long it ran, and its
-/// timestamped transcript. This is exactly the shape later meeting phases
-/// (diarization, summaries) consume.
+/// One recorded meeting: when it started, how long it ran, its timestamped
+/// transcript, and (v2) optional speaker labels and an on-demand summary.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct MeetingRecord {
     #[serde(default)]
@@ -33,6 +34,13 @@ pub struct MeetingRecord {
     /// Transcript segments with recording-relative timestamps.
     #[serde(default)]
     pub segments: Vec<TranscriptSegment>,
+    /// Whole-meeting diarization spans. Empty means no speaker labels (v1
+    /// record, model absent at recording time, or diarization failed).
+    #[serde(default)]
+    pub speakers: Vec<SpeakerSegment>,
+    /// On-demand local-LLM summary; `None` until the user requests one.
+    #[serde(default)]
+    pub summary: Option<String>,
 }
 
 impl MeetingRecord {
@@ -43,6 +51,8 @@ impl MeetingRecord {
             started_ms,
             duration_secs: 0.0,
             segments: Vec::new(),
+            speakers: Vec::new(),
+            summary: None,
         }
     }
 
@@ -113,19 +123,35 @@ impl MeetingRecord {
     }
 }
 
-/// Render a record as Markdown: a date-stamped title, then one
-/// `[mm:ss - mm:ss] text` line per segment. Pure and deterministic (the date
-/// is UTC — std exposes no timezone) so the format is exact-tested.
+/// Render a record as Markdown: a date-stamped title, an optional
+/// `## Summary` section, then the transcript — speaker-labeled
+/// `Speaker N: text` blocks when diarization ran, else the v1
+/// `[mm:ss - mm:ss] text` lines. Pure and deterministic (the date is UTC —
+/// std exposes no timezone) so the format is exact-tested.
 pub fn export_markdown(record: &MeetingRecord) -> String {
     let (y, mo, d, h, mi) = utc_datetime(record.started_ms);
     let mut out = format!("# Meeting — {y:04}-{mo:02}-{d:02} {h:02}:{mi:02} UTC\n\n");
-    for seg in &record.segments {
-        out.push_str(&format!(
-            "[{} - {}] {}\n",
-            format_mm_ss(seg.start_secs),
-            format_mm_ss(seg.end_secs),
-            seg.text.trim()
-        ));
+    if let Some(summary) = record.summary.as_deref().filter(|s| !s.trim().is_empty()) {
+        out.push_str("## Summary\n\n");
+        out.push_str(summary.trim());
+        out.push_str("\n\n");
+    }
+    if record.speakers.is_empty() {
+        for seg in &record.segments {
+            out.push_str(&format!(
+                "[{} - {}] {}\n",
+                format_mm_ss(seg.start_secs),
+                format_mm_ss(seg.end_secs),
+                seg.text.trim()
+            ));
+        }
+    } else {
+        let blocks = assembly::label_transcript(&record.segments, &record.speakers);
+        let body = assembly::format_transcript(&blocks);
+        if !body.is_empty() {
+            out.push_str(&body);
+            out.push('\n');
+        }
     }
     out
 }
@@ -177,7 +203,24 @@ mod tests {
                 TranscriptSegment::new(19.4, 41.0, "Yes, the build is green."),
                 TranscriptSegment::new(61.0, 83.5, "Wrapping up."),
             ],
+            speakers: Vec::new(),
+            summary: None,
         }
+    }
+
+    fn sample_speakers() -> Vec<SpeakerSegment> {
+        vec![
+            SpeakerSegment {
+                start_secs: 0.0,
+                end_secs: 45.0,
+                speaker: 0,
+            },
+            SpeakerSegment {
+                start_secs: 45.0,
+                end_secs: 83.5,
+                speaker: 1,
+            },
+        ]
     }
 
     #[test]
@@ -192,6 +235,49 @@ mod tests {
         assert_eq!(loaded.started_ms, record.started_ms);
         assert_eq!(loaded.duration_secs, record.duration_secs);
         assert_eq!(loaded.segments, record.segments);
+        assert!(loaded.speakers.is_empty());
+        assert_eq!(loaded.summary, None);
+    }
+
+    #[test]
+    fn v2_round_trip_keeps_speakers_and_summary() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let record = MeetingRecord {
+            speakers: sample_speakers(),
+            summary: Some("Two people agreed the build is green.".to_string()),
+            ..sample_record()
+        };
+        let path = record.save_in(dir.path()).expect("save");
+
+        let loaded = MeetingRecord::load(&path).expect("load");
+        assert_eq!(loaded.speakers, record.speakers);
+        assert_eq!(loaded.summary, record.summary);
+    }
+
+    #[test]
+    fn v1_record_json_loads_with_empty_speakers_and_no_summary() {
+        // Exactly the shape Phase 1 wrote: schema_version 1, no speakers or
+        // summary keys at all. Serde defaults must fill them in.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let v1 = r#"{
+            "schema_version": 1,
+            "started_ms": 1768924800000,
+            "duration_secs": 40.0,
+            "segments": [
+                {"start_secs": 0.0, "end_secs": 19.4, "text": "Morning."},
+                {"start_secs": 19.4, "end_secs": 40.0, "text": "Build is green."}
+            ]
+        }"#;
+        let path = dir.path().join("1768924800000.json");
+        std::fs::write(&path, v1).expect("write v1 record");
+
+        let loaded = MeetingRecord::load(&path).expect("load v1");
+        assert_eq!(loaded.schema_version, 1);
+        assert_eq!(loaded.segments.len(), 2);
+        assert!(loaded.speakers.is_empty());
+        assert_eq!(loaded.summary, None);
+        // And the v1 record still exports exactly like Phase 1 did.
+        assert!(export_markdown(&loaded).contains("[00:00 - 00:19] Morning.\n"));
     }
 
     #[test]
@@ -199,7 +285,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = sample_record().save_in(dir.path()).expect("save");
         let raw = std::fs::read_to_string(path).expect("read");
-        assert!(raw.contains("\"schema_version\":1"), "{raw}");
+        assert!(raw.contains("\"schema_version\":2"), "{raw}");
     }
 
     #[test]
@@ -249,6 +335,61 @@ mod tests {
              [00:00 - 00:19] Morning, shall we start?\n\
              [00:19 - 00:41] Yes, the build is green.\n\
              [01:01 - 01:23] Wrapping up.\n"
+        );
+    }
+
+    #[test]
+    fn export_markdown_with_speakers_renders_labeled_blocks() {
+        let record = MeetingRecord {
+            speakers: sample_speakers(),
+            ..sample_record()
+        };
+        assert_eq!(
+            export_markdown(&record),
+            "# Meeting — 2026-01-20 16:00 UTC\n\n\
+             Speaker 1: Morning, shall we start? Yes, the build is green.\n\
+             Speaker 2: Wrapping up.\n"
+        );
+    }
+
+    #[test]
+    fn export_markdown_with_summary_renders_a_summary_section_on_top() {
+        let record = MeetingRecord {
+            summary: Some("Build status reviewed; all green.".to_string()),
+            ..sample_record()
+        };
+        let markdown = export_markdown(&record);
+        assert_eq!(
+            markdown,
+            "# Meeting — 2026-01-20 16:00 UTC\n\n\
+             ## Summary\n\n\
+             Build status reviewed; all green.\n\n\
+             [00:00 - 00:19] Morning, shall we start?\n\
+             [00:19 - 00:41] Yes, the build is green.\n\
+             [01:01 - 01:23] Wrapping up.\n"
+        );
+        // A whitespace-only summary is treated as absent.
+        let blank = MeetingRecord {
+            summary: Some("   ".to_string()),
+            ..sample_record()
+        };
+        assert_eq!(export_markdown(&blank), export_markdown(&sample_record()));
+    }
+
+    #[test]
+    fn export_markdown_with_summary_and_speakers_combines_both() {
+        let record = MeetingRecord {
+            speakers: sample_speakers(),
+            summary: Some("All green.".to_string()),
+            ..sample_record()
+        };
+        assert_eq!(
+            export_markdown(&record),
+            "# Meeting — 2026-01-20 16:00 UTC\n\n\
+             ## Summary\n\n\
+             All green.\n\n\
+             Speaker 1: Morning, shall we start? Yes, the build is green.\n\
+             Speaker 2: Wrapping up.\n"
         );
     }
 

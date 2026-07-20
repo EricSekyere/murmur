@@ -52,7 +52,9 @@ impl From<&crate::stt::engine::Segment> for TranscriptSegment {
 }
 
 /// A contiguous run of transcript attributed to a single speaker.
-#[derive(Debug, Clone, PartialEq)]
+/// Serialize lets the app hand precomputed blocks straight to the frontend,
+/// so the UI never reimplements speaker assignment.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct LabeledBlock {
     /// The attributed 0-based speaker, or `None` when no diarization span
     /// overlapped any of the block's segments.
