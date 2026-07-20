@@ -256,6 +256,11 @@
                   <span id="meeting-audio-badge" class="meeting-audio-badge">mic + system audio</span>
                 </span>
               </div>
+              <!-- Speaker-label (diarization) model: shown only when this build supports it -->
+              <div class="meeting-controls" id="meeting-diar-row" hidden>
+                <button id="meeting-diar-btn" class="btn-small" type="button">Enable speaker labels (469 MB download)</button>
+                <span id="meeting-diar-ready" class="settings-hint" hidden>Speaker labels ready — new meetings get per-speaker transcripts.</span>
+              </div>
               <div id="meeting-live" class="transcription-output meeting-live" hidden aria-live="polite"></div>
               <ul id="meetings-list" class="history-list"></ul>
             </div>

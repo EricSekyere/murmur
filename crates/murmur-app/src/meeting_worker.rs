@@ -10,6 +10,9 @@
 //! Transcript text flows to the frontend and the record file only — never to
 //! the logs.
 
+mod cut;
+mod spool;
+
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -34,10 +37,6 @@ const PULL_TICK: Duration = Duration::from_millis(500);
 const TARGET_CHUNK_SECS: usize = 20;
 /// Never let a single chunk exceed this, whatever the cut scan says.
 const HARD_CAP_SECS: usize = 30;
-/// The cut point is the quietest window in this much trailing audio...
-const CUT_SEARCH_SECS: usize = 5;
-/// ...scanned with an RMS window this long (no VAD dependency).
-const CUT_WINDOW_MS: usize = 200;
 /// Emit a periodic `meeting-state` heartbeat every this many pull ticks (~2s).
 const STATE_EMIT_TICKS: u32 = 4;
 
@@ -72,6 +71,11 @@ pub(crate) fn spawn(app: tauri::AppHandle) -> MeetingHandle {
             let msg = panic_message(panic_info, "unknown panic in meeting worker");
             tracing::error!("Meeting worker panicked: {}", msg);
             crate::state::emit_hotkey_error(&app, &format!("Meeting recording crashed: {}", msg));
+            // Privacy-critical: the panicked session never reached its own
+            // spool cleanup, so its raw-audio spool may still be on disk.
+            if let Ok(dir) = MeetingRecord::default_dir() {
+                murmur_core::meeting::spool::sweep(&dir);
+            }
         }
         if let Some(state) = app.try_state::<AppState>() {
             state.meeting_active.store(false, Ordering::Release);
@@ -95,6 +99,9 @@ struct MeetingSession {
     consumed: u64,
     record: MeetingRecord,
     dir: std::path::PathBuf,
+    /// Raw-audio spool for whole-meeting diarization; `None` when speaker
+    /// labels are impossible (feature off, model missing) or the spool broke.
+    spool: Option<murmur_core::meeting::spool::SpoolWriter>,
 }
 
 fn run_meeting(app: &tauri::AppHandle, stop: &AtomicBool) {
@@ -110,7 +117,7 @@ fn run_meeting(app: &tauri::AppHandle, stop: &AtomicBool) {
         pull_audio(&mut session);
 
         if session.pending.len() >= TARGET_CHUNK_SECS * SAMPLE_RATE {
-            let cut = select_cut_index(&session.pending, SAMPLE_RATE);
+            let cut = cut::select_cut_index(&session.pending, SAMPLE_RATE);
             process_chunk(app, &mut session, cut);
         }
 
@@ -194,6 +201,9 @@ fn open_session(app: &tauri::AppHandle) -> Option<MeetingSession> {
         "Meeting recording started"
     );
 
+    // Last, so no earlier failure path can leak a created spool file.
+    let audio_spool = spool::open_if_ready(&dir, started_ms);
+
     Some(MeetingSession {
         capture,
         loopback,
@@ -202,6 +212,7 @@ fn open_session(app: &tauri::AppHandle) -> Option<MeetingSession> {
         consumed: 0,
         record: MeetingRecord::new(started_ms),
         dir,
+        spool: audio_spool,
     })
 }
 
@@ -232,7 +243,9 @@ fn pull_audio(session: &mut MeetingSession) {
     // Both buffers were drained at the same instant, so the newest loopback
     // sample is aligned with the end of the mic slice: zero lag.
     session.mixer.push(&mic.samples, &sys.samples, 0.0);
-    session.pending.extend(session.mixer.take());
+    let mixed = session.mixer.take();
+    spool::append(&mut session.spool, &mixed);
+    session.pending.extend(mixed);
 }
 
 fn drain_live(buffer: &Arc<Mutex<Vec<f32>>>) -> Vec<f32> {
@@ -292,6 +305,11 @@ fn finish_meeting(app: &tauri::AppHandle, session: &mut MeetingSession) {
         tracing::warn!("Failed to stop system-audio capture: {e:#}");
     }
 
+    // Whole-meeting diarization, after the last transcript chunk and with the
+    // captures already stopped. Deletes the spool on every path; a failure
+    // keeps the transcript-only record.
+    spool::diarize_into(&mut session.record, session.spool.take());
+
     session.record.duration_secs = session.mixer.duration_secs();
     if let Err(e) = session.record.save_in(&session.dir) {
         tracing::warn!("Failed to save final meeting record: {e:#}");
@@ -299,6 +317,7 @@ fn finish_meeting(app: &tauri::AppHandle, session: &mut MeetingSession) {
     tracing::info!(
         duration_secs = session.record.duration_secs,
         segments = session.record.segments.len(),
+        speaker_segments = session.record.speakers.len(),
         "Meeting recording stopped"
     );
 }
@@ -399,84 +418,9 @@ pub(crate) fn meeting_start_blocker(
     }
 }
 
-/// Pick the chunk cut index: the end of the quietest [`CUT_WINDOW_MS`] RMS
-/// window inside the last [`CUT_SEARCH_SECS`] of the (hard-capped) chunk
-/// region, so the cut lands in a speech pause instead of mid-word. Pure, so
-/// it unit-tests on synthetic vectors.
-fn select_cut_index(pending: &[f32], rate: usize) -> usize {
-    let region_end = pending.len().min(HARD_CAP_SECS * rate);
-    let window = (CUT_WINDOW_MS * rate) / 1000;
-    let search_start = region_end.saturating_sub(CUT_SEARCH_SECS * rate);
-    if region_end <= search_start + window {
-        return region_end;
-    }
-
-    // Step at a quarter window: fine enough to find a 200 ms pause, cheap
-    // enough to stay negligible next to inference.
-    let step = (window / 4).max(1);
-    let mut best_end = region_end;
-    let mut best_energy = f32::INFINITY;
-    let mut start = search_start;
-    while start + window <= region_end {
-        let energy: f32 = pending[start..start + window].iter().map(|s| s * s).sum();
-        if energy < best_energy {
-            best_energy = energy;
-            best_end = start + window;
-        }
-        start += step;
-    }
-    best_end
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn cut_prefers_the_quietest_window() {
-        let rate = 1_000; // small synthetic rate keeps vectors tiny
-        // 22 "seconds" of loud audio with one quiet dip inside the last 5.
-        let mut pending = vec![0.5_f32; 22 * rate];
-        let dip_start = 19 * rate;
-        let dip_len = (CUT_WINDOW_MS * rate) / 1000;
-        for s in &mut pending[dip_start..dip_start + dip_len] {
-            *s = 0.0;
-        }
-        let cut = select_cut_index(&pending, rate);
-        assert_eq!(cut, dip_start + dip_len, "cut must end at the quiet dip");
-    }
-
-    #[test]
-    fn cut_on_uniform_audio_lands_in_the_search_region() {
-        let rate = 1_000;
-        let pending = vec![0.3_f32; 22 * rate];
-        let cut = select_cut_index(&pending, rate);
-        assert!(cut > 17 * rate && cut <= 22 * rate, "cut {cut}");
-    }
-
-    #[test]
-    fn cut_never_exceeds_the_hard_cap() {
-        let rate = 1_000;
-        // A stalled loop let 40 "seconds" accumulate; the cut must stay
-        // within the 30-second cap.
-        let pending = vec![0.3_f32; 40 * rate];
-        let cut = select_cut_index(&pending, rate);
-        assert!(cut <= HARD_CAP_SECS * rate, "cut {cut}");
-        assert!(cut > (HARD_CAP_SECS - CUT_SEARCH_SECS) * rate);
-    }
-
-    #[test]
-    fn short_input_cut_stays_in_bounds() {
-        let rate = 1_000;
-        // Shorter than the search region: the scan covers the whole input
-        // and the cut must stay a valid, non-empty index. (The final flush
-        // itself bypasses the scan and drains everything — see
-        // `finish_meeting`.)
-        let pending = vec![0.2_f32; 2 * rate];
-        let cut = select_cut_index(&pending, rate);
-        assert!(cut > 0 && cut <= pending.len(), "cut {cut}");
-        assert_eq!(select_cut_index(&[], rate), 0);
-    }
 
     #[test]
     fn mutual_exclusion_blocks_either_direction() {

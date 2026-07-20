@@ -125,6 +125,12 @@ pub(crate) fn get_status(state: State<'_, AppState>) -> serde_json::Value {
             .command_mode
             .load(std::sync::atomic::Ordering::Acquire),
         "command_hotkey": crate::command_mode::COMMAND_MODE_HOTKEY,
+        // Meeting-mode capabilities, so the UI only shows usable affordances:
+        // Summarize needs the llm feature; the speaker-labels download button
+        // needs the diarization feature, and "ready" means the model is on disk.
+        "meeting_summarize_available": cfg!(feature = "llm"),
+        "meeting_diarization_supported": cfg!(feature = "diarization"),
+        "meeting_diarization_ready": crate::meeting_commands::diarization_model_ready(),
     })
 }
 

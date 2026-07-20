@@ -9,7 +9,17 @@ description = "Core library for Murmur voice-to-text tool"
 [features]
 default = ["audio", "keyboard"]
 # Enable all features (requires cmake + libclang for whisper.cpp, ONNX Runtime for VAD + Parakeet)
-full = ["audio", "stt", "vad", "keyboard", "parakeet", "indexer", "treesitter", "help"]
+full = [
+    "audio",
+    "stt",
+    "vad",
+    "keyboard",
+    "parakeet",
+    "indexer",
+    "treesitter",
+    "help",
+    "diarization",
+]
 # Audio capture via CPAL
 audio = ["dep:cpal"]
 # Speech-to-text via whisper.cpp (requires cmake + libclang)
@@ -33,8 +43,8 @@ parakeet = ["dep:parakeet-rs", "dep:ort", "dep:zip", "dep:flate2", "dep:tar"]
 # Local speaker diarization via NVIDIA Sortformer v2. Runs
 # on the same ORT runtime the Parakeet STT path already loads (parakeet-rs's
 # `sortformer` module is pure Rust over `ort` + ndarray + rustfft), so it adds
-# no new native library — it just reuses the `parakeet` ONNX stack. Deliberately
-# opt-in and NOT part of `full`: the meeting workflow is a distinct mode.
+# no new native library — it just reuses the `parakeet` ONNX stack. Part of
+# `full` (CPU-only, no GPU SDK) so CI's full build covers the meeting pipeline.
 diarization = ["parakeet", "parakeet-rs/sortformer"]
 # Keystroke simulation
 keyboard = ["dep:enigo"]
