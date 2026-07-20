@@ -26,6 +26,12 @@ pub(crate) struct AppState {
     /// load nobody started. Cleared once a fresh engine is committed.
     pub idle_unloaded: AtomicBool,
     pub recording: Mutex<bool>,
+    /// True while a meeting recording is running. Dictation and meetings are
+    /// mutually exclusive: each side checks the other's flag before starting
+    /// (they would otherwise fight over the mic and the STT engine).
+    pub meeting_active: AtomicBool,
+    /// Handle of the live meeting worker; `Some` only while `meeting_active`.
+    pub meeting: Mutex<Option<crate::meeting_worker::MeetingHandle>>,
     /// Monotonic id bumped under the `recording` lock each time a session
     /// starts. A streaming worker captures its id and only mutates the shared
     /// recording/UI state while it still matches — so a worker whose session

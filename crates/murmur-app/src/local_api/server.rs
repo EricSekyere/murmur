@@ -175,6 +175,14 @@ mod tests {
         fn status(&self) -> Value {
             json!({ "recording": false, "processing": false })
         }
+
+        fn start_meeting(&self) -> Result<(), String> {
+            Ok(())
+        }
+
+        fn stop_meeting(&self) -> Result<(), String> {
+            Ok(())
+        }
     }
 
     /// Bind an ephemeral loopback listener and run the server on it.

@@ -89,6 +89,12 @@ opaque and echoed back verbatim (it may be omitted; the response then carries
 - `toggle_recording` — same as the hotkey; starts or stops a dictation
   session. Result: `{ "ok": true }`.
 - `get_status` — result: `{ "recording": bool, "processing": bool }`.
+- `start_meeting` — begin a meeting recording (microphone plus system audio
+  where supported), identical to the dashboard's Start Meeting button.
+  Refusals (dictation active, meeting already running, model still loading)
+  come back as an error response.
+- `stop_meeting` — signal the running meeting to stop. Returns immediately;
+  the final chunk transcribes and the record saves in the background.
 
 ```json
 { "type": "request", "id": 1, "method": "get_status" }
