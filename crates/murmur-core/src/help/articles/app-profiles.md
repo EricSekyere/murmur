@@ -30,6 +30,22 @@ A profile is evaluated at the moment a session starts, based on whatever window 
 focused then. If no profile matches, your global developer mode and output mode
 are used. You can store up to 50 profiles.
 
+## Custom rewrite instructions
+
+On builds with the local rewrite model, a profile can also carry the
+instruction used when you rewrite a selection in that app. Add prompt = "..."
+to the profile line, for example slack = plain, prompt = "Keep it casual and
+under three sentences". The quoted instruction replaces the built-in rewrite
+text for that app only; profiles without one keep the standard behavior.
+
+## Context-aware rewrites
+
+The Context-aware rewrites toggle adds the target app's name and your current
+clipboard text to the rewrite prompt, so rewrites can match where the text is
+going. It is off by default because clipboard contents are sensitive, and like
+every rewrite the context only ever enters the local model on your machine; it
+is never logged or sent anywhere.
+
 ## Common uses
 
 Use dev for editors and terminals so code transcribes cleanly, and plain for

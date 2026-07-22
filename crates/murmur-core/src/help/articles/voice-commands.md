@@ -63,3 +63,22 @@ Commands and snippets match only after normalizing the full phrase (ignoring
 case, surrounding spaces, and trailing punctuation). Saying "press the new line
 button" or "scratch that itch" is delivered as plain text, because the command is
 not the entire phrase.
+
+## Command mode
+
+Command mode is a separate voice mode for acting on your machine instead of
+typing text. Press Ctrl+Shift+Period to enter it, then speak an action such as
+"open the readme file" or "go to the source folder". Risky actions are never
+run from voice alone: they wait in a confirm dialog until you click or press a
+key, so a misheard phrase cannot act on its own.
+
+## Spoken path aliases
+
+File and folder phrases in command mode are resolved against your indexed
+project folders (see the codebase vocabulary help), and spoken aliases map
+awkward spoken forms to real path segments first. Built-ins are always active:
+"source" means src, "package json" means package.json, "dot env" means .env,
+"read me" means README, "cargo toml" means Cargo.toml, and more. Add your own
+in Settings under Spoken Path Aliases, one per line as spoken = path, for
+example end to end tests = tests/e2e. An alias with the same spoken form as a
+built-in overrides it.

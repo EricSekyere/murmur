@@ -12,7 +12,11 @@ telemetry. Your speech and the resulting text stay on your computer.
 ## No audio is kept
 
 Audio is processed and discarded; Murmur does not save recordings. Only the text
-of delivered phrases is ever stored, and only if you leave history on.
+of delivered phrases is ever stored, and only if you leave history on. The one
+exception is meeting speaker labels: with labels enabled, a meeting's audio is
+spooled to a temporary file so speakers can be told apart, and that file is
+deleted as soon as the meeting is processed, on any failure, and at the next
+launch. Without speaker labels, meeting audio never touches disk either.
 
 ## History is optional
 
@@ -24,9 +28,10 @@ than leaving an empty one behind.
 ## Where your data lives
 
 Settings are stored as a TOML config file in your config directory under murmur,
-and history sits next to it as history.json. Downloaded models live in your app
-data folder under murmur/models. These are ordinary files protected by your normal
-account permissions.
+history sits next to it as history.json, and saved meeting transcripts live in a
+meetings folder alongside. Downloaded models live in your app data folder under
+murmur/models. These are ordinary files protected by your normal account
+permissions.
 
 ## Safe config handling
 
@@ -44,5 +49,9 @@ the expected model bytes.
 ## Editor integration stays local
 
 The optional MCP integration that lets Claude and Cursor read your recent
-dictation runs locally over standard input and output. It is read-only and never
-leaves your machine. If you turn history off, there is nothing for it to read.
+dictation runs locally over standard input and output and never leaves your
+machine. Its history tools are read-only, and a separate "Allow agents to start
+dictation" toggle controls whether an agent may also request a spoken answer
+from you. The optional editor-plugin API listens on localhost only and requires
+a per-start token, so no other machine can connect. If you turn history off,
+there is nothing for either to read.

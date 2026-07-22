@@ -69,6 +69,15 @@ model, Murmur warns you. English-only models cannot transcribe other languages
 ignores a forced Speech Language and the translate toggle. Switch to Large v3
 Turbo for translation or a forced language.
 
+## Unload the model when idle
+
+The speech model stays in memory so dictation starts instantly, which can hold
+hundreds of megabytes of RAM while you are not dictating. Set "Unload Model
+When Idle" in Settings to free that memory after a period without dictation,
+from five minutes up to a day. The model reloads automatically the next time
+you dictate; the only cost is a short delay on the first phrase after a long
+idle stretch. The default is Never, which keeps the model loaded.
+
 ## Where models are stored and verified
 
 Downloaded models live in your app data folder under murmur/models. Every file is
