@@ -7,9 +7,10 @@ Most problems are a microphone, hotkey, or model issue. Start here.
 If a session ends after a second or two with nothing transcribed, the microphone
 is delivering silence. The most common cause is echo cancellation: the Windows
 voice-processing path can hand back digital silence on some audio setups. Murmur
-detects this on the first recording and falls back to your raw microphone
-automatically, but you can also turn off Echo Cancellation in Settings to use the
-plain microphone.
+detects this automatically, immediately if the voice path fails to start or
+after a few silent sessions in a row, and falls back to your raw microphone.
+You can also turn off Echo Cancellation in Settings to use the plain microphone
+directly.
 
 ## My microphone is not picked up
 
