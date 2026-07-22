@@ -28,9 +28,20 @@ You can still type a snippet's words literally with the "literally" prefix.
 ## Personal dictionary
 
 The personal dictionary is a list of names, jargon, and terms the model tends to
-mishear. Enter them in Settings, one per line. They are injected into the decoder
-as a glossary so they transcribe with the correct spelling. This biasing helps
-Whisper models; Parakeet has no biasing API.
+mishear. Enter them in Settings, one per line. On Whisper models they are
+injected into the decoder as a glossary that biases recognition. On every
+model, including Parakeet, a correction pass then fixes close mishearings of
+your terms in the finished text, so the dictionary works no matter which engine
+you use.
+
+## How dictionary corrections work
+
+After transcription, Murmur compares each word, and short runs of two or three
+words, against your dictionary. A term is corrected only when it both sounds
+like and is spelled close to the dictionary entry, so "kubernetis" becomes
+Kubernetes and "git hub" becomes GitHub. A word that already matches an entry
+except for casing gets just its casing fixed. Common English words are never
+rewritten, and text with no near-match of a dictionary term is left untouched.
 
 ## Learn from history
 

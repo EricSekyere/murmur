@@ -34,6 +34,16 @@ Text goes to whatever window was focused when the session started, not whatever
 is focused when transcription finishes. This means you can glance at the pill or
 another window mid sentence without misdelivering your words.
 
+## Smart punctuation
+
+Speech models close a phrase with a full stop or question mark the moment you
+pause, even when your sentence was not finished. With Smart punctuation on
+(the default), Murmur repairs the junction when you continue: "went to the
+store. And bought" becomes "went to the store and bought". The repair happens
+only when you continue within a few seconds in the same window Murmur was
+typing into, so text you finished, moved away from, or touched by hand is
+never rewritten. Turn it off in Settings for strictly verbatim delivery.
+
 ## Terminals
 
 Modern terminals accept direct Unicode typing fine, so Auto usually just works.

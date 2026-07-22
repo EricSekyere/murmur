@@ -10,6 +10,15 @@ Pick your microphone under Audio Device in Settings, or leave it on System
 Default. If you switch headsets or plug in a new mic, set it here so Murmur
 captures from the right input.
 
+## Instant mic start
+
+Instant mic start keeps the microphone stream open between dictations so your
+first word is never clipped by a slow device open. While idle, incoming audio
+is discarded immediately; nothing is buffered or stored until you actually
+start dictating. It is off by default because your system's mic-in-use
+indicator stays lit while the stream is warm. Turn it on in Settings if you
+dictate often and want the fastest possible start.
+
 ## Mic sensitivity
 
 The Mic Sensitivity slider controls how readily Murmur treats sound as speech.
@@ -40,9 +49,10 @@ it; transcription quality is otherwise unaffected.
 
 ## The silence fallback
 
-On some audio setups the Windows voice-processing path hands back digital silence.
-Murmur detects this on the first recording and automatically falls back to your
-raw microphone so you are never left with a dead session. Turning echo
+On some audio setups the Windows voice-processing path hands back digital
+silence. Murmur detects this automatically: a voice path that fails to start,
+or that keeps delivering silence across a few sessions, is dropped in favor of
+your raw microphone so you are never left with a dead session. Turning echo
 cancellation off in Settings uses the plain microphone directly.
 
 ## Sound cues

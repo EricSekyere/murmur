@@ -15,6 +15,12 @@ In toggle mode, press the hotkey (or double-tap the activation key) to start, an
 again to stop. In hold (push to talk) mode, recording lasts only while you hold
 the key. A short silence after you speak can also auto-stop the session.
 
+## Command mode hotkey
+
+Press Ctrl+Shift+Period to toggle command mode, where phrases act instead of
+typing, for example "open the readme file". Risky actions always require a
+physical click or keypress to confirm.
+
 ## Spoken line break commands
 
 Say "new line" for a single line break and "new paragraph" for a blank line.
