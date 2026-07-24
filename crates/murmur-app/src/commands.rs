@@ -564,13 +564,15 @@ pub(crate) fn update_settings(
                     .rewrite_prompt
                     .map(|s| s.trim().to_string())
                     .filter(|s| !s.is_empty()),
+                auto_submit: p.auto_submit,
             })
             .filter(|p| {
                 !p.app.is_empty()
                     && (p.output_mode.is_some()
                         || p.developer_mode.is_some()
                         || p.rewrite_mode.is_some()
-                        || p.rewrite_prompt.is_some())
+                        || p.rewrite_prompt.is_some()
+                        || p.auto_submit.is_some())
             })
             .collect();
     }

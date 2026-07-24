@@ -14,10 +14,7 @@
 use std::panic::AssertUnwindSafe;
 use std::path::PathBuf;
 
-use anyhow::Context;
-use futures_util::StreamExt;
 use parakeet_rs::sortformer::{DiarizationConfig, Sortformer};
-use sha2::{Digest, Sha256};
 
 use super::SpeakerSegment;
 
@@ -74,58 +71,28 @@ pub fn is_downloaded() -> bool {
 
 /// Download the Sortformer model once (about 469 MB), verifying its SHA256.
 ///
-/// Streams to a temp file and atomically renames on success; a checksum
-/// mismatch deletes the partial file rather than leaving a corrupt model.
-/// Idempotent: returns immediately if the model is already present.
+/// Streams to a sibling `.partial` file and atomically renames on success; an
+/// interrupted download resumes from the partial, and a checksum mismatch
+/// deletes it rather than leaving a corrupt model. Idempotent: returns
+/// immediately if the model is already present.
 pub async fn download() -> anyhow::Result<PathBuf> {
     let dest = model_path()?;
     if is_downloaded() {
         return Ok(dest);
     }
-    std::fs::create_dir_all(model_dir()?).context("create diarization model dir")?;
-    let temp = dest.with_extension("partial");
 
     tracing::info!(
         "Downloading Sortformer diarization model (~469 MB) from {}",
         SORTFORMER_URL
     );
-    let response = reqwest::Client::new()
-        .get(SORTFORMER_URL)
-        .send()
-        .await
-        .context("diarization model request failed")?
-        .error_for_status()
-        .context("diarization model download failed")?;
-
-    let mut out = tokio::fs::File::create(&temp)
-        .await
-        .context("create temp diarization file")?;
-    let mut hasher = Sha256::new();
-    let mut stream = response.bytes_stream();
-    while let Some(chunk) = stream.next().await {
-        let chunk = chunk.context("reading diarization model stream")?;
-        hasher.update(&chunk);
-        tokio::io::AsyncWriteExt::write_all(&mut out, &chunk)
-            .await
-            .context("writing diarization model")?;
-    }
-    tokio::io::AsyncWriteExt::flush(&mut out)
-        .await
-        .context("flushing diarization model")?;
-    drop(out);
-
-    let hash = format!("{:x}", hasher.finalize());
-    if hash != SORTFORMER_SHA256 {
-        let _ = tokio::fs::remove_file(&temp).await;
-        anyhow::bail!(
-            "SHA256 mismatch for diarization model: expected {}, got {}",
-            SORTFORMER_SHA256,
-            hash
-        );
-    }
-    tokio::fs::rename(&temp, &dest)
-        .await
-        .context("finalize diarization model")?;
+    crate::download::fetch_to_file(
+        SORTFORMER_URL,
+        &dest,
+        SORTFORMER_SHA256,
+        "diarization model",
+        |_, _| {},
+    )
+    .await?;
     tracing::info!("Diarization model ready at {}", dest.display());
     Ok(dest)
 }

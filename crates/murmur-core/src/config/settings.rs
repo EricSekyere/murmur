@@ -29,6 +29,22 @@ pub struct AppProfile {
     /// Commit message"). Trimmed and capped on load; None = built-in text.
     #[serde(default)]
     pub rewrite_prompt: Option<String>,
+    /// Submit keystroke pressed once when a session that delivered text into
+    /// this app ends (None = never auto-submit). Per-profile only, with no
+    /// global counterpart: pressing Enter in the wrong app is destructive.
+    #[serde(default)]
+    pub auto_submit: Option<AutoSubmit>,
+}
+
+/// Keystroke fired once at the end of a dictation session that delivered
+/// text, so a dictated chat message goes out hands-free.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AutoSubmit {
+    /// Press Enter.
+    Enter,
+    /// Press Ctrl+Enter, the send chord in apps where Enter inserts a newline.
+    CtrlEnter,
 }
 
 /// Transcription filtering profile.
@@ -880,6 +896,7 @@ mod tests {
             developer_mode: Some(true),
             rewrite_mode: None,
             rewrite_prompt: None,
+            auto_submit: None,
         }
     }
 
@@ -890,6 +907,7 @@ mod tests {
             developer_mode: None,
             rewrite_mode: mode,
             rewrite_prompt: None,
+            auto_submit: None,
         }
     }
 
@@ -983,7 +1001,33 @@ mod tests {
         assert_eq!(settings.app_profiles[0].developer_mode, Some(true));
         // Later additions must also default off/empty on an old config.
         assert_eq!(settings.app_profiles[0].rewrite_prompt, None);
+        assert_eq!(settings.app_profiles[0].auto_submit, None);
         assert!(!settings.context_injection_enabled);
+    }
+
+    #[test]
+    fn auto_submit_round_trips_through_toml_in_snake_case() {
+        let mut enter = profile("slack");
+        enter.auto_submit = Some(AutoSubmit::Enter);
+        let mut ctrl_enter = profile("claude");
+        ctrl_enter.auto_submit = Some(AutoSubmit::CtrlEnter);
+        let settings = Settings {
+            app_profiles: vec![enter, ctrl_enter],
+            ..Settings::default()
+        };
+        let text = toml::to_string_pretty(&settings).unwrap();
+        // The serde form is what the frontend line syntax carries verbatim.
+        assert!(text.contains("auto_submit = \"enter\""));
+        assert!(text.contains("auto_submit = \"ctrl_enter\""));
+        let reloaded: Settings = toml::from_str(&text).unwrap();
+        assert_eq!(
+            reloaded.app_profiles[0].auto_submit,
+            Some(AutoSubmit::Enter)
+        );
+        assert_eq!(
+            reloaded.app_profiles[1].auto_submit,
+            Some(AutoSubmit::CtrlEnter)
+        );
     }
 
     #[test]

@@ -79,6 +79,21 @@ pub fn press_enter(count: usize) -> Result<()> {
     }
 }
 
+/// Press Ctrl+Enter in the focused window: the profile auto-submit chord for
+/// apps where plain Enter inserts a newline instead of sending. Literal Ctrl
+/// on every platform, matching the config value it is named after.
+pub fn press_ctrl_enter() -> Result<()> {
+    #[cfg(windows)]
+    {
+        const VK_RETURN: u16 = 0x0D;
+        send_chord(&[VK_CONTROL], VK_RETURN)
+    }
+    #[cfg(not(windows))]
+    {
+        send_enigo_chord(&[enigo::Key::Control], enigo::Key::Return)
+    }
+}
+
 /// Press Backspace `count` times in the focused window (for "scratch that").
 pub fn press_backspace(count: usize) -> Result<()> {
     if count == 0 {

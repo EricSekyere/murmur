@@ -573,6 +573,7 @@ mod tests {
             developer_mode: None,
             rewrite_mode: mode,
             rewrite_prompt: prompt.map(str::to_string),
+            auto_submit: None,
         }
     }
 

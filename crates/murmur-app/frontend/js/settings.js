@@ -736,13 +736,17 @@ function formatAppProfile(p) {
   if (p.developer_mode === true) opts.push('dev');
   else if (p.developer_mode === false) opts.push('plain');
   if (p.output_mode) opts.push(p.output_mode);
+  if (p.auto_submit === 'enter' || p.auto_submit === 'ctrl_enter') {
+    opts.push(`submit = ${p.auto_submit}`);
+  }
   if (p.rewrite_prompt) opts.push(`prompt = "${p.rewrite_prompt.replace(/"/g, "'")}"`);
   return opts.length ? `${p.app} = ${opts.join(', ')}` : p.app;
 }
 
-// Parse "app = dev, clipboard_paste, prompt = \"…\"" lines into profile
-// objects. Unknown tokens are ignored; a line needs an app and at least one
-// valid override. Lines without a prompt parse exactly as before.
+// Parse "app = dev, clipboard_paste, submit = enter, prompt = \"…\"" lines
+// into profile objects. Unknown tokens are ignored; a line needs an app and
+// at least one valid override. Lines without the new options parse exactly
+// as before.
 function parseAppProfiles(text) {
   return text
     .split('\n')
@@ -761,13 +765,19 @@ function parseAppProfiles(text) {
       const tokens = rest.split(',').map(t => t.trim().toLowerCase()).filter(Boolean);
       let output_mode = null;
       let developer_mode = null;
+      let auto_submit = null;
       for (const t of tokens) {
         if (t === 'dev' || t === 'developer') developer_mode = true;
         else if (t === 'plain' || t === 'nodev') developer_mode = false;
         else if (OUTPUT_MODES.includes(t)) output_mode = t;
+        else {
+          const submit = t.match(/^submit\s*=\s*(enter|ctrl_enter)$/);
+          if (submit) auto_submit = submit[1];
+        }
       }
-      if (output_mode === null && developer_mode === null && rewrite_prompt === null) return null;
-      return { app, output_mode, developer_mode, rewrite_prompt };
+      if (output_mode === null && developer_mode === null
+          && rewrite_prompt === null && auto_submit === null) return null;
+      return { app, output_mode, developer_mode, rewrite_prompt, auto_submit };
     })
     .filter(Boolean);
 }

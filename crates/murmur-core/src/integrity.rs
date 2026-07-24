@@ -19,7 +19,12 @@ pub fn sha256_hex(bytes: &[u8]) -> String {
 /// - `expected` set and mismatched: returns an error so a tampered or corrupt
 ///   artifact is never loaded.
 pub fn verify_or_log_sha256(bytes: &[u8], expected: &str, label: &str) -> Result<()> {
-    let actual = sha256_hex(bytes);
+    verify_hash_or_log(&sha256_hex(bytes), expected, label)
+}
+
+/// Same policy as [`verify_or_log_sha256`], for callers that hash while
+/// streaming and hold only the computed lowercase-hex digest.
+pub fn verify_hash_or_log(actual: &str, expected: &str, label: &str) -> Result<()> {
     if expected.is_empty() {
         tracing::warn!(
             "No pinned checksum for {label}; integrity not verified (sha256={actual}). \
@@ -57,5 +62,13 @@ mod tests {
         let hash = sha256_hex(b"payload");
         assert!(verify_or_log_sha256(b"payload", &hash, "test").is_ok());
         assert!(verify_or_log_sha256(b"tampered", &hash, "test").is_err());
+    }
+
+    #[test]
+    fn verify_hash_variant_matches_byte_variant_policy() {
+        let hash = sha256_hex(b"payload");
+        assert!(verify_hash_or_log(&hash, &hash, "test").is_ok());
+        assert!(verify_hash_or_log(&sha256_hex(b"tampered"), &hash, "test").is_err());
+        assert!(verify_hash_or_log(&hash, "", "test").is_ok());
     }
 }

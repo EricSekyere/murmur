@@ -1,7 +1,5 @@
-use anyhow::{Context, Result};
-use futures_util::StreamExt;
+use anyhow::Result;
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use std::path::PathBuf;
 
 const WHISPER_BASE_URL: &str = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main";
@@ -355,77 +353,42 @@ impl ModelManager {
     }
 
     /// Download a model with a terminal progress bar and SHA256 verification.
+    /// Files already fully downloaded are skipped; an interrupted file resumes
+    /// from its `.partial` remainder.
     pub async fn download(&self, model: SttModel) -> Result<PathBuf> {
         let dir = self.model_dir(model);
-        std::fs::create_dir_all(&dir).context("Failed to create model directory")?;
-
-        let files = model.model_files();
-        let client = reqwest::Client::new();
-
-        for file in &files {
-            let url = format!("{}/{}", model.base_url(), file.remote_name);
+        for file in &model.model_files() {
             let dest = dir.join(file.local_name);
-            let temp_path = dest.with_extension("partial");
-
+            if file_len(&dest) > 0 {
+                continue;
+            }
+            let url = format!("{}/{}", model.base_url(), file.remote_name);
             tracing::info!("Downloading {}...", file.remote_name);
 
-            let response = client
-                .get(&url)
-                .send()
-                .await
-                .context("Failed to start download")?
-                .error_for_status()
-                .context("Download request failed")?;
+            let pb = indicatif::ProgressBar::new(0);
+            pb.set_style(
+                indicatif::ProgressStyle::default_bar()
+                    .template("{msg} [{bar:40}] {bytes}/{total_bytes} ({eta})")
+                    .unwrap_or_else(|_| indicatif::ProgressStyle::default_bar())
+                    .progress_chars("=> "),
+            );
+            pb.set_message(file.local_name.to_string());
 
-            let total_size = response.content_length();
-
-            let pb = if let Some(total) = total_size {
-                let pb = indicatif::ProgressBar::new(total);
-                pb.set_style(
-                    indicatif::ProgressStyle::default_bar()
-                        .template("{msg} [{bar:40}] {bytes}/{total_bytes} ({eta})")
-                        .expect("valid template")
-                        .progress_chars("=> "),
-                );
-                pb.set_message(file.local_name.to_string());
-                pb
-            } else {
-                let pb = indicatif::ProgressBar::new_spinner();
-                pb.set_message(format!("Downloading {}...", file.local_name));
-                pb
-            };
-
-            let mut out = tokio::fs::File::create(&temp_path)
-                .await
-                .context("Failed to create temp file")?;
-            let mut hasher = Sha256::new();
-            let mut stream = response.bytes_stream();
-
-            while let Some(chunk) = stream.next().await {
-                let chunk = chunk.context("Error reading download stream")?;
-                hasher.update(&chunk);
-                tokio::io::AsyncWriteExt::write_all(&mut out, &chunk)
-                    .await
-                    .context("Failed to write chunk")?;
-                pb.inc(chunk.len() as u64);
-            }
-
-            // Flush and close before verifying: tokio file writes complete in
-            // the background, so a final-chunk error (disk full) only surfaces
-            // here — without this a truncated file gets renamed into place.
-            tokio::io::AsyncWriteExt::flush(&mut out)
-                .await
-                .context("Failed to flush downloaded file")?;
-            drop(out);
+            crate::download::fetch_to_file(
+                &url,
+                &dest,
+                file.sha256,
+                file.local_name,
+                |done, total| {
+                    if let Some(total) = total {
+                        pb.set_length(total);
+                    }
+                    pb.set_position(done);
+                },
+            )
+            .await?;
 
             pb.finish_with_message(format!("{} downloaded", file.local_name));
-
-            let hash = format!("{:x}", hasher.finalize());
-            verify_download(&temp_path, file, &hash).await?;
-
-            tokio::fs::rename(&temp_path, &dest)
-                .await
-                .context("Failed to finalize downloaded file")?;
         }
 
         let path = self.model_path(model);
@@ -436,7 +399,9 @@ impl ModelManager {
     /// Download a model with a progress callback instead of a terminal progress bar.
     ///
     /// The callback receives `(bytes_downloaded, total_bytes)` where `total_bytes`
-    /// is the total across all files for this model.
+    /// is the estimated total across all files for this model. Bytes already on
+    /// disk (finished files and resumable partials) count from the first report,
+    /// so a resumed download's bar continues instead of restarting at 0%.
     pub async fn download_with_progress<F>(
         &self,
         model: SttModel,
@@ -446,62 +411,45 @@ impl ModelManager {
         F: Fn(u64, Option<u64>),
     {
         let dir = self.model_dir(model);
-        std::fs::create_dir_all(&dir).context("Failed to create model directory")?;
-
         let files = model.model_files();
-        let client = reqwest::Client::new();
-
-        // Estimate total size from model size_mb (for progress across all files)
         let estimated_total = (model.size_mb() as u64) * 1024 * 1024;
-        let mut cumulative_downloaded: u64 = 0;
 
-        on_progress(0, Some(estimated_total));
+        let preexisting: u64 = files
+            .iter()
+            .map(|f| {
+                let dest = dir.join(f.local_name);
+                let done = file_len(&dest);
+                if done > 0 {
+                    done
+                } else {
+                    file_len(&crate::download::partial_path(&dest))
+                }
+            })
+            .sum();
+        on_progress(preexisting, Some(estimated_total));
 
+        let mut completed: u64 = 0;
         for file in &files {
-            let url = format!("{}/{}", model.base_url(), file.remote_name);
             let dest = dir.join(file.local_name);
-            let temp_path = dest.with_extension("partial");
-
-            tracing::info!("Downloading {}...", file.remote_name);
-
-            let response = client
-                .get(&url)
-                .send()
-                .await
-                .context("Failed to start download")?
-                .error_for_status()
-                .context("Download request failed")?;
-
-            let mut out = tokio::fs::File::create(&temp_path)
-                .await
-                .context("Failed to create temp file")?;
-            let mut hasher = Sha256::new();
-            let mut stream = response.bytes_stream();
-
-            while let Some(chunk) = stream.next().await {
-                let chunk = chunk.context("Error reading download stream")?;
-                hasher.update(&chunk);
-                tokio::io::AsyncWriteExt::write_all(&mut out, &chunk)
-                    .await
-                    .context("Failed to write chunk")?;
-                cumulative_downloaded += chunk.len() as u64;
-                on_progress(cumulative_downloaded, Some(estimated_total));
+            let already = file_len(&dest);
+            if already > 0 {
+                // Present and non-empty means an earlier attempt passed
+                // verification (the rename only happens after the checksum).
+                completed += already;
+                continue;
             }
-
-            // Flush and close before verifying: tokio file writes complete in
-            // the background, so a final-chunk error (disk full) only surfaces
-            // here — without this a truncated file gets renamed into place.
-            tokio::io::AsyncWriteExt::flush(&mut out)
-                .await
-                .context("Failed to flush downloaded file")?;
-            drop(out);
-
-            let hash = format!("{:x}", hasher.finalize());
-            verify_download(&temp_path, file, &hash).await?;
-
-            tokio::fs::rename(&temp_path, &dest)
-                .await
-                .context("Failed to finalize downloaded file")?;
+            let url = format!("{}/{}", model.base_url(), file.remote_name);
+            tracing::info!("Downloading {}...", file.remote_name);
+            let base = completed;
+            let written = crate::download::fetch_to_file(
+                &url,
+                &dest,
+                file.sha256,
+                file.local_name,
+                |done, _| on_progress(base + done, Some(estimated_total)),
+            )
+            .await?;
+            completed += written;
         }
 
         let path = self.model_path(model);
@@ -510,39 +458,9 @@ impl ModelManager {
     }
 }
 
-/// Reject an empty download and verify its SHA256 when one is pinned. A model
-/// file without a pinned checksum cannot be verified, so warn loudly rather
-/// than accepting it silently.
-async fn verify_download(temp_path: &std::path::Path, file: &ModelFile, hash: &str) -> Result<()> {
-    let len = tokio::fs::metadata(temp_path)
-        .await
-        .map(|m| m.len())
-        .unwrap_or(0);
-    if len == 0 {
-        let _ = tokio::fs::remove_file(temp_path).await;
-        anyhow::bail!("Downloaded file {} is empty", file.local_name);
-    }
-
-    if file.sha256.is_empty() {
-        tracing::warn!(
-            "No pinned checksum for {}; integrity cannot be verified (sha256={})",
-            file.local_name,
-            hash
-        );
-        return Ok(());
-    }
-
-    if hash != file.sha256 {
-        let _ = tokio::fs::remove_file(temp_path).await;
-        anyhow::bail!(
-            "SHA256 mismatch for {}: expected {}, got {}",
-            file.local_name,
-            file.sha256,
-            hash
-        );
-    }
-    tracing::info!("Checksum verified for {}", file.local_name);
-    Ok(())
+/// Length of a file, or 0 when absent or unreadable.
+fn file_len(path: &std::path::Path) -> u64 {
+    path.metadata().map(|m| m.len()).unwrap_or(0)
 }
 
 #[cfg(test)]
