@@ -38,6 +38,18 @@ to the profile line, for example slack = plain, prompt = "Keep it casual and
 under three sentences". The quoted instruction replaces the built-in rewrite
 text for that app only; profiles without one keep the standard behavior.
 
+## Auto-submit after dictation
+
+A profile can press the send key for you when dictation ends, so a chat or AI
+agent message goes out fully hands-free. Add submit = enter or
+submit = ctrl_enter to the profile line, for example slack = plain,
+submit = enter. When the session ends, Murmur presses the key once, and only
+if the session actually typed or pasted text into that app and its window is
+still focused. Nothing is pressed in clipboard-only mode, after a session
+that delivered nothing, or when you have switched to another window. This is
+deliberately a per-app option with no global version, because pressing Enter
+in the wrong app can be destructive.
+
 ## Context-aware rewrites
 
 The Context-aware rewrites toggle adds the target app's name and your current

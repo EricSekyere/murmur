@@ -6,6 +6,7 @@ pub mod config;
 pub mod dictation;
 pub mod dictation_junction;
 pub mod dictation_request;
+pub mod dictation_submit;
 pub mod download;
 pub mod emoji;
 pub mod filler;
