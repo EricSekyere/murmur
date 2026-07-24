@@ -1,5 +1,4 @@
 use anyhow::{Context, Result};
-use futures_util::StreamExt;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
@@ -109,41 +108,11 @@ pub fn is_downloaded() -> bool {
 
 /// Download the ONNX Runtime DLL from Microsoft's GitHub releases.
 ///
-/// Downloads the release archive, extracts the shared library, and caches it
-/// in the app data directory. Returns the path to the extracted DLL.
+/// Downloads the release archive (resuming an interrupted transfer from its
+/// `.partial` file), extracts the shared library, and caches it in the app
+/// data directory. Returns the path to the extracted DLL.
 pub async fn download() -> Result<PathBuf> {
-    let dir = ort_dir()?;
-    std::fs::create_dir_all(&dir).context("Failed to create ONNX Runtime directory")?;
-
-    let url = download_url();
-    tracing::info!("Downloading ONNX Runtime v{} from {}", ORT_VERSION, url);
-
-    let client = reqwest::Client::new();
-    let response = client
-        .get(&url)
-        .send()
-        .await
-        .context("Failed to download ONNX Runtime")?
-        .error_for_status()
-        .context("ONNX Runtime download request failed")?;
-
-    let bytes = response
-        .bytes()
-        .await
-        .context("Failed to read ONNX Runtime download")?;
-
-    crate::integrity::verify_or_log_sha256(&bytes, ORT_ARCHIVE_SHA256, "ONNX Runtime archive")?;
-    tracing::info!("Downloaded {} bytes, extracting DLL...", bytes.len());
-
-    let dir_clone = dir.clone();
-    tokio::task::spawn_blocking(move || extract_dll(&bytes, &dir_clone))
-        .await
-        .context("Extraction task panicked")?
-        .context("Failed to extract ONNX Runtime DLL")?;
-
-    let path = dir.join(DLL_FILENAME);
-    tracing::info!("ONNX Runtime DLL ready at {}", path.display());
-    Ok(path)
+    download_with_progress(|_, _| {}).await
 }
 
 /// Download the ONNX Runtime DLL with a progress callback.
@@ -154,42 +123,33 @@ where
     F: Fn(u64, Option<u64>),
 {
     let dir = ort_dir()?;
-    std::fs::create_dir_all(&dir).context("Failed to create ONNX Runtime directory")?;
-
     let url = download_url();
     tracing::info!("Downloading ONNX Runtime v{} from {}", ORT_VERSION, url);
 
-    let client = reqwest::Client::new();
-    let response = client
-        .get(&url)
-        .send()
+    let archive_name = url.rsplit('/').next().unwrap_or("onnxruntime-archive");
+    let archive_path = dir.join(archive_name);
+    crate::download::fetch_to_file(
+        &url,
+        &archive_path,
+        ORT_ARCHIVE_SHA256,
+        "ONNX Runtime archive",
+        on_progress,
+    )
+    .await?;
+
+    let bytes = tokio::fs::read(&archive_path)
         .await
-        .context("Failed to download ONNX Runtime")?
-        .error_for_status()
-        .context("ONNX Runtime download request failed")?;
-
-    let total_size = response.content_length();
-    let mut downloaded: u64 = 0;
-    let mut all_bytes = Vec::new();
-    let mut stream = response.bytes_stream();
-
-    on_progress(0, total_size);
-
-    while let Some(chunk) = stream.next().await {
-        let chunk = chunk.context("Error reading download stream")?;
-        downloaded += chunk.len() as u64;
-        all_bytes.extend_from_slice(&chunk);
-        on_progress(downloaded, total_size);
-    }
-
-    crate::integrity::verify_or_log_sha256(&all_bytes, ORT_ARCHIVE_SHA256, "ONNX Runtime archive")?;
-    tracing::info!("Downloaded {} bytes, extracting DLL...", all_bytes.len());
+        .context("Failed to read ONNX Runtime archive")?;
+    tracing::info!("Downloaded {} bytes, extracting DLL...", bytes.len());
 
     let dir_clone = dir.clone();
-    tokio::task::spawn_blocking(move || extract_dll(&all_bytes, &dir_clone))
+    let extracted = tokio::task::spawn_blocking(move || extract_dll(&bytes, &dir_clone))
         .await
-        .context("Extraction task panicked")?
-        .context("Failed to extract ONNX Runtime DLL")?;
+        .context("Extraction task panicked")?;
+    // The verified archive only exists to be extracted; drop it on failure
+    // too, so a retry starts clean instead of trusting a half-used file.
+    let _ = tokio::fs::remove_file(&archive_path).await;
+    extracted.context("Failed to extract ONNX Runtime DLL")?;
 
     let path = dir.join(DLL_FILENAME);
     tracing::info!("ONNX Runtime DLL ready at {}", path.display());
