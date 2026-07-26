@@ -852,7 +852,7 @@
               <div class="settings-group">
                 <div class="settings-row__text">
                   <label class="settings-label" for="app-profiles-input">App Profiles</label>
-                  <span class="settings-hint">Override settings per app. One per line as <code>app = options</code>. Options: <code>dev</code> / <code>plain</code> for developer mode, <code>auto</code> / <code>keyboard</code> / <code>clipboard_paste</code> / <code>clipboard</code> for output, and <code>prompt = "…"</code> for a custom Rewrite Selection instruction in that app. The app is matched against the focused window's process name.</span>
+                  <span class="settings-hint">Override settings per app. One per line as <code>app = options</code>. Options: <code>dev</code> / <code>plain</code> for developer mode, <code>auto</code> / <code>keyboard</code> / <code>clipboard_paste</code> / <code>clipboard</code> for output, <code>submit = enter</code> or <code>submit = ctrl_enter</code> to send the message when dictation ends, and <code>prompt = "…"</code> for a custom Rewrite Selection instruction in that app. The app is matched against the focused window's process name.</span>
                 </div>
                 <textarea id="app-profiles-input" class="settings-textarea" rows="4" placeholder="code = dev&#10;windowsterminal = dev, clipboard&#10;slack = plain, prompt = &quot;Match a friendly Slack tone&quot;"></textarea>
                 <div class="settings-actions">

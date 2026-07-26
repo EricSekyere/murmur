@@ -38,28 +38,22 @@ pub fn is_downloaded() -> bool {
     model_path().map(|p| p.exists()).unwrap_or(false)
 }
 
-/// Download the embedding model (~33 MB) once, verifying its checksum. Idempotent.
+/// Download the embedding model (~33 MB) once, verifying its checksum.
+/// Idempotent; an interrupted download resumes from its `.partial` file.
 pub async fn download() -> Result<std::path::PathBuf> {
     let dest = model_path()?;
     if dest.exists() {
         return Ok(dest);
     }
-    if let Some(parent) = dest.parent() {
-        std::fs::create_dir_all(parent).context("create help model dir")?;
-    }
     tracing::info!("Downloading Help embedding model from {}", MODEL_URL);
-    let bytes = reqwest::Client::new()
-        .get(MODEL_URL)
-        .send()
-        .await
-        .context("Help model request failed")?
-        .error_for_status()
-        .context("Help model download failed")?
-        .bytes()
-        .await
-        .context("reading Help model")?;
-    crate::integrity::verify_or_log_sha256(&bytes, MODEL_SHA256, "Help embedding model")?;
-    std::fs::write(&dest, &bytes).context("writing Help model")?;
+    crate::download::fetch_to_file(
+        MODEL_URL,
+        &dest,
+        MODEL_SHA256,
+        "Help embedding model",
+        |_, _| {},
+    )
+    .await?;
     tracing::info!("Help embedding model ready at {}", dest.display());
     Ok(dest)
 }

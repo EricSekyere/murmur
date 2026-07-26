@@ -82,4 +82,6 @@ idle stretch. The default is Never, which keeps the model loaded.
 
 Downloaded models live in your app data folder under murmur/models. Every file is
 checked against a pinned SHA256 checksum before use, so a corrupted, incomplete,
-or tampered download is rejected and refetched rather than loaded.
+or tampered download is rejected and refetched rather than loaded. If a download
+is interrupted, the part already fetched is kept, and the next attempt resumes
+where it left off instead of starting over.
