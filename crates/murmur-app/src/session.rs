@@ -3,6 +3,7 @@
 
 use std::time::{Duration, Instant};
 
+use murmur_core::config::settings::AutoSubmit;
 use murmur_core::output::OutputMode;
 use murmur_core::voice_commands::{self, VoiceCommand};
 use tauri::{Emitter, Manager};
@@ -236,6 +237,12 @@ struct SessionStats {
     saw_signal: bool,
     had_phrase_audio: bool,
     saw_no_signal: bool,
+    /// A phrase was delivered by typing or paste (not clipboard-only/stdout),
+    /// so an auto-submit at session end has something to send.
+    delivered_to_target: bool,
+    /// The worker loop ended with StreamingDone (auto-stop or hotkey stop),
+    /// not a streaming error.
+    ended_normally: bool,
 }
 
 /// Session-constant delivery parameters, bundled so the phrase pipeline
@@ -243,6 +250,8 @@ struct SessionStats {
 #[derive(Clone, Copy)]
 struct DeliveryContext {
     output_mode: OutputMode,
+    /// Profile-configured submit keystroke fired once at session end.
+    auto_submit: Option<AutoSubmit>,
     /// Caption anchor when delivered phrases show a translated caption.
     translated_caption: Option<crate::caption::CaptionAnchor>,
     /// Window dictation started in — the delivery target (Windows).
@@ -286,6 +295,7 @@ fn streaming_worker(app: &tauri::AppHandle, generation: u64) {
     let target_app = current_app_name();
     let (
         output_mode,
+        auto_submit,
         sound_feedback,
         live_preview,
         caption_at_window,
@@ -312,6 +322,7 @@ fn streaming_worker(app: &tauri::AppHandle, generation: u64) {
             profile
                 .and_then(|p| p.output_mode)
                 .unwrap_or(settings.output_mode),
+            profile.and_then(|p| p.auto_submit),
             settings.sound_feedback,
             settings.live_preview,
             settings.caption_position == "window",
@@ -413,6 +424,7 @@ fn streaming_worker(app: &tauri::AppHandle, generation: u64) {
 
     let ctx = DeliveryContext {
         output_mode,
+        auto_submit,
         translated_caption,
         #[cfg(windows)]
         previous_hwnd,
@@ -432,6 +444,7 @@ fn streaming_worker(app: &tauri::AppHandle, generation: u64) {
             }
             Ok(AudioResult::StreamingDone) => {
                 tracing::info!("Streaming session ended");
+                stats.ended_normally = true;
                 break;
             }
             Ok(AudioResult::AudioLevel(rms)) => {
@@ -469,14 +482,7 @@ fn streaming_worker(app: &tauri::AppHandle, generation: u64) {
         let _ = handle.join();
     }
 
-    finish_streaming(
-        app,
-        &state,
-        &stats,
-        sound_feedback,
-        translated_caption.is_some(),
-        generation,
-    );
+    finish_streaming(app, &state, &stats, &ctx, sound_feedback, generation);
 }
 
 /// Transcribe one phrase and deliver the result. Phrases that arrive after
@@ -551,6 +557,7 @@ fn handle_phrase(
                 ctx,
                 processing_time_ms,
                 PhraseKind::Special,
+                stats,
                 last_delivery,
             );
         } else {
@@ -568,6 +575,7 @@ fn handle_phrase(
                             ctx,
                             processing_time_ms,
                             PhraseKind::Special,
+                            stats,
                             last_delivery,
                         );
                     } else {
@@ -618,6 +626,7 @@ fn handle_phrase(
                             ctx,
                             processing_time_ms,
                             kind,
+                            stats,
                             last_delivery,
                         );
                     }
@@ -645,6 +654,7 @@ fn handle_phrase(
 
 /// Deliver a normal text phrase to the focused window and record how many
 /// characters landed so "scratch that" can undo exactly this phrase.
+#[allow(clippy::too_many_arguments)]
 fn deliver_text(
     app: &tauri::AppHandle,
     state: &AppState,
@@ -652,6 +662,7 @@ fn deliver_text(
     ctx: &DeliveryContext,
     processing_time_ms: u64,
     kind: PhraseKind,
+    stats: &mut SessionStats,
     last_delivery: &mut Option<LastDelivery>,
 ) {
     // A repaired junction has already backspaced the previous phrase's mark
@@ -679,6 +690,9 @@ fn deliver_text(
     let delivered = if matches!(ctx.output_mode, OutputMode::Clipboard | OutputMode::Stdout) {
         0
     } else {
+        // A typed/pasted phrase landed in the target; the session's
+        // auto-submit (if configured) now has something to send.
+        stats.delivered_to_target = true;
         text.trim().graphemes(true).count() + spaces
     };
     *state
@@ -917,8 +931,8 @@ fn finish_streaming(
     app: &tauri::AppHandle,
     state: &AppState,
     stats: &SessionStats,
+    ctx: &DeliveryContext,
     sound_feedback: bool,
-    keep_final_caption: bool,
     generation: u64,
 ) {
     // A session just ended: restart the model idle-unload clock from here.
@@ -929,6 +943,10 @@ fn finish_streaming(
     if !release_if_current(app, state, generation) {
         return;
     }
+
+    // Only the current session may submit: a superseded worker returning above
+    // must never press Enter into whatever the new session is typing.
+    maybe_auto_submit(ctx, stats);
 
     if sound_feedback {
         crate::sound::play_stop();
@@ -950,8 +968,48 @@ fn finish_streaming(
     // With translated captions on, the last phrase usually finishes decoding
     // just before the session ends; let it live out its reading hold (the
     // caption page blanks itself) instead of yanking it away here.
-    if !keep_final_caption {
+    if ctx.translated_caption.is_none() {
         crate::caption::hide(app);
     }
     let _ = app.emit("streaming-done", serde_json::json!({}));
+}
+
+/// Fire the profile-configured submit keystroke once at session end, gated by
+/// `murmur_core::dictation_submit`: the session must have ended normally,
+/// delivered at least one phrase by typing or paste, and the window it
+/// delivered into must still be in the foreground. Any failed gate skips
+/// silently at debug level.
+fn maybe_auto_submit(ctx: &DeliveryContext, stats: &SessionStats) {
+    use murmur_core::dictation_submit::{SubmitGates, submit_action};
+
+    // Same-hwnd discipline as junction repair: only press keys where the
+    // session's text went. v1 can verify that only on Windows; elsewhere the
+    // gate is unsatisfiable and nothing is pressed.
+    #[cfg(windows)]
+    let same_target = ctx.previous_hwnd != 0
+        && crate::focus::foreground_window() == ctx.previous_hwnd
+        && !crate::focus::is_own_window(ctx.previous_hwnd);
+    #[cfg(not(windows))]
+    let same_target = false;
+
+    let gates = SubmitGates {
+        ended_normally: stats.ended_normally,
+        delivered_phrase: stats.delivered_to_target,
+        places_text: !matches!(ctx.output_mode, OutputMode::Clipboard | OutputMode::Stdout),
+        same_target,
+    };
+    let Some(key) = submit_action(ctx.auto_submit, &gates) else {
+        if ctx.auto_submit.is_some() {
+            tracing::debug!(?gates, "auto-submit skipped");
+        }
+        return;
+    };
+    let result = match key {
+        AutoSubmit::Enter => murmur_core::output::keyboard::press_enter(1),
+        AutoSubmit::CtrlEnter => murmur_core::output::keyboard::press_ctrl_enter(),
+    };
+    match result {
+        Ok(()) => tracing::debug!(?key, "auto-submit keystroke sent"),
+        Err(e) => tracing::warn!("Auto-submit keystroke failed: {}", e),
+    }
 }

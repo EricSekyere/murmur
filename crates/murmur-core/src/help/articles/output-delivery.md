@@ -32,7 +32,9 @@ you are ready. Nothing is typed or pasted automatically.
 
 Text goes to whatever window was focused when the session started, not whatever
 is focused when transcription finishes. This means you can glance at the pill or
-another window mid sentence without misdelivering your words.
+another window mid sentence without misdelivering your words. An App Profile
+with the submit option can also press Enter or Ctrl+Enter for you once a
+session ends, sending the dictated message hands-free.
 
 ## Smart punctuation
 

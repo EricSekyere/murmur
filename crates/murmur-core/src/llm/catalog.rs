@@ -1,10 +1,8 @@
 //! Catalog entry and download for the local LLM model. Mirrors the STT model
-//! manager: streaming download with progress, SHA256 verification while
-//! streaming, and an atomic tempfile + rename finalize.
+//! manager: shared resumable download with progress, SHA256 verification
+//! while streaming, and an atomic partial + rename finalize.
 
-use anyhow::{Context, Result};
-use futures_util::StreamExt;
-use sha2::{Digest, Sha256};
+use anyhow::Result;
 use std::path::PathBuf;
 
 /// Qwen3-1.7B Instruct, Q4_K_M GGUF. Apache-2.0 (base model `Qwen/Qwen3-1.7B`),
@@ -77,94 +75,31 @@ pub async fn download() -> Result<PathBuf> {
 
 /// Download the model with a progress callback `(bytes_downloaded, total)`,
 /// verifying the pinned SHA256 while streaming. A corrupt or tampered
-/// artifact is deleted, never finalized.
+/// artifact is deleted, never finalized; an interrupted download resumes
+/// from its `.partial` file.
 pub async fn download_with_progress<F>(on_progress: F) -> Result<PathBuf>
 where
     F: Fn(u64, Option<u64>),
 {
-    let dir = llm_dir()?;
-    std::fs::create_dir_all(&dir).context("Failed to create LLM model directory")?;
-    let dest = dir.join(QWEN3_1_7B_FILENAME);
-    let temp_path = dest.with_extension("partial");
+    let dest = model_path()?;
 
     tracing::info!(url = QWEN3_1_7B_URL, "downloading LLM model");
-
-    let client = reqwest::Client::new();
-    let response = client
-        .get(QWEN3_1_7B_URL)
-        .send()
-        .await
-        .context("Failed to start LLM model download")?
-        .error_for_status()
-        .context("LLM model download request failed")?;
-
-    let total = response.content_length().or(Some(QWEN3_1_7B_SIZE_BYTES));
-    on_progress(0, total);
-
-    let mut out = tokio::fs::File::create(&temp_path)
-        .await
-        .context("Failed to create temp file")?;
-    let mut hasher = Sha256::new();
-    let mut downloaded: u64 = 0;
-    let mut stream = response.bytes_stream();
-
-    while let Some(chunk) = stream.next().await {
-        let chunk = chunk.context("Error reading download stream")?;
-        hasher.update(&chunk);
-        tokio::io::AsyncWriteExt::write_all(&mut out, &chunk)
-            .await
-            .context("Failed to write chunk")?;
-        downloaded += chunk.len() as u64;
-        on_progress(downloaded, total);
-    }
-
-    tokio::io::AsyncWriteExt::flush(&mut out)
-        .await
-        .context("Failed to flush downloaded file")?;
-    drop(out);
-
-    if downloaded == 0 {
-        let _ = tokio::fs::remove_file(&temp_path).await;
-        anyhow::bail!("Downloaded LLM model is empty");
-    }
-
-    let actual = format!("{:x}", hasher.finalize());
-    if let Err(e) = verify_sha256(&actual, QWEN3_1_7B_SHA256, QWEN3_1_7B_FILENAME) {
-        let _ = tokio::fs::remove_file(&temp_path).await;
-        return Err(e);
-    }
-
-    tokio::fs::rename(&temp_path, &dest)
-        .await
-        .context("Failed to finalize downloaded model")?;
+    crate::download::fetch_to_file(
+        QWEN3_1_7B_URL,
+        &dest,
+        QWEN3_1_7B_SHA256,
+        QWEN3_1_7B_FILENAME,
+        |downloaded, total| on_progress(downloaded, total.or(Some(QWEN3_1_7B_SIZE_BYTES))),
+    )
+    .await?;
 
     tracing::info!(path = %dest.display(), "LLM model ready");
     Ok(dest)
 }
 
-/// Compare a computed SHA256 hex digest against the pinned value.
-fn verify_sha256(actual: &str, expected: &str, label: &str) -> Result<()> {
-    if actual != expected {
-        anyhow::bail!("SHA256 mismatch for {label}: expected {expected}, got {actual}");
-    }
-    tracing::info!("Checksum verified for {label}");
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::integrity::sha256_hex;
-
-    #[test]
-    fn verify_accepts_known_blob_and_rejects_tampered() {
-        let blob = b"murmur llm test blob";
-        let hash = sha256_hex(blob);
-        assert!(verify_sha256(&hash, &hash, "blob").is_ok());
-
-        let tampered = sha256_hex(b"murmur llm test blob, tampered");
-        assert!(verify_sha256(&tampered, &hash, "blob").is_err());
-    }
 
     #[test]
     fn catalog_metadata_is_well_formed() {

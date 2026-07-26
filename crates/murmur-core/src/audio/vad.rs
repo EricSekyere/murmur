@@ -282,36 +282,25 @@ pub fn is_downloaded() -> bool {
 }
 
 /// Download the Silero VAD ONNX model (~2 MB) into the user's data dir.
-/// Idempotent: returns the cached path if the file already exists.
+/// Idempotent: returns the cached path if the file already exists. An
+/// interrupted download resumes from its `.partial` file.
 #[cfg(feature = "vad")]
 pub async fn download() -> Result<std::path::PathBuf> {
-    use anyhow::Context;
     let dest = model_path()?;
     if dest.exists() {
         return Ok(dest);
     }
 
-    if let Some(parent) = dest.parent() {
-        std::fs::create_dir_all(parent).context("Failed to create VAD model directory")?;
-    }
-
     tracing::info!("Downloading Silero VAD model to {}", dest.display());
-    let bytes = reqwest::get(SILERO_VAD_URL)
-        .await
-        .context("Silero VAD download request failed")?
-        .error_for_status()
-        .context("Silero VAD download non-OK status")?
-        .bytes()
-        .await
-        .context("Failed to read Silero VAD response body")?;
+    let len = crate::download::fetch_to_file(
+        SILERO_VAD_URL,
+        &dest,
+        SILERO_VAD_SHA256,
+        "Silero VAD model",
+        |_, _| {},
+    )
+    .await?;
 
-    crate::integrity::verify_or_log_sha256(&bytes, SILERO_VAD_SHA256, "Silero VAD model")?;
-
-    // Write atomically: tempfile + rename.
-    let tmp = dest.with_extension("partial");
-    std::fs::write(&tmp, &bytes).context("Failed to write Silero VAD model")?;
-    std::fs::rename(&tmp, &dest).context("Failed to finalize Silero VAD model")?;
-
-    tracing::info!("Silero VAD model ready ({} bytes)", bytes.len());
+    tracing::info!("Silero VAD model ready ({} bytes)", len);
     Ok(dest)
 }

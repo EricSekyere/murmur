@@ -1,3 +1,3 @@
 pub mod settings;
 
-pub use settings::{AppProfile, PathAlias, Settings, TranscriptionProfile};
+pub use settings::{AppProfile, AutoSubmit, PathAlias, Settings, TranscriptionProfile};
