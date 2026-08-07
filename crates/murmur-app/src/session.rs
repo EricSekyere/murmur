@@ -153,6 +153,7 @@ fn start_session(app: &tauri::AppHandle, state: &AppState, generation: u64) {
     let params = {
         let settings = state.settings.lock().unwrap_or_else(|e| e.into_inner());
         StartParams {
+            generation,
             audio_device: settings.audio_device.clone(),
             rms_threshold: settings.silence_rms_threshold,
             vad_threshold: settings.vad_threshold,
@@ -365,8 +366,15 @@ fn streaming_worker(app: &tauri::AppHandle, generation: u64) {
         release_if_current(app, &state, generation);
         return;
     };
-    if let Err(e) = audio.await_started() {
+    if let Err(e) = audio.await_started(generation) {
         tracing::error!("Failed to start streaming: {}", e);
+        // The handshake can time out on a start that is merely slow (a cold
+        // Bluetooth or AEC open), so a session may still come up behind us.
+        // Queue a stop for it: without one it would hold the mic open with the
+        // UI showing idle, and nothing would ever end it.
+        if let Err(stop_err) = audio.request_stop() {
+            tracing::error!("Failed to stop a failed start: {}", stop_err);
+        }
         if release_if_current(app, &state, generation) {
             emit_hotkey_error(app, &format!("Failed to start recording: {}", e));
         }
@@ -432,7 +440,7 @@ fn streaming_worker(app: &tauri::AppHandle, generation: u64) {
     let mut stats = SessionStats::default();
     let mut last_delivery: Option<LastDelivery> = None;
     loop {
-        match audio.recv_result() {
+        match audio.recv_result(generation) {
             Ok(AudioResult::PhraseReady(buffer)) => {
                 stats.had_phrase_audio = true;
                 handle_phrase(app, &state, &buffer, &ctx, &mut stats, &mut last_delivery);
