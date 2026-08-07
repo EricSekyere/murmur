@@ -14,7 +14,12 @@
   const warningEl = document.getElementById('command-confirm-warning');
   const confirmBtn = document.getElementById('command-confirm-btn');
   const cancelBtn = document.getElementById('command-cancel-btn');
+  const chooseOverlay = document.getElementById('command-choose');
+  const chooseDialog = chooseOverlay ? chooseOverlay.querySelector('[role="dialog"]') : null;
+  const chooseList = document.getElementById('command-choose-list');
+  const chooseCancelBtn = document.getElementById('command-choose-cancel');
   if (!badge || !overlay || !dialog || !toolEl || !argsEl || !confirmBtn || !cancelBtn) return;
+  if (!chooseOverlay || !chooseDialog || !chooseList || !chooseCancelBtn) return;
 
   // Where focus returns when the dialog closes.
   let lastFocused = null;
@@ -125,13 +130,152 @@
   overlay.addEventListener('keydown', onDialogKeydown);
   overlay.addEventListener('click', onOverlayClick);
 
+  // --- Spoken path picker ---------------------------------------------
+  // Same gate discipline as the confirm dialog: a nonce binds the click to
+  // the exact candidate set on screen, and the backend refuses a click that
+  // races a superseding utterance.
+
+  let chooseLastFocused = null;
+  let chooseBusy = false;
+  let chooseNonce = null;
+
+  function chooseOptions() {
+    return Array.from(chooseDialog.querySelectorAll('button:not([disabled])'));
+  }
+
+  function openChooser(outcome) {
+    const candidates = Array.isArray(outcome.candidates) ? outcome.candidates : [];
+    if (!candidates.length) return;
+    chooseNonce = outcome.nonce;
+    chooseList.textContent = '';
+    candidates.forEach((path, index) => {
+      const item = document.createElement('li');
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'cmdchoose__option';
+      button.dataset.index = String(index);
+      const key = document.createElement('span');
+      key.className = 'cmdchoose__key';
+      key.setAttribute('aria-hidden', 'true');
+      key.textContent = String(index + 1);
+      const label = document.createElement('span');
+      // textContent only: candidate paths are ASR-adjacent data and must
+      // never be interpreted as markup.
+      label.textContent = path;
+      button.append(key, label);
+      item.appendChild(button);
+      chooseList.appendChild(item);
+    });
+    chooseLastFocused = document.activeElement;
+    chooseOverlay.hidden = false;
+    const first = chooseList.querySelector('button');
+    if (first) first.focus();
+  }
+
+  function closeChooser() {
+    chooseOverlay.hidden = true;
+    chooseNonce = null;
+    chooseList.textContent = '';
+    if (chooseLastFocused && typeof chooseLastFocused.focus === 'function') {
+      chooseLastFocused.focus();
+    }
+    chooseLastFocused = null;
+  }
+
+  async function cancelChoice() {
+    if (chooseBusy || chooseNonce === null) return;
+    chooseBusy = true;
+    try {
+      await invoke('cancel_choice', { nonce: chooseNonce });
+    } catch (err) {
+      console.error('Failed to cancel path suggestions:', err);
+    } finally {
+      chooseBusy = false;
+      closeChooser();
+    }
+  }
+
+  async function pickCandidate(index) {
+    if (chooseBusy || chooseNonce === null) return;
+    chooseBusy = true;
+    try {
+      const delivery = await invoke('choose_candidate', { nonce: chooseNonce, index });
+      // The backend diverts to the clipboard when it cannot hand focus back
+      // to the window the user was dictating into.
+      showToast(delivery === 'copied' ? 'Path copied to clipboard' : 'Path inserted', 'success');
+    } catch (err) {
+      showToast(`Could not insert path: ${err}`, 'error');
+    } finally {
+      chooseBusy = false;
+      closeChooser();
+    }
+  }
+
+  function onChooseClick(event) {
+    if (event.target === chooseOverlay) {
+      cancelChoice();
+      return;
+    }
+    const option = event.target.closest('.cmdchoose__option');
+    if (option) pickCandidate(Number(option.dataset.index));
+  }
+
+  // Digits pick directly, arrows walk the list, Enter activates the focused
+  // option, Escape dismisses; Tab is trapped inside the dialog.
+  function onChooseKeydown(event) {
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      cancelChoice();
+      return;
+    }
+    const options = Array.from(chooseList.querySelectorAll('button'));
+    if (event.key >= '1' && event.key <= '5') {
+      const index = Number(event.key) - 1;
+      if (index < options.length) {
+        event.preventDefault();
+        pickCandidate(index);
+      }
+      return;
+    }
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      if (!options.length) return;
+      event.preventDefault();
+      const current = options.indexOf(document.activeElement);
+      const step = event.key === 'ArrowDown' ? 1 : -1;
+      const next = (current + step + options.length) % options.length;
+      options[current === -1 ? 0 : next].focus();
+      return;
+    }
+    if (event.key !== 'Tab') return;
+    const items = chooseOptions();
+    if (!items.length) return;
+    const first = items[0];
+    const last = items[items.length - 1];
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  }
+
+  chooseCancelBtn.addEventListener('click', cancelChoice);
+  chooseOverlay.addEventListener('click', onChooseClick);
+  chooseOverlay.addEventListener('keydown', onChooseKeydown);
+
   /** Route a command-mode transcript through the backend executor and drive
    *  the UI for the outcome. Exposed for the audio-pipeline wiring that
    *  follows Phase 0. Returns the outcome DTO. */
   async function runTranscript(transcript) {
     const outcome = await invoke('run_command', { transcript });
     const kind = outcome && outcome.kind;
-    if (kind === 'pending') {
+    // The backend cleared both gates for this utterance, so any picker still
+    // on screen is dead; take it down rather than leave a click that fails.
+    if (chooseNonce !== null && kind !== 'choose') closeChooser();
+    if (kind === 'choose') {
+      openChooser(outcome);
+    } else if (kind === 'pending') {
       openDialog(outcome);
     } else if (kind === 'executed') {
       showToast('Command executed', 'success');
@@ -162,5 +306,8 @@
     cancelBtn.removeEventListener('click', doCancel);
     overlay.removeEventListener('keydown', onDialogKeydown);
     overlay.removeEventListener('click', onOverlayClick);
+    chooseCancelBtn.removeEventListener('click', cancelChoice);
+    chooseOverlay.removeEventListener('click', onChooseClick);
+    chooseOverlay.removeEventListener('keydown', onChooseKeydown);
   });
 })();

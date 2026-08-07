@@ -11,7 +11,7 @@ use std::sync::atomic::Ordering;
 
 use anyhow::Context;
 use murmur_core::command::{Grammar, Match, PermissionStore, RouteOutcome, SlotValue};
-use murmur_core::indexer::FileMatch;
+use murmur_core::indexer::{FileMatch, Resolution};
 use murmur_core::output::OutputMode;
 use murmur_mcp::ActionBackend;
 use serde_json::Value;
@@ -29,43 +29,82 @@ use crate::state::AppState;
 /// dictation hotkey (design Section 5), configurable later.
 pub(crate) const COMMAND_MODE_HOTKEY: &str = "ctrl+shift+period";
 
-/// The single gated action awaiting physical confirmation, bound to a nonce.
+/// A single item awaiting a physical click, bound to a nonce.
 ///
-/// ASR stays live while the confirm dialog is open, so a newer utterance can
-/// supersede the stored action before the dialog re-renders. The nonce binds a
-/// confirm/cancel click to the exact action the dialog displayed: a stale
-/// click is refused instead of running an action the user never reviewed.
-#[derive(Default)]
-struct PendingGate {
+/// ASR stays live while a dialog is open, so a newer utterance can supersede
+/// the stored item before the dialog re-renders. The nonce binds a click to
+/// the exact item the dialog displayed: a stale click is refused instead of
+/// acting on something the user never reviewed.
+///
+/// Shared by the confirm gate ([`PendingAction`]) and the disambiguation
+/// picker ([`PendingChoice`]); the discipline is identical, only the payload
+/// differs. Each gate keeps its own nonce counter, and the two commands never
+/// read each other's slot, so nonces cannot cross over.
+struct Gate<T> {
     last_nonce: u64,
-    slot: Option<(u64, PendingAction)>,
+    slot: Option<(u64, T)>,
 }
 
-impl PendingGate {
-    /// Stash a new pending action, superseding any previous one, and return
-    /// the nonce the confirm dialog must echo back.
-    fn stash(&mut self, action: PendingAction) -> u64 {
+// Derived Default would demand `T: Default`, which neither payload has.
+impl<T> Default for Gate<T> {
+    fn default() -> Self {
+        Self {
+            last_nonce: 0,
+            slot: None,
+        }
+    }
+}
+
+impl<T> Gate<T> {
+    /// Stash a new item, superseding any previous one, and return the nonce
+    /// the dialog must echo back.
+    fn stash(&mut self, item: T) -> u64 {
         self.last_nonce += 1;
-        self.slot = Some((self.last_nonce, action));
+        self.slot = Some((self.last_nonce, item));
         self.last_nonce
     }
 
-    /// Drop whatever is stored (a non-pending outcome supersedes it).
+    /// Drop whatever is stored (any newer outcome supersedes it).
     fn clear(&mut self) {
         self.slot = None;
     }
 
-    /// Take the action only if `nonce` matches the stored one; a stale nonce
-    /// returns `None` and leaves the current action in place.
-    fn take(&mut self, nonce: u64) -> Option<PendingAction> {
+    /// Take the item only if `nonce` matches the stored one; a stale nonce
+    /// returns `None` and leaves the current item in place.
+    fn take(&mut self, nonce: u64) -> Option<T> {
         match self.slot.take() {
-            Some((stored, action)) if stored == nonce => Some(action),
+            Some((stored, item)) if stored == nonce => Some(item),
             other => {
                 self.slot = other;
                 None
             }
         }
     }
+}
+
+type PendingGate = Gate<PendingAction>;
+
+/// A near-tied spoken path resolution awaiting the user's physical pick.
+///
+/// The output mode and the target window are captured at decision time, while
+/// the user's editor is still in front. Clicking the picker moves focus to
+/// Murmur, so the stored HWND is the only record of where the path belongs.
+struct PendingChoice {
+    candidates: Vec<FileMatch>,
+    output_mode: OutputMode,
+    #[cfg(windows)]
+    target_hwnd: usize,
+}
+
+/// How a chosen path actually reached the user.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum ChoiceDelivery {
+    /// Focus was restored to the dictation target and the path was typed.
+    Typed,
+    /// Focus could not be restored, so the path went to the clipboard rather
+    /// than into whatever window happened to be in front.
+    Copied,
 }
 
 /// Everything `run_command` needs, kept behind one async lock in app state
@@ -76,6 +115,8 @@ pub(crate) struct CommandState {
     backend: ActionBackend,
     /// The single gated action awaiting physical confirmation, if any.
     pending: PendingGate,
+    /// The near-tied path resolution awaiting a physical pick, if any.
+    choice: Gate<PendingChoice>,
 }
 
 impl CommandState {
@@ -88,6 +129,7 @@ impl CommandState {
             executor: Executor::new(SystemActions, PermissionStore::load()),
             backend: ActionBackend::new(std::iter::empty::<String>()),
             pending: PendingGate::default(),
+            choice: Gate::default(),
         })
     }
 }
@@ -106,6 +148,12 @@ pub(crate) enum ExecOutcomeDto {
         tool: String,
         args: Value,
         reversible: bool,
+        nonce: u64,
+    },
+    /// A spoken path query landed on near-tied candidates; the user picks one
+    /// in the disambiguation overlay. Relative paths only.
+    Choose {
+        candidates: Vec<String>,
         nonce: u64,
     },
     Blocked,
@@ -157,29 +205,32 @@ async fn execute_and_split<A: NativeActions, B: ToolBackend>(
 }
 
 /// Resolve a spoken "open the … file" query against the indexed project
-/// paths and type the best match's relative path. Handled here rather than
-/// in the executor because it needs `AppState::project_files`. The query is
-/// spoken content and is never logged; the resolved path only at trace.
-// TODO: disambiguation overlay for near-tie scores and the Tier-2 embedding
-// fallback (viable-features.md §1.1); v1 types the single best match.
-fn run_open_file(state: &AppState, matched: &Match) -> anyhow::Result<ExecOutcomeDto> {
+/// paths and type the best match's relative path, or offer the near-tied
+/// candidates. Handled here rather than in the executor because it needs
+/// `AppState::project_files`. The query is spoken content and is never
+/// logged; resolved paths only at trace.
+fn run_open_file(
+    state: &AppState,
+    matched: &Match,
+) -> anyhow::Result<(ExecOutcomeDto, Option<PendingChoice>)> {
     let (query, output_mode) = aliased_query(state, matched)?;
-    let best = {
+    let ranked = {
         let files = state
             .project_files
             .lock()
             .unwrap_or_else(|e| e.into_inner());
         murmur_core::indexer::resolve_file(&query, &files)
-            .into_iter()
-            .next()
     };
-    type_best_match(best, output_mode)
+    act_on_resolution(murmur_core::indexer::decide(ranked), output_mode)
 }
 
 /// The directory analog of [`run_open_file`]: resolve "go to the … folder"
-/// against the ancestor-directory set of the indexed files and type the best
-/// match's relative path. Same privacy rules.
-fn run_go_to_dir(state: &AppState, matched: &Match) -> anyhow::Result<ExecOutcomeDto> {
+/// against the ancestor-directory set of the indexed files. Same privacy
+/// rules, same near-tie handling.
+fn run_go_to_dir(
+    state: &AppState,
+    matched: &Match,
+) -> anyhow::Result<(ExecOutcomeDto, Option<PendingChoice>)> {
     let (query, output_mode) = aliased_query(state, matched)?;
     let dirs = {
         let files = state
@@ -188,10 +239,8 @@ fn run_go_to_dir(state: &AppState, matched: &Match) -> anyhow::Result<ExecOutcom
             .unwrap_or_else(|e| e.into_inner());
         murmur_core::indexer::directories(&files)
     };
-    let best = murmur_core::indexer::resolve_file(&query, &dirs)
-        .into_iter()
-        .next();
-    type_best_match(best, output_mode)
+    let ranked = murmur_core::indexer::resolve_file(&query, &dirs);
+    act_on_resolution(murmur_core::indexer::decide(ranked), output_mode)
 }
 
 /// The `query` slot with the user's spoken path aliases applied, plus the
@@ -214,21 +263,76 @@ fn aliased_query(state: &AppState, matched: &Match) -> anyhow::Result<(String, O
     ))
 }
 
-/// Type the best match's relative path, or `NoAction` when nothing overlapped.
-fn type_best_match(
-    best: Option<FileMatch>,
+/// Act on a decided resolution: type a clear winner, or hand the near-tied
+/// candidates back for the picker. Runs while the user's editor is still in
+/// front, which is why the ambiguous branch captures the target window here.
+fn act_on_resolution(
+    resolution: Resolution,
     output_mode: OutputMode,
-) -> anyhow::Result<ExecOutcomeDto> {
-    let Some(best) = best else {
-        tracing::debug!("no indexed path matched the spoken query");
-        return Ok(ExecOutcomeDto::NoAction);
-    };
-    tracing::trace!(path = %best.path, score = best.score, "spoken path query resolved");
-    murmur_core::output::dispatch_verbatim(&best.path, output_mode)
-        .context("typing the resolved path")?;
-    Ok(ExecOutcomeDto::Executed {
-        result: Value::Null,
-    })
+) -> anyhow::Result<(ExecOutcomeDto, Option<PendingChoice>)> {
+    match resolution {
+        Resolution::None => {
+            tracing::debug!("no indexed path matched the spoken query");
+            Ok((ExecOutcomeDto::NoAction, None))
+        }
+        Resolution::Decisive(best) => {
+            tracing::trace!(path = %best.path, score = best.score, "spoken path query resolved");
+            murmur_core::output::dispatch_verbatim(&best.path, output_mode)
+                .context("typing the resolved path")?;
+            Ok((
+                ExecOutcomeDto::Executed {
+                    result: Value::Null,
+                },
+                None,
+            ))
+        }
+        Resolution::Ambiguous(candidates) => {
+            tracing::debug!(count = candidates.len(), "spoken path query is a near tie");
+            let paths = candidates.iter().map(|c| c.path.clone()).collect();
+            let choice = PendingChoice {
+                candidates,
+                output_mode,
+                #[cfg(windows)]
+                target_hwnd: crate::focus::foreground_window(),
+            };
+            Ok((
+                // run_command patches in the real nonce once this is stashed.
+                ExecOutcomeDto::Choose {
+                    candidates: paths,
+                    nonce: 0,
+                },
+                Some(choice),
+            ))
+        }
+    }
+}
+
+/// Deliver the picked path to the window dictation came from.
+///
+/// The pick itself put Murmur in front, so focus has to go back to the
+/// captured target before any keystroke. When it cannot (the window closed,
+/// nothing was captured, or the capture was one of our own windows), the path
+/// goes to the clipboard rather than into whatever is now focused.
+fn deliver_chosen_path(
+    path: &str,
+    output_mode: OutputMode,
+    #[cfg(windows)] target_hwnd: usize,
+) -> anyhow::Result<ChoiceDelivery> {
+    #[cfg(windows)]
+    {
+        let needs_focused_target =
+            !matches!(output_mode, OutputMode::Clipboard | OutputMode::Stdout);
+        // No live-tracked fallback: the picker always captures a start window,
+        // and typing into a window the user never dictated into is the bug
+        // this whole gate exists to prevent.
+        if needs_focused_target && !crate::focus::ensure_external_target(target_hwnd, 0) {
+            murmur_core::output::dispatch_verbatim(path, OutputMode::Clipboard)
+                .context("copying the chosen path to the clipboard")?;
+            return Ok(ChoiceDelivery::Copied);
+        }
+    }
+    murmur_core::output::dispatch_verbatim(path, output_mode).context("typing the chosen path")?;
+    Ok(ChoiceDelivery::Typed)
 }
 
 /// Run a command-mode transcript through Tier 1 routing and the guarded
@@ -246,21 +350,31 @@ pub(crate) async fn run_command(
         executor,
         backend,
         pending,
+        choice,
     } = &mut *command;
     let outcome = route_transcript(grammar, &transcript);
+    // Every utterance supersedes both gates: whatever dialog is on screen is
+    // now stale, and its click must not act on the older resolution.
+    pending.clear();
+    choice.clear();
     // open_file/go_to_dir need the project file index in app state, which the
     // executor (pure native actions) can't reach, so they are resolved here.
     if let RouteOutcome::Command(matched) = &outcome
-        && matched.command_id == CMD_OPEN_FILE
+        && (matched.command_id == CMD_OPEN_FILE || matched.command_id == CMD_GO_TO_DIR)
     {
-        pending.clear();
-        return run_open_file(&state, matched).map_err(|e| format!("{e:#}"));
-    }
-    if let RouteOutcome::Command(matched) = &outcome
-        && matched.command_id == CMD_GO_TO_DIR
-    {
-        pending.clear();
-        return run_go_to_dir(&state, matched).map_err(|e| format!("{e:#}"));
+        let resolved = if matched.command_id == CMD_OPEN_FILE {
+            run_open_file(&state, matched)
+        } else {
+            run_go_to_dir(&state, matched)
+        };
+        let (mut dto, new_choice) = resolved.map_err(|e| format!("{e:#}"))?;
+        if let Some(pending_choice) = new_choice {
+            let stashed = choice.stash(pending_choice);
+            if let ExecOutcomeDto::Choose { nonce, .. } = &mut dto {
+                *nonce = stashed;
+            }
+        }
+        return Ok(dto);
     }
     let (mut dto, new_pending) = execute_and_split(executor, &*backend, outcome)
         .await
@@ -305,6 +419,41 @@ pub(crate) async fn confirm_pending(
 pub(crate) async fn cancel_pending(state: State<'_, AppState>, nonce: u64) -> Result<(), String> {
     let dropped = state.command.lock().await.pending.take(nonce).is_some();
     tracing::info!(dropped, "pending command action cancelled");
+    Ok(())
+}
+
+/// Deliver the candidate the user physically picked in the disambiguation
+/// overlay. `nonce` must match the displayed set's, so a click racing a
+/// superseding utterance is refused rather than inserting a stale path.
+#[tauri::command]
+pub(crate) async fn choose_candidate(
+    state: State<'_, AppState>,
+    nonce: u64,
+    index: usize,
+) -> Result<ChoiceDelivery, String> {
+    let mut command = state.command.lock().await;
+    let Some(choice) = command.choice.take(nonce) else {
+        return Err("those suggestions are no longer available".to_string());
+    };
+    let Some(chosen) = choice.candidates.get(index) else {
+        return Err("that suggestion is out of range".to_string());
+    };
+    tracing::trace!(path = %chosen.path, "spoken path disambiguation picked");
+    deliver_chosen_path(
+        &chosen.path,
+        choice.output_mode,
+        #[cfg(windows)]
+        choice.target_hwnd,
+    )
+    .map_err(|e| format!("{e:#}"))
+}
+
+/// Drop the stored candidates without inserting any of them. A stale nonce is
+/// a no-op so dismissing an outdated picker never discards a newer one.
+#[tauri::command]
+pub(crate) async fn cancel_choice(state: State<'_, AppState>, nonce: u64) -> Result<(), String> {
+    let dropped = state.command.lock().await.choice.take(nonce).is_some();
+    tracing::info!(dropped, "spoken path disambiguation cancelled");
     Ok(())
 }
 
@@ -563,10 +712,71 @@ mod tests {
         assert_eq!(pending["reversible"], false);
         assert_eq!(pending["nonce"], 7);
 
+        let choose = serde_json::to_value(ExecOutcomeDto::Choose {
+            candidates: vec!["src/api/user.ts".into(), "src/web/user.ts".into()],
+            nonce: 3,
+        })
+        .expect("serialize");
+        assert_eq!(choose["kind"], "choose");
+        assert_eq!(choose["candidates"][1], "src/web/user.ts");
+        assert_eq!(choose["nonce"], 3);
+
         let blocked = serde_json::to_value(ExecOutcomeDto::Blocked).expect("serialize");
         assert_eq!(blocked["kind"], "blocked");
         let no_action = serde_json::to_value(ExecOutcomeDto::NoAction).expect("serialize");
         assert_eq!(no_action["kind"], "no_action");
+    }
+
+    fn pending_choice(paths: &[&str]) -> PendingChoice {
+        PendingChoice {
+            candidates: paths
+                .iter()
+                .map(|p| FileMatch {
+                    path: (*p).to_string(),
+                    score: 1.0,
+                })
+                .collect(),
+            output_mode: OutputMode::Auto,
+            #[cfg(windows)]
+            target_hwnd: 0,
+        }
+    }
+
+    #[test]
+    fn choice_delivery_serializes_snake_case() {
+        assert_eq!(
+            serde_json::to_value(ChoiceDelivery::Copied).expect("serialize"),
+            Value::String("copied".into())
+        );
+        assert_eq!(
+            serde_json::to_value(ChoiceDelivery::Typed).expect("serialize"),
+            Value::String("typed".into())
+        );
+    }
+
+    #[test]
+    fn a_superseding_choice_refuses_the_stale_pick() {
+        let mut gate: Gate<PendingChoice> = Gate::default();
+        let old_nonce = gate.stash(pending_choice(&["a/user.ts", "b/user.ts"]));
+        let new_nonce = gate.stash(pending_choice(&["c/order.ts", "d/order.ts"]));
+        assert_ne!(old_nonce, new_nonce);
+        assert!(
+            gate.take(old_nonce).is_none(),
+            "a pick for the superseded picker must not insert the new candidates"
+        );
+        let taken = gate.take(new_nonce).expect("the newer set survives");
+        assert_eq!(taken.candidates[0].path, "c/order.ts");
+        assert!(gate.take(new_nonce).is_none(), "slot is emptied after take");
+    }
+
+    #[test]
+    fn clearing_the_choice_gate_drops_the_candidates() {
+        // Each new utterance clears both gates, so the open picker's click
+        // finds nothing to act on.
+        let mut gate: Gate<PendingChoice> = Gate::default();
+        let nonce = gate.stash(pending_choice(&["a/user.ts", "b/user.ts"]));
+        gate.clear();
+        assert!(gate.take(nonce).is_none());
     }
 
     #[tokio::test]

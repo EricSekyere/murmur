@@ -1,13 +1,58 @@
 //! Spoken file resolution: rank indexed project paths against a spoken query
-//! ("the user controller test file") by token overlap. Pure and deterministic;
-//! no I/O. Tier-2 semantic fallback and disambiguation live in the app layer
-//! when they ship (viable-features.md §1.1).
+//! ("the user controller test file") by token overlap, then decide whether
+//! the winner is clear enough to act on ([`decide`]). Pure and deterministic;
+//! no I/O. The Tier-2 semantic fallback lives in the app layer when it ships
+//! (viable-features.md §1.1).
 
 /// One candidate path with its resolver score (higher is better).
 #[derive(Debug, Clone, PartialEq)]
 pub struct FileMatch {
     pub path: String,
     pub score: f64,
+}
+
+/// What the ranked matches settle on: nothing, one clear winner, or a
+/// near-tie the user must pick from.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Resolution {
+    /// No indexed path overlapped the query.
+    None,
+    /// The top match leads its runner-up by at least the ambiguity gap.
+    Decisive(FileMatch),
+    /// Every match within the gap of the top score, best first (2 to
+    /// [`MAX_PICKER_CANDIDATES`] entries).
+    Ambiguous(Vec<FileMatch>),
+}
+
+/// Runner-up gap below which acting on the top match would be a guess.
+/// Scoring moves in steps of at least 0.5 (a stem hit; a whole token or the
+/// exact-stem bonus is 1.0), while same-named files in different directories
+/// differ only by the 0.01-per-token path penalty, i.e. a few hundredths.
+/// Strictly-less-than keeps a clean half-point differentiator decisive.
+const AMBIGUITY_GAP: f64 = 0.5;
+
+/// Most near-tied candidates worth showing in a picker.
+const MAX_PICKER_CANDIDATES: usize = 5;
+
+/// Decide what to do with matches ranked by [`resolve_file`] (best first):
+/// act on a decisive winner, or surface the near-tied set for the user.
+pub fn decide(ranked: Vec<FileMatch>) -> Resolution {
+    let mut iter = ranked.into_iter();
+    let Some(top) = iter.next() else {
+        return Resolution::None;
+    };
+    // Near-tie is measured against the top score, not pairwise, so a chain
+    // of small gaps cannot drag in a candidate far below the winner.
+    let runners_up: Vec<FileMatch> = iter
+        .take(MAX_PICKER_CANDIDATES - 1)
+        .take_while(|m| top.score - m.score < AMBIGUITY_GAP)
+        .collect();
+    if runners_up.is_empty() {
+        return Resolution::Decisive(top);
+    }
+    let mut candidates = vec![top];
+    candidates.extend(runners_up);
+    Resolution::Ambiguous(candidates)
 }
 
 /// Spoken words that carry no signal about which file is meant.
@@ -271,5 +316,129 @@ mod tests {
     #[test]
     fn directories_of_empty_index_is_empty() {
         assert!(directories(&[]).is_empty());
+    }
+
+    fn fm(path: &str, score: f64) -> FileMatch {
+        FileMatch {
+            path: path.to_string(),
+            score,
+        }
+    }
+
+    fn ambiguous_paths(resolution: Resolution) -> Vec<String> {
+        match resolution {
+            Resolution::Ambiguous(candidates) => candidates.into_iter().map(|c| c.path).collect(),
+            other => panic!("expected Ambiguous, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn same_name_in_two_directories_is_ambiguous() {
+        // The archetypal near-tie: identical filenames whose scores differ
+        // only by the per-token path penalty (a few hundredths).
+        let files = files(&["src/api/user.ts", "src/web/user.ts", "docs/guide.md"]);
+        let ranked = resolve_file("open the user file", &files);
+        assert_eq!(
+            ambiguous_paths(decide(ranked)),
+            vec!["src/api/user.ts".to_string(), "src/web/user.ts".to_string()]
+        );
+    }
+
+    #[test]
+    fn same_name_at_different_depths_is_still_ambiguous() {
+        let files = files(&["src/user.ts", "vendor/lib/user.ts"]);
+        let ranked = resolve_file("user", &files);
+        assert_eq!(
+            ambiguous_paths(decide(ranked)),
+            vec!["src/user.ts".to_string(), "vendor/lib/user.ts".to_string()]
+        );
+    }
+
+    #[test]
+    fn exact_stem_bonus_is_decisive() {
+        // "user" hits user.ts exactly; user_profile.ts misses the exact-stem
+        // bonus, putting the gap over a full point.
+        let files = files(&["src/user.ts", "src/user_profile.ts"]);
+        let ranked = resolve_file("user", &files);
+        match decide(ranked) {
+            Resolution::Decisive(best) => assert_eq!(best.path, "src/user.ts"),
+            other => panic!("expected Decisive, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn extra_matched_token_is_decisive() {
+        let files = files(&["src/user_controller.ts", "src/user.ts"]);
+        let ranked = resolve_file("user controller", &files);
+        match decide(ranked) {
+            Resolution::Decisive(best) => assert_eq!(best.path, "src/user_controller.ts"),
+            other => panic!("expected Decisive, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn single_match_is_decisive_and_no_match_is_none() {
+        let files = files(&["src/invoice.rs", "docs/readme.md"]);
+        match decide(resolve_file("invoice", &files)) {
+            Resolution::Decisive(best) => assert_eq!(best.path, "src/invoice.rs"),
+            other => panic!("expected Decisive, got {other:?}"),
+        }
+        assert_eq!(
+            decide(resolve_file("quantum flux", &files)),
+            Resolution::None
+        );
+        assert_eq!(decide(Vec::new()), Resolution::None);
+    }
+
+    #[test]
+    fn gap_of_exactly_half_a_point_is_decisive() {
+        // The threshold is strictly-less-than: a clean stem-hit
+        // differentiator (0.5) must not open the picker.
+        let ranked = vec![fm("a/x.rs", 2.0), fm("b/y.rs", 1.5)];
+        assert_eq!(decide(ranked), Resolution::Decisive(fm("a/x.rs", 2.0)));
+    }
+
+    #[test]
+    fn gap_just_under_half_a_point_is_ambiguous() {
+        let ranked = vec![fm("a/x.rs", 2.0), fm("b/y.rs", 1.51)];
+        assert_eq!(
+            ambiguous_paths(decide(ranked)),
+            vec!["a/x.rs".to_string(), "b/y.rs".to_string()]
+        );
+    }
+
+    #[test]
+    fn ambiguity_is_anchored_to_the_top_score_not_chained() {
+        // 2.7 is within the gap of 3.0; 2.4 is within the gap of 2.7 but not
+        // of the top score, so it must not ride along.
+        let ranked = vec![fm("a", 3.0), fm("b", 2.7), fm("c", 2.4)];
+        assert_eq!(
+            ambiguous_paths(decide(ranked)),
+            vec!["a".to_string(), "b".to_string()]
+        );
+    }
+
+    #[test]
+    fn ambiguous_set_is_capped_at_five() {
+        let files = files(&[
+            "a/user.ts",
+            "b/user.ts",
+            "c/user.ts",
+            "d/user.ts",
+            "e/user.ts",
+            "f/user.ts",
+            "g/user.ts",
+        ]);
+        let ranked = resolve_file("user", &files);
+        assert_eq!(
+            ambiguous_paths(decide(ranked)),
+            vec![
+                "a/user.ts".to_string(),
+                "b/user.ts".to_string(),
+                "c/user.ts".to_string(),
+                "d/user.ts".to_string(),
+                "e/user.ts".to_string(),
+            ]
+        );
     }
 }
