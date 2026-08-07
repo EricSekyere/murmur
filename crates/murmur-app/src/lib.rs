@@ -265,9 +265,15 @@ pub fn run() -> anyhow::Result<()> {
 /// Stop and join an active meeting on the way out, so its final transcript and
 /// speaker labels are saved and — privacy-critical — its raw-audio spool is
 /// deleted. Quit is a deliberate user action, not the crash case the startup
-/// sweep exists for. Blocking (the final chunk still transcribes) is accepted
-/// here: the alternative is leaving raw meeting audio on disk. The sweep
-/// afterwards is the backstop for a worker that never reached its own cleanup.
+/// sweep exists for. The sweep afterwards is the backstop for a worker that
+/// never reached its own cleanup.
+///
+/// This blocks, and not briefly: `finish_meeting` diarizes the whole spooled
+/// meeting, not just the pending chunk, so quitting after a long meeting can
+/// sit here for minutes with no timeout and no window to show progress. That
+/// is accepted only because the alternative is leaving raw meeting audio on
+/// disk. Bounding it (or skipping diarization on this path, which
+/// `diarize_into` already supports) is the open follow-up.
 fn shutdown_meeting(app: &tauri::AppHandle) {
     let handle = app.try_state::<AppState>().and_then(|state| {
         state

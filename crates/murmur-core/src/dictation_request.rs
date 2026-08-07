@@ -44,8 +44,10 @@ pub fn write(path: &Path, req: &DictationRequest) -> Result<()> {
 /// corrupt trigger cannot wedge the poller.
 pub fn take(path: &Path) -> Option<DictationRequest> {
     // Read raw bytes and clear before any decode: a UTF-8 failure inside
-    // read_to_string would return early and leave the file in place, so a
-    // truncated cross-process write would wedge the poller on every tick.
+    // read_to_string would return early and leave the file in place, so the
+    // poller would re-read and re-fail on it every tick forever. Our own
+    // writer renames a tempfile into place and cannot leave partial bytes, so
+    // the vector is a foreign or hand-edited file, not a torn write.
     let bytes = std::fs::read(path).ok()?;
     clear(path);
     match serde_json::from_slice(&bytes) {
