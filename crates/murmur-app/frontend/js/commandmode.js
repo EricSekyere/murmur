@@ -270,9 +270,11 @@
   async function runTranscript(transcript) {
     const outcome = await invoke('run_command', { transcript });
     const kind = outcome && outcome.kind;
-    // The backend cleared both gates for this utterance, so any picker still
-    // on screen is dead; take it down rather than leave a click that fails.
+    // The backend cleared both gates for this utterance, so whichever dialog
+    // is still on screen is dead; take it down rather than leave a click that
+    // can only fail.
     if (chooseNonce !== null && kind !== 'choose') closeChooser();
+    if (shownNonce !== null && kind !== 'pending') closeDialog();
     if (kind === 'choose') {
       openChooser(outcome);
     } else if (kind === 'pending') {

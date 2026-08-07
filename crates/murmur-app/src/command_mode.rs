@@ -318,18 +318,24 @@ fn deliver_chosen_path(
     output_mode: OutputMode,
     #[cfg(windows)] target_hwnd: usize,
 ) -> anyhow::Result<ChoiceDelivery> {
+    // Clipboard and stdout put nothing in a window, so they need no target.
+    let needs_focused_target = !matches!(output_mode, OutputMode::Clipboard | OutputMode::Stdout);
+
+    // No live-tracked fallback: the picker always captures a start window, and
+    // typing into a window the user never dictated into is the bug this whole
+    // gate exists to prevent.
     #[cfg(windows)]
-    {
-        let needs_focused_target =
-            !matches!(output_mode, OutputMode::Clipboard | OutputMode::Stdout);
-        // No live-tracked fallback: the picker always captures a start window,
-        // and typing into a window the user never dictated into is the bug
-        // this whole gate exists to prevent.
-        if needs_focused_target && !crate::focus::ensure_external_target(target_hwnd, 0) {
-            murmur_core::output::dispatch_verbatim(path, OutputMode::Clipboard)
-                .context("copying the chosen path to the clipboard")?;
-            return Ok(ChoiceDelivery::Copied);
-        }
+    let restored = crate::focus::ensure_external_target(target_hwnd, 0);
+    // Restoring focus is Windows-only, so elsewhere there is no way to know the
+    // keystrokes would land anywhere but Murmur's own window, which the click
+    // just activated. Copy instead of typing into ourselves.
+    #[cfg(not(windows))]
+    let restored = false;
+
+    if needs_focused_target && !restored {
+        murmur_core::output::dispatch_verbatim(path, OutputMode::Clipboard)
+            .context("copying the chosen path to the clipboard")?;
+        return Ok(ChoiceDelivery::Copied);
     }
     murmur_core::output::dispatch_verbatim(path, output_mode).context("typing the chosen path")?;
     Ok(ChoiceDelivery::Typed)
@@ -751,6 +757,23 @@ mod tests {
         assert_eq!(
             serde_json::to_value(ChoiceDelivery::Typed).expect("serialize"),
             Value::String("typed".into())
+        );
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn without_focus_restore_a_pick_goes_to_the_clipboard() {
+        // Clicking the picker activates Murmur's own window, and only Windows
+        // can hand focus back. Typing here would insert the path into our own
+        // UI, which is the exact failure the choice gate exists to prevent.
+        assert_eq!(
+            deliver_chosen_path("src/user.ts", OutputMode::Auto).expect("deliver"),
+            ChoiceDelivery::Copied
+        );
+        assert_eq!(
+            deliver_chosen_path("src/user.ts", OutputMode::Clipboard).expect("deliver"),
+            ChoiceDelivery::Typed,
+            "clipboard mode needs no window, so it is not a fallback"
         );
     }
 
