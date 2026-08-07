@@ -986,10 +986,15 @@ mod tests {
         assert_eq!(expand_symbols("ab equals c"), "ab =c");
         assert_eq!(expand_symbols("中文 equals 文"), "中文 =文");
 
+        // Developer mode, not prose: the prose filler list deliberately keeps
+        // "actually", so process_prose would leave this alone either way.
         assert_eq!(
-            PostProcessor::process_prose("caféactually done"),
+            PostProcessor::process("caféactually done"),
             "caféactually done"
         );
+        // The predicate itself tightened, so "so" no longer prefix-matches a
+        // longer non-ASCII word.
+        assert_eq!(remove_leading_so("soñar dreams"), "soñar dreams");
         assert_eq!(
             remove_phrase_ci("北京you know上海", "you know"),
             "北京you know上海"
