@@ -1103,6 +1103,24 @@
       </div>
     </div>
 
+    <!-- Spoken path picker: shown when several indexed paths match a spoken
+         "open the … file" query almost equally well. Murmur inserts only the
+         candidate the user physically picks. -->
+    <div id="command-choose" class="cmdconfirm" hidden>
+      <div class="cmdconfirm__card" role="dialog" aria-modal="true"
+           aria-labelledby="command-choose-title" aria-describedby="command-choose-intro">
+        <h2 class="cmdconfirm__title" id="command-choose-title">Which file?</h2>
+        <p class="cmdconfirm__intro" id="command-choose-intro">
+          Several paths match what you said. Click one, or press its number, to
+          insert it. Press Escape to dismiss.
+        </p>
+        <ul class="cmdchoose__list" id="command-choose-list" aria-labelledby="command-choose-title"></ul>
+        <div class="cmdconfirm__actions">
+          <button type="button" class="btn-small" id="command-choose-cancel">Cancel</button>
+        </div>
+      </div>
+    </div>
+
     <!-- What's New overlay -->
     <div id="whats-new" class="whatsnew" hidden>
       <div class="whatsnew__card">

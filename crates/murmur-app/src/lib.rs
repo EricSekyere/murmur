@@ -239,6 +239,8 @@ pub fn run() -> anyhow::Result<()> {
             command_mode::run_command,
             command_mode::confirm_pending,
             command_mode::cancel_pending,
+            command_mode::choose_candidate,
+            command_mode::cancel_choice,
             rewrite::rewrite_selection,
             #[cfg(feature = "full")]
             commands::help_search,
