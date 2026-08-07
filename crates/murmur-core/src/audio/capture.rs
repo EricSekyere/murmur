@@ -199,6 +199,15 @@ impl AudioCapture {
         Ok(())
     }
 
+    /// Record the native format of an OS voice-capture endpoint. Call only
+    /// once that endpoint is confirmed live: on any failure path the session
+    /// falls back to CPAL, whose format must stay the one in effect.
+    #[cfg(any(windows, target_os = "linux"))]
+    fn adopt_voice_format(&mut self, rate: u32, channels: u16) {
+        self.native_rate = rate;
+        self.native_channels = channels;
+    }
+
     /// Try the OS echo-cancelling capture path. Returns `Some(())` on success.
     /// Windows uses the WASAPI Communications AEC; Linux loads PulseAudio/
     /// PipeWire `module-echo-cancel` and captures its cancelled source. macOS
@@ -222,14 +231,6 @@ impl AudioCapture {
             }
             match super::wasapi::open_voice_capture(Arc::clone(&self.buffer), MAX_SAMPLES) {
                 Ok((cap, rate, channels)) => {
-                    self.native_rate = rate;
-                    self.native_channels = channels;
-                    self.voice = Some(cap);
-                    tracing::info!(
-                        "Voice capture (echo cancellation) active: {}Hz, {} channel(s)",
-                        rate,
-                        channels
-                    );
                     // Confirm the AEC actually delivers signal before trusting
                     // it. Some Windows stacks' Communications AEC emits only
                     // digital zeros even with a render reference. Wait for a
@@ -279,6 +280,18 @@ impl AudioCapture {
                             return None;
                         }
                     }
+                    // Only adopt the endpoint's format once the probe passed:
+                    // the fallback may warm-reuse an already-open CPAL stream,
+                    // which never re-reports its own (typically 48 kHz stereo)
+                    // format, and a stale 16 kHz mono claim would skip the
+                    // downmix and resample.
+                    self.adopt_voice_format(rate, channels);
+                    self.voice = Some(cap);
+                    tracing::info!(
+                        "Voice capture (echo cancellation) active: {}Hz, {} channel(s)",
+                        rate,
+                        channels
+                    );
                     Some(())
                 }
                 Err(e) => {
@@ -328,8 +341,7 @@ impl AudioCapture {
                             return None;
                         }
                     }
-                    self.native_rate = super::pulse_aec::RATE;
-                    self.native_channels = super::pulse_aec::CHANNELS;
+                    self.adopt_voice_format(super::pulse_aec::RATE, super::pulse_aec::CHANNELS);
                     self.voice = Some(cap);
                     tracing::info!(
                         "Voice capture (echo cancellation) active: {}Hz, {} channel(s)",
@@ -504,7 +516,8 @@ impl AudioCapture {
         {
             self.voice = None;
         }
-        let mut samples = self.buffer.lock().map_err(|e| anyhow::anyhow!("{}", e))?;
+        // Recover a poisoned lock rather than discarding the session's audio.
+        let mut samples = self.buffer.lock().unwrap_or_else(|e| e.into_inner());
         let raw = std::mem::take(&mut *samples);
 
         tracing::info!(
@@ -833,6 +846,27 @@ fn pick_best_config(device: &cpal::Device) -> Result<SupportedStreamConfig> {
 mod tests {
     use super::*;
     use std::time::Duration;
+
+    /// The AEC endpoint's format must reach `native_*` only after its liveness
+    /// probe passes. A failed probe falls back to the raw mic, which may
+    /// warm-reuse an already-open CPAL stream and never re-report its own
+    /// format — so an early assignment would leave 48 kHz stereo audio being
+    /// read as 16 kHz mono (no downmix, no resample).
+    #[cfg(any(windows, target_os = "linux"))]
+    #[test]
+    fn voice_format_is_adopted_only_when_the_endpoint_is_confirmed() {
+        let mut capture = AudioCapture::new().expect("create capture");
+        capture.native_rate = 48_000;
+        capture.native_channels = 2;
+
+        // The failure paths in try_start_voice_capture return without adopting.
+        assert_eq!(capture.native_rate(), 48_000);
+        assert_eq!(capture.native_channels(), 2);
+
+        capture.adopt_voice_format(16_000, 1);
+        assert_eq!(capture.native_rate(), 16_000);
+        assert_eq!(capture.native_channels(), 1);
+    }
 
     /// Manual warm-cycle smoke test: needs a real input device, so it's
     /// ignored in CI. Run locally with:

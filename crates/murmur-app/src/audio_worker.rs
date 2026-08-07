@@ -34,8 +34,23 @@ const MID_SESSION_STALL_TICKS: u32 = 60;
 /// threshold (`SpeechThreshold`) both use it.
 const SIGNAL_FLOOR_RMS: f32 = 0.002;
 
+/// How long the start handshake waits for its `Started`/`StartFailed`.
+const START_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(5);
+/// Longest gap tolerated between streaming results before the session is
+/// treated as wedged.
+const RESULT_TIMEOUT: Duration = Duration::from_secs(120);
+
+/// Generation stamp for results that belong to no particular session (a
+/// worker-level failure); every receiver accepts them. Session generations
+/// start at 1 (see `session::handle_toggle`), so zero is free.
+const ANY_GENERATION: u64 = 0;
+
 #[derive(Clone)]
 pub(crate) struct StartParams {
+    /// Session generation this start belongs to. Every result it produces is
+    /// stamped with it, so a superseded session's queued results can never be
+    /// consumed by the next one.
+    pub generation: u64,
     pub audio_device: Option<String>,
     pub rms_threshold: f32,
     pub vad_threshold: f32,
@@ -87,15 +102,55 @@ pub(crate) enum AudioResult {
     StreamingDone,
 }
 
+/// A result plus the session generation that produced it.
+struct Tagged {
+    generation: u64,
+    result: AudioResult,
+}
+
+/// Whether a receiver waiting on `expected` may consume a result stamped
+/// `stamped`. Worker-level results ([`ANY_GENERATION`]) reach everyone.
+fn accepts(stamped: u64, expected: u64) -> bool {
+    stamped == expected || stamped == ANY_GENERATION
+}
+
+/// Sender that stamps every result with the session generation it belongs to.
+struct ResultSender {
+    tx: mpsc::Sender<Tagged>,
+    generation: u64,
+}
+
+impl ResultSender {
+    /// Send a result for this session. A closed channel means the app-side
+    /// worker is gone, which every call site already treats as benign.
+    fn send(&self, result: AudioResult) {
+        self.send_as(self.generation, result);
+    }
+
+    /// Send on behalf of another generation: a rejected `StartStreaming` must
+    /// answer the session that queued it, not the one rejecting it.
+    fn send_as(&self, generation: u64, result: AudioResult) {
+        let _ = self.tx.send(Tagged { generation, result });
+    }
+}
+
+/// Send a result that belongs to no session (a worker-level failure).
+fn broadcast(tx: &mpsc::Sender<Tagged>, result: AudioResult) {
+    let _ = tx.send(Tagged {
+        generation: ANY_GENERATION,
+        result,
+    });
+}
+
 pub(crate) struct Handle {
     cmd_tx: mpsc::Sender<Cmd>,
-    result_rx: Mutex<mpsc::Receiver<AudioResult>>,
+    result_rx: Mutex<mpsc::Receiver<Tagged>>,
 }
 
 impl Handle {
     pub fn spawn(app_handle: tauri::AppHandle) -> Self {
         let (cmd_tx, cmd_rx) = mpsc::channel::<Cmd>();
-        let (result_tx, result_rx) = mpsc::channel::<AudioResult>();
+        let (result_tx, result_rx) = mpsc::channel::<Tagged>();
 
         std::thread::spawn(move || {
             let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -104,14 +159,18 @@ impl Handle {
             if let Err(panic_info) = outcome {
                 let msg = panic_message(panic_info, "unknown panic in audio worker thread");
                 tracing::error!("Audio worker thread panicked: {}", msg);
-                let _ = result_tx.send(AudioResult::StartFailed(format!(
-                    "Audio worker crash: {}",
-                    msg
-                )));
+                broadcast(
+                    &result_tx,
+                    AudioResult::StartFailed(format!("Audio worker crash: {}", msg)),
+                );
                 emit_hotkey_error(&app_handle, &format!("Audio driver crashed: {}", msg));
             }
         });
 
+        Handle::new(cmd_tx, result_rx)
+    }
+
+    fn new(cmd_tx: mpsc::Sender<Cmd>, result_rx: mpsc::Receiver<Tagged>) -> Self {
         Handle {
             cmd_tx,
             result_rx: Mutex::new(result_rx),
@@ -132,13 +191,32 @@ impl Handle {
             .map_err(|e| format!("Audio worker channel closed: {}", e))
     }
 
-    /// Block until the queued StartStreaming command is acknowledged.
-    pub fn await_started(&self) -> Result<(), String> {
+    /// Block until the StartStreaming command queued for `generation` is
+    /// acknowledged. Results from any other generation are discarded: a
+    /// previous session that started late (past this handshake's timeout) may
+    /// still have its own `Started` and phrases sitting in the channel, and
+    /// consuming them here would splice its audio into this session.
+    pub fn await_started(&self, generation: u64) -> Result<(), String> {
         let rx = self.result_rx.lock().unwrap_or_else(|e| e.into_inner());
+        let deadline = Instant::now() + START_HANDSHAKE_TIMEOUT;
         loop {
-            match rx.recv_timeout(Duration::from_secs(5)) {
-                Ok(AudioResult::Started) => return Ok(()),
-                Ok(AudioResult::StartFailed(e)) => return Err(e),
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            match rx.recv_timeout(remaining) {
+                Ok(tagged) if !accepts(tagged.generation, generation) => {
+                    tracing::debug!(
+                        stamped = tagged.generation,
+                        expected = generation,
+                        "Discarding another session's audio result during start handshake"
+                    );
+                }
+                Ok(Tagged {
+                    result: AudioResult::Started,
+                    ..
+                }) => return Ok(()),
+                Ok(Tagged {
+                    result: AudioResult::StartFailed(e),
+                    ..
+                }) => return Err(e),
                 Ok(_) => {
                     tracing::debug!("Ignoring stale audio worker result during start handshake");
                 }
@@ -163,11 +241,27 @@ impl Handle {
             .map_err(|e| format!("Audio worker channel closed: {}", e))
     }
 
-    /// Blocking receive for the next streaming result.
-    pub fn recv_result(&self) -> Result<AudioResult, String> {
+    /// Blocking receive for the next streaming result of `generation`. Results
+    /// stamped with another generation are discarded, never delivered: an
+    /// orphaned session's buffered phrases must never be typed into the window
+    /// this session is targeting.
+    pub fn recv_result(&self, generation: u64) -> Result<AudioResult, String> {
         let rx = self.result_rx.lock().unwrap_or_else(|e| e.into_inner());
-        rx.recv_timeout(Duration::from_secs(120))
-            .map_err(|e| format!("Audio worker recv timeout: {}", e))
+        let deadline = Instant::now() + RESULT_TIMEOUT;
+        loop {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            let tagged = rx
+                .recv_timeout(remaining)
+                .map_err(|e| format!("Audio worker recv timeout: {}", e))?;
+            if accepts(tagged.generation, generation) {
+                return Ok(tagged.result);
+            }
+            tracing::debug!(
+                stamped = tagged.generation,
+                expected = generation,
+                "Discarding another session's audio result"
+            );
+        }
     }
 }
 
@@ -181,12 +275,12 @@ pub(crate) fn panic_message(panic_info: Box<dyn std::any::Any + Send>, fallback:
     }
 }
 
-fn run_worker(cmd_rx: &mpsc::Receiver<Cmd>, result_tx: &mpsc::Sender<AudioResult>) {
+fn run_worker(cmd_rx: &mpsc::Receiver<Cmd>, result_tx: &mpsc::Sender<Tagged>) {
     let mut capture = match AudioCapture::new() {
         Ok(c) => c,
         Err(e) => {
             tracing::error!("Failed to create AudioCapture: {}", e);
-            let _ = result_tx.send(AudioResult::StartFailed(e.to_string()));
+            broadcast(result_tx, AudioResult::StartFailed(e.to_string()));
             return;
         }
     };
@@ -194,13 +288,17 @@ fn run_worker(cmd_rx: &mpsc::Receiver<Cmd>, result_tx: &mpsc::Sender<AudioResult
     while let Ok(cmd) = cmd_rx.recv() {
         match cmd {
             Cmd::StartStreaming(params) => {
+                let sender = ResultSender {
+                    tx: result_tx.clone(),
+                    generation: params.generation,
+                };
                 // Contain a panic inside a single session (a driver or VAD bug)
                 // so it ends that session instead of unwinding the whole worker
                 // thread — which would wedge every future session with a closed
                 // channel. The thread-level catch in Handle::spawn remains a
                 // last resort for a panic outside a session.
                 let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    run_session(&mut capture, &params, cmd_rx, result_tx);
+                    run_session(&mut capture, &params, cmd_rx, &sender);
                 }));
                 if let Err(panic_info) = outcome {
                     let msg = panic_message(panic_info, "panic in recording session");
@@ -212,7 +310,7 @@ fn run_worker(cmd_rx: &mpsc::Receiver<Cmd>, result_tx: &mpsc::Sender<AudioResult
                     // from its params).
                     capture.set_warm_start(false);
                     stop_capture(&mut capture, "panic recovery");
-                    let _ = result_tx.send(AudioResult::StreamingDone);
+                    sender.send(AudioResult::StreamingDone);
                 }
             }
             Cmd::Stop => {
@@ -252,7 +350,7 @@ fn run_session(
     capture: &mut AudioCapture,
     params: &StartParams,
     cmd_rx: &mpsc::Receiver<Cmd>,
-    result_tx: &mpsc::Sender<AudioResult>,
+    result_tx: &ResultSender,
 ) {
     // Sync the warm mode with the setting each session, so a change made
     // while no SetWarm command was processed still applies here.
@@ -262,7 +360,7 @@ fn run_session(
         params.audio_device.as_deref(),
         params.echo_cancellation,
     ) {
-        let _ = result_tx.send(AudioResult::StartFailed(msg));
+        result_tx.send(AudioResult::StartFailed(msg));
         return;
     }
 
@@ -279,10 +377,10 @@ fn run_session(
         let msg = "Microphone opened but produced no audio samples. Check your microphone permissions and the selected input device.".to_string();
         tracing::error!("{}", msg);
         stop_capture(capture, "startup sample probe failure");
-        let _ = result_tx.send(AudioResult::StartFailed(msg));
+        result_tx.send(AudioResult::StartFailed(msg));
         return;
     }
-    let _ = result_tx.send(AudioResult::Started);
+    result_tx.send(AudioResult::Started);
 
     let echo_cancellation = capture.echo_cancellation_active();
     let mut analyzed_up_to = 0usize;
@@ -297,7 +395,7 @@ fn run_session(
     keep_calibration_preroll(&live_buf, &mut analyzed_up_to, native_rate, native_channels);
 
     let session = build_session(params, &calibration, native_rate, echo_cancellation);
-    let _ = result_tx.send(AudioResult::SpeechThreshold(
+    result_tx.send(AudioResult::SpeechThreshold(
         calibration.threshold.min(SIGNAL_FLOOR_RMS),
     ));
 
@@ -373,7 +471,7 @@ fn probe_initial_samples(live_buf: &Arc<Mutex<Vec<f32>>>) -> bool {
 /// The per-session monitoring loop and its state.
 struct Monitor<'a> {
     cmd_rx: &'a mpsc::Receiver<Cmd>,
-    result_tx: &'a mpsc::Sender<AudioResult>,
+    result_tx: &'a ResultSender,
     capture: &'a mut AudioCapture,
     live_buf: Arc<Mutex<Vec<f32>>>,
     session: DictationSession,
@@ -432,7 +530,7 @@ impl Monitor<'_> {
 
             self.level_tick += 1;
             if self.level_tick.is_multiple_of(2) {
-                let _ = self.result_tx.send(AudioResult::AudioLevel(chunk_rms));
+                self.result_tx.send(AudioResult::AudioLevel(chunk_rms));
             }
             self.adapt_threshold(chunk.is_some(), chunk_rms);
 
@@ -441,7 +539,7 @@ impl Monitor<'_> {
                 && let Some(partial) = self.session.current_phrase()
                 && !partial.samples.is_empty()
             {
-                let _ = self.result_tx.send(AudioResult::PartialPhrase(partial));
+                self.result_tx.send(AudioResult::PartialPhrase(partial));
             }
 
             if let Flow::EndSession = self.dispatch_events(events) {
@@ -456,11 +554,14 @@ impl Monitor<'_> {
     /// until timeout while the UI thinks a session is starting.
     fn handle_command(&mut self) -> Flow {
         match self.cmd_rx.try_recv() {
-            Ok(Cmd::StartStreaming(_)) => {
+            Ok(Cmd::StartStreaming(rejected)) => {
                 tracing::warn!("StartStreaming received while a session is active; rejecting");
-                let _ = self.result_tx.send(AudioResult::StartFailed(
-                    "A recording session is already active".to_string(),
-                ));
+                // Answer the rejected start's own generation, so its handshake
+                // fails instead of picking up this session's queued results.
+                self.result_tx.send_as(
+                    rejected.generation,
+                    AudioResult::StartFailed("A recording session is already active".to_string()),
+                );
                 Flow::Continue
             }
             Err(mpsc::TryRecvError::Empty) => Flow::Continue,
@@ -498,20 +599,20 @@ impl Monitor<'_> {
                 if let DictationEvent::PhraseReady(audio) = event
                     && !audio.samples.is_empty()
                 {
-                    let _ = self.result_tx.send(AudioResult::PhraseReady(audio));
+                    self.result_tx.send(AudioResult::PhraseReady(audio));
                 }
             }
         }
         if let Some(audio) = self.session.finish()
             && !audio.samples.is_empty()
         {
-            let _ = self.result_tx.send(AudioResult::PhraseReady(audio));
+            self.result_tx.send(AudioResult::PhraseReady(audio));
         }
     }
 
     fn finish_session(&mut self, context: &str) -> Flow {
         stop_capture(self.capture, context);
-        let _ = self.result_tx.send(AudioResult::StreamingDone);
+        self.result_tx.send(AudioResult::StreamingDone);
         Flow::EndSession
     }
 
@@ -546,7 +647,7 @@ impl Monitor<'_> {
     fn track_signal(&mut self, saw_new_samples: bool, chunk_rms: f32) {
         if saw_new_samples && chunk_rms > SIGNAL_FLOOR_RMS && !self.saw_signal {
             self.saw_signal = true;
-            let _ = self.result_tx.send(AudioResult::SignalDetected);
+            self.result_tx.send(AudioResult::SignalDetected);
         }
         if saw_new_samples {
             self.consecutive_no_sample_ticks = 0;
@@ -617,7 +718,7 @@ impl Monitor<'_> {
 
     fn fail_no_signal(&mut self, msg: &str) -> Flow {
         tracing::warn!("{}", msg);
-        let _ = self.result_tx.send(AudioResult::NoSignal(msg.to_string()));
+        self.result_tx.send(AudioResult::NoSignal(msg.to_string()));
         self.finish_session("no signal")
     }
 
@@ -651,7 +752,7 @@ impl Monitor<'_> {
             );
             self.current_threshold = candidate;
             self.session.set_speech_threshold(candidate);
-            let _ = self.result_tx.send(AudioResult::SpeechThreshold(
+            self.result_tx.send(AudioResult::SpeechThreshold(
                 candidate.min(SIGNAL_FLOOR_RMS),
             ));
         }
@@ -664,13 +765,13 @@ impl Monitor<'_> {
                 DictationEvent::ActivityDetected => {
                     if !self.saw_signal {
                         self.saw_signal = true;
-                        let _ = self.result_tx.send(AudioResult::SignalDetected);
+                        self.result_tx.send(AudioResult::SignalDetected);
                     }
                 }
                 DictationEvent::PhraseReady(audio) => {
                     // had_phrase is set in run() before the watchdogs, not here.
                     if !audio.samples.is_empty() {
-                        let _ = self.result_tx.send(AudioResult::PhraseReady(audio));
+                        self.result_tx.send(AudioResult::PhraseReady(audio));
                     }
                 }
                 DictationEvent::SessionTimeout => {
@@ -715,6 +816,76 @@ fn should_fail_on_digital_silence(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn handle_with_results() -> (Handle, mpsc::Sender<Tagged>) {
+        let (cmd_tx, _cmd_rx) = mpsc::channel::<Cmd>();
+        let (result_tx, result_rx) = mpsc::channel::<Tagged>();
+        (Handle::new(cmd_tx, result_rx), result_tx)
+    }
+
+    fn send(tx: &mpsc::Sender<Tagged>, generation: u64, result: AudioResult) {
+        tx.send(Tagged { generation, result }).expect("send");
+    }
+
+    fn empty_phrase() -> AudioResult {
+        AudioResult::PhraseReady(AudioBuffer {
+            samples: Vec::new(),
+            sample_rate: AudioBuffer::SAMPLE_RATE,
+        })
+    }
+
+    /// The orphaned-session bug: a start whose handshake timed out can still
+    /// come up and queue `Started` plus phrases. A later session must not read
+    /// that `Started` as its own acknowledgement.
+    #[test]
+    fn start_handshake_ignores_an_orphaned_sessions_results() {
+        let (handle, tx) = handle_with_results();
+        send(&tx, 1, AudioResult::Started);
+        send(&tx, 1, empty_phrase());
+        send(
+            &tx,
+            2,
+            AudioResult::StartFailed("A recording session is already active".to_string()),
+        );
+
+        let err = handle.await_started(2).expect_err("stale Started accepted");
+        assert!(err.contains("already active"));
+    }
+
+    /// ...and the orphan's queued audio must never be delivered to the new
+    /// session, which would type it into whatever window is focused now.
+    #[test]
+    fn recv_result_never_yields_another_sessions_audio() {
+        let (handle, tx) = handle_with_results();
+        send(&tx, 1, empty_phrase());
+        send(&tx, 1, AudioResult::StreamingDone);
+        send(&tx, 2, AudioResult::SignalDetected);
+
+        assert!(matches!(
+            handle.recv_result(2).expect("recv"),
+            AudioResult::SignalDetected
+        ));
+    }
+
+    #[test]
+    fn worker_level_failures_reach_every_session() {
+        let (handle, tx) = handle_with_results();
+        send(
+            &tx,
+            ANY_GENERATION,
+            AudioResult::StartFailed("Audio worker crash".to_string()),
+        );
+        assert!(
+            handle
+                .await_started(7)
+                .expect_err("crash not surfaced")
+                .contains("crash")
+        );
+
+        assert!(accepts(ANY_GENERATION, 7));
+        assert!(accepts(7, 7));
+        assert!(!accepts(6, 7));
+    }
 
     #[test]
     fn digital_silence_fails_only_before_first_phrase() {

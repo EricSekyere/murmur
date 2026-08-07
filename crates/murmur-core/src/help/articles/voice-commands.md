@@ -72,6 +72,17 @@ typing text. Press Ctrl+Shift+Period to enter it, then speak an action such as
 run from voice alone: they wait in a confirm dialog until you click or press a
 key, so a misheard phrase cannot act on its own.
 
+## Choosing between close matches
+
+Sometimes several paths fit what you said almost equally well, most often the
+same filename living in two different folders. Rather than guess, Murmur shows
+a short picker listing the near-tied paths. Click one, or press its number from
+1 to 5, and that path is inserted; press Escape or Cancel to dismiss the picker
+without inserting anything. Speaking again replaces the picker with the result
+of your new phrase. If Murmur cannot hand focus back to the window you were
+dictating into, it copies the chosen path to your clipboard instead of typing
+it, and tells you so.
+
 ## Spoken path aliases
 
 File and folder phrases in command mode are resolved against your indexed

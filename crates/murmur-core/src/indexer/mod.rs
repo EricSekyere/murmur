@@ -24,7 +24,7 @@ use ignore::WalkBuilder;
 
 pub use aliases::apply_aliases;
 pub use rank::RankedSymbol;
-pub use resolve::{FileMatch, directories, resolve_file};
+pub use resolve::{FileMatch, Resolution, decide, directories, resolve_file};
 
 /// Source extensions scanned when [`IndexConfig::extensions`] is empty.
 const DEFAULT_EXTENSIONS: &[&str] = &["rs", "ts", "tsx", "js", "jsx", "py", "go", "java"];

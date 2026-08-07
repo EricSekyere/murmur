@@ -8,20 +8,110 @@
 //! pinned SHA256 is verified before the partial is renamed into place, so a
 //! corrupt or tampered artifact is never observable at the final path.
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::sync::{LazyLock, Mutex};
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 use sha2::{Digest, Sha256};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+/// Give up if the server never answers the initial connect.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
+/// Cap the gap between two body chunks rather than the transfer as a whole:
+/// artifacts here run to several hundred megabytes, so any total timeout large
+/// enough for a slow link would also be too large to catch a stalled one. A
+/// per-read deadline fires on the actual failure mode (headers sent, then
+/// silence) while a genuinely slow but progressing download runs as long as it
+/// needs.
+const READ_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// Shared client: connection pooling across the several artifacts a first run
+/// fetches, and one place where the timeouts above are guaranteed to apply.
+static CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
+    reqwest::Client::builder()
+        .connect_timeout(CONNECT_TIMEOUT)
+        .read_timeout(READ_TIMEOUT)
+        .build()
+        // Only fails if TLS setup fails, in which case no download could work
+        // anyway; the plain client keeps that a per-request error, not a panic.
+        .unwrap_or_else(|e| {
+            tracing::error!("Failed to build download client, using defaults: {}", e);
+            reqwest::Client::new()
+        })
+});
+
+/// Destinations with a `fetch_to_file` running against them right now.
+///
+/// Two fetches sharing a `dest` share the same `.partial`, and both would open
+/// it in append mode and write the full body into it. Serializing by waiting
+/// would only make the loser re-verify bytes the winner already finalized, so
+/// the second caller fails fast instead and the caller (a retry button, a
+/// second window) can decide whether to retry.
+static IN_FLIGHT: LazyLock<Mutex<HashSet<PathBuf>>> = LazyLock::new(|| Mutex::new(HashSet::new()));
+
+/// Claims `dest` for the duration of one fetch, releasing it on drop so an
+/// error path or a cancelled task cannot leak the claim.
+struct DestClaim(PathBuf);
+
+impl DestClaim {
+    fn acquire(dest: &Path, label: &str) -> Result<Self> {
+        // Resolve through the parent so `./models/x` and an absolute path to
+        // the same file collide; the file itself may not exist yet.
+        let key = match dest.parent().map(std::fs::canonicalize) {
+            Some(Ok(parent)) => match dest.file_name() {
+                // Windows file names are case-insensitive, so two spellings of
+                // one file must claim the same key or both would append to the
+                // same .partial.
+                #[cfg(windows)]
+                Some(name) => parent.join(name.to_string_lossy().to_lowercase()),
+                #[cfg(not(windows))]
+                Some(name) => parent.join(name),
+                None => dest.to_path_buf(),
+            },
+            Some(Err(e)) => {
+                // Without a canonical parent, two spellings of one directory
+                // stop colliding; say so rather than failing to guard silently.
+                tracing::warn!(
+                    dest = %dest.display(),
+                    error = %e,
+                    "could not canonicalize the download directory; \
+                     concurrent-download detection falls back to the literal path"
+                );
+                dest.to_path_buf()
+            }
+            None => dest.to_path_buf(),
+        };
+        let mut in_flight = IN_FLIGHT.lock().unwrap_or_else(|e| e.into_inner());
+        anyhow::ensure!(
+            in_flight.insert(key.clone()),
+            "A download of {label} into this location is already in progress"
+        );
+        Ok(Self(key))
+    }
+}
+
+impl Drop for DestClaim {
+    fn drop(&mut self) {
+        IN_FLIGHT
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&self.0);
+    }
+}
 
 /// How the server answered a (possibly ranged) fetch request.
 enum FetchStart {
     /// Body starts at byte zero: a fresh download, or the server ignored the
     /// `Range` header (200 instead of 206).
     Full { total: Option<u64> },
-    /// 206: the body resumes at the requested offset. `total` is the full
-    /// artifact size (offset + remaining body length).
-    Resumed { total: Option<u64> },
+    /// 206: the body resumes at `start`. `total` is the full artifact size
+    /// (start + remaining body length).
+    Resumed {
+        start: Option<u64>,
+        total: Option<u64>,
+    },
     /// 416: the requested offset is at or past the end of the artifact, so
     /// the partial is either already complete or longer than the artifact.
     RangeNotSatisfiable,
@@ -72,7 +162,12 @@ impl FetchSource for HttpSource {
                 let total = response
                     .content_length()
                     .map(|remaining| offset + remaining);
-                Ok((FetchStart::Resumed { total }, HttpBody(response)))
+                let start = response
+                    .headers()
+                    .get(reqwest::header::CONTENT_RANGE)
+                    .and_then(|v| v.to_str().ok())
+                    .and_then(content_range_start);
+                Ok((FetchStart::Resumed { start, total }, HttpBody(response)))
             }
             reqwest::StatusCode::RANGE_NOT_SATISFIABLE => {
                 Ok((FetchStart::RangeNotSatisfiable, HttpBody(response)))
@@ -86,6 +181,18 @@ impl FetchSource for HttpSource {
             }
         }
     }
+}
+
+/// First byte offset of a `Content-Range: bytes <start>-<end>/<total>` header.
+fn content_range_start(value: &str) -> Option<u64> {
+    value
+        .trim()
+        .strip_prefix("bytes ")?
+        .split('-')
+        .next()?
+        .trim()
+        .parse()
+        .ok()
 }
 
 /// Sibling path where in-progress bytes accumulate (`<file name>.partial`).
@@ -120,7 +227,7 @@ where
     F: FnMut(u64, Option<u64>),
 {
     let source = HttpSource {
-        client: reqwest::Client::new(),
+        client: CLIENT.clone(),
     };
     fetch_with_source(&source, url, dest, expected_sha256, label, on_progress).await
 }
@@ -142,15 +249,16 @@ where
             .await
             .context("Failed to create download directory")?;
     }
+    let _claim = DestClaim::acquire(dest, label)?;
     let partial = partial_path(dest);
-    let offset = tokio::fs::metadata(&partial)
+    let mut offset = tokio::fs::metadata(&partial)
         .await
         .map(|m| m.len())
         .unwrap_or(0);
 
     let (mut start, mut body) = source.begin(url, offset).await?;
 
-    if matches!(start, FetchStart::RangeNotSatisfiable) {
+    if matches!(start, FetchStart::RangeNotSatisfiable) && offset > 0 {
         // The partial already spans the whole artifact: finish it if its
         // checksum proves it complete, otherwise discard it and refetch.
         if let Some(len) = finalize_if_complete(&partial, dest, expected_sha256, label).await? {
@@ -160,18 +268,25 @@ where
         tokio::fs::remove_file(&partial)
             .await
             .context("Failed to discard stale partial file")?;
+        // The partial is gone and the refetch asked for byte 0, so the
+        // Content-Range check below must compare against the new offset, not
+        // the discarded partial's length.
+        offset = 0;
         (start, body) = source.begin(url, 0).await?;
     }
 
-    let mut hasher = Sha256::new();
     let (mut out, mut done, total) = match start {
-        FetchStart::Resumed { total } => {
-            // Bytes appended below must hash together with what is on disk.
-            let hashed = hash_file(&partial, &mut hasher).await?;
-            anyhow::ensure!(
-                hashed == offset,
-                "partial file for {label} changed size during resume ({hashed} != {offset})"
-            );
+        FetchStart::Resumed { start, total } => {
+            // A server that starts the range anywhere but the requested offset
+            // would splice a gap or an overlap into the partial. The final
+            // checksum catches that for pinned artifacts; this catches it for
+            // unpinned ones too, and points at the real culprit.
+            if let Some(start) = start {
+                anyhow::ensure!(
+                    start == offset,
+                    "Server resumed {label} at byte {start}, expected {offset}"
+                );
+            }
             let out = tokio::fs::OpenOptions::new()
                 .append(true)
                 .open(&partial)
@@ -194,7 +309,6 @@ where
     on_progress(done, total);
 
     while let Some(chunk) = body.next_chunk().await? {
-        hasher.update(&chunk);
         out.write_all(&chunk)
             .await
             .context("Failed to write chunk")?;
@@ -214,8 +328,21 @@ where
         anyhow::bail!("Downloaded file {label} is empty");
     }
 
+    // Hash the finished partial off disk, not the bytes seen on the socket:
+    // only the file is what gets renamed to `dest`, and a digest accumulated
+    // from the stream would certify bytes that never had to match it.
+    let mut hasher = Sha256::new();
+    let on_disk = hash_file(&partial, &mut hasher).await?;
     let actual = format!("{:x}", hasher.finalize());
-    if let Err(e) = crate::integrity::verify_hash_or_log(&actual, expected_sha256, label) {
+    let verified =
+        crate::integrity::verify_hash_or_log(&actual, expected_sha256, label).and_then(|()| {
+            anyhow::ensure!(
+                on_disk == done,
+                "Downloaded file {label} is {on_disk} bytes on disk, expected {done}"
+            );
+            Ok(())
+        });
+    if let Err(e) = verified {
         // A corrupt partial must not survive to poison the next attempt.
         let _ = tokio::fs::remove_file(&partial).await;
         return Err(e);
@@ -223,7 +350,7 @@ where
     tokio::fs::rename(&partial, dest)
         .await
         .context("Failed to finalize downloaded file")?;
-    Ok(done)
+    Ok(on_disk)
 }
 
 /// If the partial's checksum matches the pin it is the complete artifact:
@@ -294,6 +421,9 @@ mod tests {
 
     impl FetchBody for FakeBody {
         async fn next_chunk(&mut self) -> Result<Option<Vec<u8>>> {
+            // Yield so concurrent fetches actually interleave in the
+            // concurrency test instead of each running to completion.
+            tokio::task::yield_now().await;
             Ok(self.chunks.pop_front())
         }
     }
@@ -319,7 +449,10 @@ mod tests {
                 ));
             }
             Ok((
-                FetchStart::Resumed { total },
+                FetchStart::Resumed {
+                    start: Some(offset),
+                    total,
+                },
                 chunked(&self.data[offset as usize..]),
             ))
         }
@@ -493,5 +626,276 @@ mod tests {
         assert_eq!(std::fs::read(&dest).expect("read dest"), BODY);
         // 416 probe at the overlong offset, then a clean restart from zero.
         assert_eq!(requested_offsets(&src), vec![overlong.len() as u64, 0]);
+    }
+
+    #[tokio::test]
+    async fn concurrent_fetches_to_the_same_dest_cannot_corrupt_it() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let dest = dir.path().join("artifact.bin");
+        let src = source(BODY, true);
+        let pin = sha256_hex(BODY);
+
+        let (a, b) = tokio::join!(
+            fetch_with_source(&src, "u", &dest, &pin, "artifact", |_, _| {}),
+            fetch_with_source(&src, "u", &dest, &pin, "artifact", |_, _| {}),
+        );
+
+        // Exactly one may proceed; the loser must say why, not append a second
+        // copy of the body into the shared partial.
+        let losers: Vec<_> = [&a, &b].iter().filter_map(|r| r.as_ref().err()).collect();
+        assert_eq!(losers.len(), 1, "expected one winner and one refusal");
+        assert!(
+            losers[0].to_string().contains("already in progress"),
+            "unexpected error: {}",
+            losers[0]
+        );
+        assert_eq!(std::fs::read(&dest).expect("read dest"), BODY);
+        assert!(!partial_path(&dest).exists());
+    }
+
+    #[tokio::test]
+    async fn a_claim_is_released_after_the_fetch_finishes() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let dest = dir.path().join("artifact.bin");
+        let src = source(BODY, true);
+        let pin = sha256_hex(BODY);
+
+        fetch_with_source(&src, "u", &dest, &pin, "artifact", |_, _| {})
+            .await
+            .expect("first fetch");
+        std::fs::remove_file(&dest).expect("remove dest");
+        fetch_with_source(&src, "u", &dest, &pin, "artifact", |_, _| {})
+            .await
+            .expect("second fetch must not be blocked by a stale claim");
+    }
+
+    /// The bytes on disk, not the bytes seen on the wire, are what the pin
+    /// must certify: this body writes a tail it never reports as a chunk.
+    struct LyingSource;
+
+    struct LyingBody {
+        path: PathBuf,
+        chunks: VecDeque<Vec<u8>>,
+    }
+
+    impl FetchBody for LyingBody {
+        async fn next_chunk(&mut self) -> Result<Option<Vec<u8>>> {
+            match self.chunks.pop_front() {
+                Some(chunk) => Ok(Some(chunk)),
+                None => {
+                    use std::io::Write;
+                    let mut f = std::fs::OpenOptions::new()
+                        .append(true)
+                        .open(&self.path)
+                        .expect("append to partial");
+                    f.write_all(b"tampered").expect("write tamper");
+                    Ok(None)
+                }
+            }
+        }
+    }
+
+    impl FetchSource for LyingSource {
+        type Body = LyingBody;
+
+        async fn begin(&self, url: &str, _offset: u64) -> Result<(FetchStart, LyingBody)> {
+            Ok((
+                FetchStart::Full {
+                    total: Some(BODY.len() as u64),
+                },
+                LyingBody {
+                    path: PathBuf::from(url),
+                    chunks: BODY.chunks(7).map(<[u8]>::to_vec).collect(),
+                },
+            ))
+        }
+    }
+
+    #[tokio::test]
+    async fn bytes_added_behind_the_stream_still_fail_the_pin() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let dest = dir.path().join("artifact.bin");
+        let partial = partial_path(&dest);
+        let url = partial.to_string_lossy().into_owned();
+
+        let err = fetch_with_source(
+            &LyingSource,
+            &url,
+            &dest,
+            &sha256_hex(BODY),
+            "artifact",
+            |_, _| {},
+        )
+        .await
+        .expect_err("disk contents must be what is verified");
+
+        assert!(
+            err.to_string().contains("SHA256 mismatch"),
+            "unexpected error: {err}"
+        );
+        assert!(!dest.exists(), "tampered bytes must never reach dest");
+    }
+
+    /// Answers every request, including a fresh one at offset 0, with 416.
+    struct AlwaysUnsatisfiable;
+
+    impl FetchSource for AlwaysUnsatisfiable {
+        type Body = FakeBody;
+
+        async fn begin(&self, _url: &str, _offset: u64) -> Result<(FetchStart, FakeBody)> {
+            Ok((
+                FetchStart::RangeNotSatisfiable,
+                FakeBody {
+                    chunks: VecDeque::new(),
+                },
+            ))
+        }
+    }
+
+    #[tokio::test]
+    async fn range_not_satisfiable_without_a_partial_blames_the_server() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let dest = dir.path().join("artifact.bin");
+
+        let err = fetch_with_source(
+            &AlwaysUnsatisfiable,
+            "u",
+            &dest,
+            &sha256_hex(BODY),
+            "artifact",
+            |_, _| {},
+        )
+        .await
+        .expect_err("416 on a fresh fetch is a server fault");
+
+        let msg = err.to_string();
+        assert!(msg.contains("Server rejected download"), "got: {msg}");
+        assert!(
+            !msg.contains("partial file"),
+            "must not blame local disk: {msg}"
+        );
+    }
+
+    #[test]
+    fn content_range_start_is_parsed() {
+        assert_eq!(content_range_start("bytes 100-199/200"), Some(100));
+        assert_eq!(content_range_start("bytes */200"), None);
+        assert_eq!(content_range_start("items 0-1/2"), None);
+    }
+
+    /// A server that resumes somewhere other than where it was asked to.
+    struct MisalignedSource;
+
+    impl FetchSource for MisalignedSource {
+        type Body = FakeBody;
+
+        async fn begin(&self, _url: &str, offset: u64) -> Result<(FetchStart, FakeBody)> {
+            Ok((
+                FetchStart::Resumed {
+                    start: Some(offset - 1),
+                    total: Some(BODY.len() as u64),
+                },
+                chunked(&BODY[offset as usize - 1..]),
+            ))
+        }
+    }
+
+    #[tokio::test]
+    async fn a_misaligned_resume_is_rejected() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let dest = dir.path().join("artifact.bin");
+        std::fs::write(partial_path(&dest), &BODY[..10]).expect("seed partial");
+
+        let err = fetch_with_source(&MisalignedSource, "u", &dest, "", "artifact", |_, _| {})
+            .await
+            .expect_err("misaligned resume must be rejected");
+
+        assert!(
+            err.to_string().contains("resumed artifact at byte 9"),
+            "unexpected error: {err}"
+        );
+    }
+
+    /// Sends headers and a first chunk, then stalls forever. Mirrors the hang
+    /// the production read timeout exists to break, at test speed.
+    fn stalling_server() -> (String, std::sync::mpsc::Sender<()>) {
+        use std::io::Write;
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        let (stop_tx, stop_rx) = std::sync::mpsc::channel::<()>();
+        std::thread::spawn(move || {
+            if let Ok((mut sock, _)) = listener.accept() {
+                // Drain the request headers before replying; hyper drops the
+                // connection if the response races ahead of its own request.
+                let mut reader = std::io::BufReader::new(match sock.try_clone() {
+                    Ok(clone) => clone,
+                    Err(_) => return,
+                });
+                let mut line = String::new();
+                while std::io::BufRead::read_line(&mut reader, &mut line).is_ok_and(|n| n > 0) {
+                    if line == "\r\n" {
+                        break;
+                    }
+                    line.clear();
+                }
+                let _ = sock.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 36\r\n\r\n0123456789");
+                let _ = sock.flush();
+                // Hold the connection open until the test is done with it.
+                let _ = stop_rx.recv();
+            }
+        });
+        (format!("http://{addr}/artifact"), stop_tx)
+    }
+
+    #[tokio::test]
+    async fn a_stalled_body_times_out_and_keeps_the_partial() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let dest = dir.path().join("artifact.bin");
+        let (url, stop) = stalling_server();
+        // Same mechanism as the production client, shortened so the test is
+        // fast; CONNECT_TIMEOUT/READ_TIMEOUT differ only in magnitude.
+        let source = HttpSource {
+            client: reqwest::Client::builder()
+                .connect_timeout(CONNECT_TIMEOUT)
+                .read_timeout(std::time::Duration::from_millis(300))
+                .build()
+                .expect("client"),
+        };
+
+        let err = fetch_with_source(
+            &source,
+            &url,
+            &dest,
+            &sha256_hex(BODY),
+            "artifact",
+            |_, _| {},
+        )
+        .await
+        .expect_err("a stalled body must not hang forever");
+        let _ = stop.send(());
+
+        assert!(!dest.exists(), "an incomplete download must not finalize");
+        // The bytes that did arrive stay behind for the resume path.
+        assert_eq!(
+            std::fs::read(partial_path(&dest)).unwrap_or_default(),
+            b"0123456789",
+            "timed-out partial must survive for resume: {err:#}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_timed_out_download_resumes_from_its_partial() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let dest = dir.path().join("artifact.bin");
+        std::fs::write(partial_path(&dest), &BODY[..10]).expect("partial left by a timeout");
+        let src = source(BODY, true);
+
+        let len = fetch_with_source(&src, "u", &dest, &sha256_hex(BODY), "artifact", |_, _| {})
+            .await
+            .expect("resume after timeout");
+
+        assert_eq!(len, BODY.len() as u64);
+        assert_eq!(std::fs::read(&dest).expect("read dest"), BODY);
+        assert_eq!(requested_offsets(&src), vec![10]);
     }
 }

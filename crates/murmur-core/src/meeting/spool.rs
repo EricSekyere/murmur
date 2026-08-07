@@ -96,9 +96,13 @@ pub fn read(path: &Path) -> Result<Vec<f32>> {
     let file = std::fs::File::open(path)
         .with_context(|| format!("open meeting audio spool {}", path.display()))?;
     let len = file.metadata().context("stat meeting audio spool")?.len() as usize;
-    let mut samples = Vec::with_capacity(len / 4);
+    decode(std::io::BufReader::new(file), len / 4)
+}
 
-    let mut reader = std::io::BufReader::new(file);
+/// Decode little-endian `f32` samples from `source`, tolerating reads that end
+/// mid-sample (a short read must not shift every later sample boundary).
+fn decode<R: Read>(mut reader: R, capacity_hint: usize) -> Result<Vec<f32>> {
+    let mut samples = Vec::with_capacity(capacity_hint);
     let mut buf = [0u8; 64 * 1024];
     // Bytes of a sample split across two reads: `carry_len` already arrived.
     let mut carry = [0u8; 4];
@@ -117,6 +121,12 @@ pub fn read(path: &Path) -> Result<Vec<f32>> {
                 samples.push(f32::from_le_bytes(carry));
                 carry_len = 0;
             }
+        }
+        // A read that ended mid-carry consumed everything: keep the partial
+        // bytes for the next read instead of overwriting the count with the
+        // (empty) remainder below, which would shift every later boundary.
+        if carry_len > 0 {
+            continue;
         }
         let chunks = buf[i..n].chunks_exact(4);
         let rem = chunks.remainder();
@@ -203,6 +213,59 @@ mod tests {
         std::fs::write(&path, bytes).expect("write");
 
         assert_eq!(read(&path).expect("read"), vec![1.0, 2.0, 3.0]);
+    }
+
+    /// A reader that hands back at most `step` bytes per call, so reads land
+    /// mid-sample the way a pipe or an interrupted read can.
+    struct ChoppyReader {
+        data: Vec<u8>,
+        pos: usize,
+        step: usize,
+    }
+
+    impl Read for ChoppyReader {
+        fn read(&mut self, out: &mut [u8]) -> std::io::Result<usize> {
+            let n = self.step.min(out.len()).min(self.data.len() - self.pos);
+            out[..n].copy_from_slice(&self.data[self.pos..self.pos + n]);
+            self.pos += n;
+            Ok(n)
+        }
+    }
+
+    #[test]
+    fn short_reads_do_not_shift_sample_boundaries() {
+        let samples: Vec<f32> = (0..500).map(|i| i as f32 * 0.25 - 60.0).collect();
+        let bytes: Vec<u8> = samples.iter().flat_map(|s| s.to_le_bytes()).collect();
+
+        // Every step that is not a multiple of 4 ends a read mid-sample.
+        for step in [1, 2, 3, 5, 6, 7, 9, 13] {
+            let reader = ChoppyReader {
+                data: bytes.clone(),
+                pos: 0,
+                step,
+            };
+            assert_eq!(
+                decode(reader, samples.len()).expect("decode"),
+                samples,
+                "short reads of {step} bytes corrupted the samples"
+            );
+        }
+    }
+
+    #[test]
+    fn short_reads_still_drop_only_a_trailing_partial_sample() {
+        let mut bytes: Vec<u8> = [1.0f32, 2.0, 3.0]
+            .iter()
+            .flat_map(|s| s.to_le_bytes())
+            .collect();
+        bytes.extend_from_slice(&[0xAA, 0xBB, 0xCC]);
+
+        let reader = ChoppyReader {
+            data: bytes,
+            pos: 0,
+            step: 3,
+        };
+        assert_eq!(decode(reader, 3).expect("decode"), vec![1.0, 2.0, 3.0]);
     }
 
     #[test]

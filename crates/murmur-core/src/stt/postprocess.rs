@@ -304,13 +304,12 @@ fn remove_phrase_ci(text: &str, phrase: &str) -> String {
     let phrase_lower = phrase.to_ascii_lowercase();
     let mut result = String::with_capacity(text.len());
     let mut i = 0;
-    let bytes = text.as_bytes();
     let plen = phrase_lower.len();
 
     while i < text.len() {
         if lower.get(i..i + plen).is_some_and(|s| s == phrase_lower)
-            && is_word_boundary(bytes, i)
-            && is_word_boundary_end(bytes, i + plen)
+            && is_word_boundary(text, i)
+            && is_word_boundary_end(text, i + plen)
         {
             // Skip optional trailing comma+space or just space
             let after = i + plen;
@@ -333,14 +332,13 @@ fn remove_phrase_ci(text: &str, phrase: &str) -> String {
 fn remove_like_filler(text: &str) -> String {
     // ASCII-lowercase keeps `lower` byte-aligned with `text` (see remove_phrase_ci).
     let lower = text.to_ascii_lowercase();
-    let bytes = text.as_bytes();
     let mut result = String::with_capacity(text.len());
     let mut i = 0;
 
     while i < text.len() {
         if lower.get(i..i + 4) == Some("like")
-            && is_word_boundary(bytes, i)
-            && is_word_boundary_end(bytes, i + 4)
+            && is_word_boundary(text, i)
+            && is_word_boundary_end(text, i + 4)
         {
             // Check if preceded by comma or at start
             let before = &text[..i].trim_end();
@@ -363,7 +361,7 @@ fn remove_like_filler(text: &str) -> String {
                 }
                 // Skip "like" + trailing space
                 i += 4;
-                if i < text.len() && bytes[i] == b' ' {
+                if text.as_bytes().get(i) == Some(&b' ') {
                     i += 1;
                 }
                 continue;
@@ -376,17 +374,32 @@ fn remove_like_filler(text: &str) -> String {
 }
 
 fn starts_with_word_ci(text: &str, word: &str) -> bool {
-    let lower = text.to_lowercase();
-    lower.starts_with(&word.to_lowercase())
-        && (text.len() == word.len() || !text.as_bytes()[word.len()].is_ascii_alphanumeric())
+    // ASCII-lowercase so `text` stays byte-aligned with its lowered form: a
+    // Unicode lowering can change length (İ → i̇) and desync the offset below.
+    // Callers pass ASCII words.
+    text.to_ascii_lowercase()
+        .starts_with(&word.to_ascii_lowercase())
+        && is_word_boundary_end(text, word.len())
 }
 
-fn is_word_boundary(bytes: &[u8], pos: usize) -> bool {
-    pos == 0 || !bytes[pos - 1].is_ascii_alphanumeric()
+/// Whether `pos` starts a word: the preceding character is not alphanumeric.
+///
+/// Char-based, not byte-based: every byte of a multi-byte letter is >= 0x80,
+/// so an ASCII check reads "中" or "é" as a boundary and lets symbol expansion
+/// and filler removal fire inside a non-English word.
+fn is_word_boundary(text: &str, pos: usize) -> bool {
+    match text.get(..pos).and_then(|s| s.chars().next_back()) {
+        Some(ch) => !ch.is_alphanumeric(),
+        None => true,
+    }
 }
 
-fn is_word_boundary_end(bytes: &[u8], pos: usize) -> bool {
-    pos >= bytes.len() || !bytes[pos].is_ascii_alphanumeric()
+/// Whether `pos` ends a word: the following character is not alphanumeric.
+fn is_word_boundary_end(text: &str, pos: usize) -> bool {
+    match text.get(pos..).and_then(|s| s.chars().next()) {
+        Some(ch) => !ch.is_alphanumeric(),
+        None => true,
+    }
 }
 
 // ─── Symbol Expansion ────────────────────────────────────────────────────────
@@ -488,8 +501,8 @@ fn expand_symbols(text: &str) -> String {
         for &(spoken, symbol) in SYMBOL_MAP.iter() {
             let slen = spoken.len();
             if lower.get(i..i + slen) == Some(spoken)
-                && is_word_boundary(bytes, i)
-                && is_word_boundary_end(bytes, i + slen)
+                && is_word_boundary(text, i)
+                && is_word_boundary_end(text, i + slen)
             {
                 result.push_str(symbol);
                 i += slen;
@@ -954,6 +967,39 @@ mod tests {
             !out.contains("equals"),
             "'equals' should have been expanded: {out:?}"
         );
+    }
+
+    #[test]
+    fn word_boundaries_respect_non_ascii_letters() {
+        // Every byte of a multi-byte letter is >= 0x80, so an ASCII-only
+        // boundary check treats "中" and "é" as separators and fires symbol
+        // expansion and filler removal inside the word. Whisper's multilingual
+        // output routinely abuts Latin tokens against CJK, which has no spaces.
+        assert_eq!(expand_symbols("中equals文"), "中equals文");
+        assert_eq!(expand_symbols("édoté"), "édoté");
+        // Trailing position: only the *start* boundary can reject these, so
+        // they exercise the predicate the cases above do not.
+        assert_eq!(expand_symbols("中equals"), "中equals");
+        assert_eq!(expand_symbols("édot"), "édot");
+        // A real boundary next to non-ASCII text must still expand, exactly
+        // as it does between ASCII words (the expander eats the trailing space).
+        assert_eq!(expand_symbols("ab equals c"), "ab =c");
+        assert_eq!(expand_symbols("中文 equals 文"), "中文 =文");
+
+        // Developer mode, not prose: the prose filler list deliberately keeps
+        // "actually", so process_prose would leave this alone either way.
+        assert_eq!(
+            PostProcessor::process("caféactually done"),
+            "caféactually done"
+        );
+        // The predicate itself tightened, so "so" no longer prefix-matches a
+        // longer non-ASCII word.
+        assert_eq!(remove_leading_so("soñar dreams"), "soñar dreams");
+        assert_eq!(
+            remove_phrase_ci("北京you know上海", "you know"),
+            "北京you know上海"
+        );
+        assert_eq!(remove_like_filler("中文, like中文"), "中文, like中文");
     }
 
     #[test]

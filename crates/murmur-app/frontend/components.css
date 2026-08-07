@@ -988,6 +988,47 @@
   gap: 8px;
 }
 
+/* Spoken path picker: reuses the confirm overlay shell, swapping the argument
+   echo for a list of candidate paths. */
+.cmdchoose__list {
+  list-style: none;
+  margin: 0 0 16px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.cmdchoose__option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  color: var(--color-text);
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  text-align: left;
+  word-break: break-all;
+  cursor: pointer;
+}
+
+.cmdchoose__option:hover,
+.cmdchoose__option:focus-visible {
+  border-color: var(--color-accent);
+}
+
+.cmdchoose__key {
+  flex: none;
+  min-width: 16px;
+  color: var(--color-text-muted);
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
 /* The confirm gate is keyboard-driven: make focus unmistakable. */
 .cmdconfirm__actions button:focus-visible {
   outline: 2px solid var(--color-accent-light);
