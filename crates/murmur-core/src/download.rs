@@ -61,10 +61,27 @@ impl DestClaim {
         // the same file collide; the file itself may not exist yet.
         let key = match dest.parent().map(std::fs::canonicalize) {
             Some(Ok(parent)) => match dest.file_name() {
+                // Windows file names are case-insensitive, so two spellings of
+                // one file must claim the same key or both would append to the
+                // same .partial.
+                #[cfg(windows)]
+                Some(name) => parent.join(name.to_string_lossy().to_lowercase()),
+                #[cfg(not(windows))]
                 Some(name) => parent.join(name),
                 None => dest.to_path_buf(),
             },
-            _ => dest.to_path_buf(),
+            Some(Err(e)) => {
+                // Without a canonical parent, two spellings of one directory
+                // stop colliding; say so rather than failing to guard silently.
+                tracing::warn!(
+                    dest = %dest.display(),
+                    error = %e,
+                    "could not canonicalize the download directory; \
+                     concurrent-download detection falls back to the literal path"
+                );
+                dest.to_path_buf()
+            }
+            None => dest.to_path_buf(),
         };
         let mut in_flight = IN_FLIGHT.lock().unwrap_or_else(|e| e.into_inner());
         anyhow::ensure!(
@@ -234,7 +251,7 @@ where
     }
     let _claim = DestClaim::acquire(dest, label)?;
     let partial = partial_path(dest);
-    let offset = tokio::fs::metadata(&partial)
+    let mut offset = tokio::fs::metadata(&partial)
         .await
         .map(|m| m.len())
         .unwrap_or(0);
@@ -251,6 +268,10 @@ where
         tokio::fs::remove_file(&partial)
             .await
             .context("Failed to discard stale partial file")?;
+        // The partial is gone and the refetch asked for byte 0, so the
+        // Content-Range check below must compare against the new offset, not
+        // the discarded partial's length.
+        offset = 0;
         (start, body) = source.begin(url, 0).await?;
     }
 
