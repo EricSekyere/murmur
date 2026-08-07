@@ -318,9 +318,6 @@ fn deliver_chosen_path(
     output_mode: OutputMode,
     #[cfg(windows)] target_hwnd: usize,
 ) -> anyhow::Result<ChoiceDelivery> {
-    // Clipboard and stdout put nothing in a window, so they need no target.
-    let needs_focused_target = !matches!(output_mode, OutputMode::Clipboard | OutputMode::Stdout);
-
     // No live-tracked fallback: the picker always captures a start window, and
     // typing into a window the user never dictated into is the bug this whole
     // gate exists to prevent.
@@ -332,13 +329,26 @@ fn deliver_chosen_path(
     #[cfg(not(windows))]
     let restored = false;
 
+    let (mode, delivery) = choice_delivery(output_mode, restored);
+    murmur_core::output::dispatch_verbatim(path, mode).with_context(|| match delivery {
+        ChoiceDelivery::Copied => "copying the chosen path to the clipboard",
+        ChoiceDelivery::Typed => "typing the chosen path",
+    })?;
+    Ok(delivery)
+}
+
+/// How to deliver a picked path given whether focus was restored: the output
+/// mode to dispatch with, and what to tell the user happened.
+///
+/// Split out from the dispatch so the decision is testable without a
+/// clipboard, which needs a display server the CI runners do not have.
+fn choice_delivery(output_mode: OutputMode, restored: bool) -> (OutputMode, ChoiceDelivery) {
+    // Clipboard and stdout put nothing in a window, so they need no target.
+    let needs_focused_target = !matches!(output_mode, OutputMode::Clipboard | OutputMode::Stdout);
     if needs_focused_target && !restored {
-        murmur_core::output::dispatch_verbatim(path, OutputMode::Clipboard)
-            .context("copying the chosen path to the clipboard")?;
-        return Ok(ChoiceDelivery::Copied);
+        return (OutputMode::Clipboard, ChoiceDelivery::Copied);
     }
-    murmur_core::output::dispatch_verbatim(path, output_mode).context("typing the chosen path")?;
-    Ok(ChoiceDelivery::Typed)
+    (output_mode, ChoiceDelivery::Typed)
 }
 
 /// Run a command-mode transcript through Tier 1 routing and the guarded
@@ -760,21 +770,36 @@ mod tests {
         );
     }
 
-    #[cfg(not(windows))]
     #[test]
-    fn without_focus_restore_a_pick_goes_to_the_clipboard() {
-        // Clicking the picker activates Murmur's own window, and only Windows
-        // can hand focus back. Typing here would insert the path into our own
-        // UI, which is the exact failure the choice gate exists to prevent.
-        assert_eq!(
-            deliver_chosen_path("src/user.ts", OutputMode::Auto).expect("deliver"),
-            ChoiceDelivery::Copied
-        );
-        assert_eq!(
-            deliver_chosen_path("src/user.ts", OutputMode::Clipboard).expect("deliver"),
-            ChoiceDelivery::Typed,
-            "clipboard mode needs no window, so it is not a fallback"
-        );
+    fn a_pick_never_types_when_focus_was_not_restored() {
+        // Clicking the picker activates Murmur's own window. Without focus
+        // handed back, typing would insert the path into our own UI, which is
+        // the exact failure the choice gate exists to prevent. Non-Windows
+        // cannot restore focus at all, so it always takes this branch.
+        for mode in [
+            OutputMode::Auto,
+            OutputMode::Keyboard,
+            OutputMode::ClipboardPaste,
+        ] {
+            assert_eq!(
+                choice_delivery(mode, false),
+                (OutputMode::Clipboard, ChoiceDelivery::Copied),
+                "{mode:?} must not type into an unrestored target"
+            );
+            assert_eq!(
+                choice_delivery(mode, true),
+                (mode, ChoiceDelivery::Typed),
+                "{mode:?} types once focus is back"
+            );
+        }
+        // These place nothing in a window, so a missing target is irrelevant.
+        for mode in [OutputMode::Clipboard, OutputMode::Stdout] {
+            assert_eq!(
+                choice_delivery(mode, false),
+                (mode, ChoiceDelivery::Typed),
+                "{mode:?} needs no focused window"
+            );
+        }
     }
 
     #[test]
