@@ -143,11 +143,30 @@ pub(crate) fn diarization_model_ready() -> bool {
 }
 
 /// Download the Sortformer diarization model (~469 MB, SHA256-verified,
-/// idempotent). The UI disables its button while this runs; meetings started
-/// after it completes get speaker labels.
+/// idempotent). Meetings started after it completes get speaker labels.
+///
+/// The UI's disabled button is per-window, so a second window (or a reload
+/// mid-download) can still reach this: the in-flight flag is what actually
+/// keeps two downloads off the same files.
 #[cfg(feature = "diarization")]
 #[tauri::command]
 pub(crate) async fn download_diarization_model() -> Result<(), String> {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    static IN_FLIGHT: AtomicBool = AtomicBool::new(false);
+
+    /// Clears the flag even if the command future is dropped (window closed
+    /// mid-download), so the button never wedges.
+    struct Claim;
+    impl Drop for Claim {
+        fn drop(&mut self) {
+            IN_FLIGHT.store(false, Ordering::Release);
+        }
+    }
+
+    if IN_FLIGHT.swap(true, Ordering::AcqRel) {
+        return Err("The speaker model is already downloading.".to_string());
+    }
+    let _claim = Claim;
     murmur_core::meeting::download()
         .await
         .map(|_| ())

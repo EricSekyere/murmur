@@ -1,6 +1,6 @@
 //! Model/runtime downloads and STT engine initialization.
 
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Instant;
 
 use anyhow::Context;
@@ -12,14 +12,54 @@ use tauri::{Emitter, Manager};
 
 use crate::state::{AppState, ModelChangedEvent, ModelDownloadProgress};
 
+/// Models whose download/init task is running right now.
+///
+/// The spawned task returns immediately to its caller, so nothing about a
+/// re-enabled button or a second window tells the UI a download is still under
+/// way; without this, every click stacks another task on the same files.
+/// A plain `Vec` rather than a set: at most a handful of models can ever be
+/// downloading at once, and `SttModel` is not `Hash`.
+static IN_FLIGHT: LazyLock<Mutex<Vec<SttModel>>> = LazyLock::new(|| Mutex::new(Vec::new()));
+
+/// Releases the claim on drop, so a failed or panicking task cannot wedge the
+/// model out of ever being retried.
+struct SetupClaim(SttModel);
+
+impl SetupClaim {
+    fn acquire(model: SttModel) -> Option<Self> {
+        let mut in_flight = IN_FLIGHT.lock().unwrap_or_else(|e| e.into_inner());
+        if in_flight.contains(&model) {
+            return None;
+        }
+        in_flight.push(model);
+        Some(Self(model))
+    }
+}
+
+impl Drop for SetupClaim {
+    fn drop(&mut self) {
+        IN_FLIGHT
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .retain(|m| *m != self.0);
+    }
+}
+
 /// Spawn a background task that downloads the model, initializes the
 /// engine, and reports progress to the UI.
+///
+/// Returns `false` without spawning if this model is already downloading.
 pub(crate) fn spawn_download_and_init(
     app: tauri::AppHandle,
     engine: Arc<Mutex<Option<SttEngine>>>,
     model: SttModel,
-) {
+) -> bool {
+    let Some(claim) = SetupClaim::acquire(model) else {
+        tracing::info!(model = model.id(), "download already in progress, ignoring");
+        return false;
+    };
     tauri::async_runtime::spawn(async move {
+        let _claim = claim;
         if let Err(e) = download_and_init_model(&app, &engine, model).await {
             tracing::error!("Model download/init failed: {}", e);
             // A previously-loaded engine is still usable after a failed switch:
@@ -44,6 +84,7 @@ pub(crate) fn spawn_download_and_init(
             );
         }
     });
+    true
 }
 
 /// After a failed switch, point settings, the readiness flag, and the UI back

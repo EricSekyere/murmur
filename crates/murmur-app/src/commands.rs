@@ -286,7 +286,11 @@ pub(crate) async fn download_model(
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .model;
-    spawn_download_and_init(app, Arc::clone(&state.engine), model);
+    // The retry case this button exists for is "no engine loaded", so the
+    // check above never stops a second click; the in-flight guard does.
+    if !spawn_download_and_init(app, Arc::clone(&state.engine), model) {
+        tracing::debug!(model = model.id(), "download already running");
+    }
     Ok(())
 }
 
