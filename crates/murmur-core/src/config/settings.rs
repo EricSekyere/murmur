@@ -800,7 +800,10 @@ impl Settings {
             );
         }
 
-        if self.silence_timeout_secs <= 0.0 {
+        // Explicitly finite: NaN compares false against every bound and
+        // infinity passes a bare `> 0.0`, so both would survive a plain
+        // comparison and reach `Duration::from_secs_f32`, which panics.
+        if !self.silence_timeout_secs.is_finite() || self.silence_timeout_secs <= 0.0 {
             anyhow::bail!(
                 "silence_timeout_secs must be > 0.0, got {}",
                 self.silence_timeout_secs
@@ -1260,6 +1263,25 @@ mod tests {
             };
             assert!(settings.validate().is_err(), "should reject {secs}");
         }
+    }
+
+    #[test]
+    fn silence_timeout_validation_rejects_non_finite_values() {
+        // TOML spells `nan` and `inf` natively, so a hand-edited config
+        // reaches this. NaN compares false against every bound and infinity
+        // passes a bare `> 0.0`, so both need an explicit finite check.
+        for secs in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, 0.0, -1.0] {
+            let settings = Settings {
+                silence_timeout_secs: secs,
+                ..Settings::default()
+            };
+            assert!(settings.validate().is_err(), "should reject {secs}");
+        }
+        let settings = Settings {
+            silence_timeout_secs: 2.5,
+            ..Settings::default()
+        };
+        assert!(settings.validate().is_ok());
     }
 
     #[test]

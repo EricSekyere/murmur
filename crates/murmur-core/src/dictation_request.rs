@@ -43,10 +43,12 @@ pub fn write(path: &Path, req: &DictationRequest) -> Result<()> {
 /// or unreadable file yields `None`; an unparseable file is still deleted so a
 /// corrupt trigger cannot wedge the poller.
 pub fn take(path: &Path) -> Option<DictationRequest> {
-    let content = std::fs::read_to_string(path).ok()?;
-    let parsed = serde_json::from_str(&content);
+    // Read raw bytes and clear before any decode: a UTF-8 failure inside
+    // read_to_string would return early and leave the file in place, so a
+    // truncated cross-process write would wedge the poller on every tick.
+    let bytes = std::fs::read(path).ok()?;
     clear(path);
-    match parsed {
+    match serde_json::from_slice(&bytes) {
         Ok(req) => Some(req),
         Err(e) => {
             tracing::warn!(
@@ -114,6 +116,20 @@ mod tests {
 
         assert!(take(&path).is_none());
         // The corrupt file must not linger and re-trip every poll.
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn take_deletes_a_non_utf8_trigger_and_returns_none() {
+        // The MCP server writes this file from another process; a killed or
+        // truncated write can leave bytes that are not valid UTF-8. Decoding
+        // before the delete would leave the file in place and re-fail on
+        // every poll tick forever.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("dictation-request.json");
+        std::fs::write(&path, [0xFF, 0x00, 0xFE]).expect("write");
+
+        assert!(take(&path).is_none());
         assert!(!path.exists());
     }
 
