@@ -247,10 +247,43 @@ pub fn run() -> anyhow::Result<()> {
             updater::install_update,
         ])
         .setup(move |app| setup_app(app, engine_for_setup, model, &hotkey, show_widget_on_start))
-        .run(tauri::generate_context!())
-        .context("error while running Murmur")?;
+        .build(tauri::generate_context!())
+        .context("error while building Murmur")?
+        .run(|app, event| {
+            // Every exit route (tray Quit, window close, updater restart) ends
+            // here, so this is the one place a live meeting can be finished.
+            if let tauri::RunEvent::Exit = event {
+                shutdown_meeting(app);
+            }
+        });
 
     Ok(())
+}
+
+/// Stop and join an active meeting on the way out, so its final transcript and
+/// speaker labels are saved and — privacy-critical — its raw-audio spool is
+/// deleted. Quit is a deliberate user action, not the crash case the startup
+/// sweep exists for. Blocking (the final chunk still transcribes) is accepted
+/// here: the alternative is leaving raw meeting audio on disk. The sweep
+/// afterwards is the backstop for a worker that never reached its own cleanup.
+fn shutdown_meeting(app: &tauri::AppHandle) {
+    let handle = app.try_state::<AppState>().and_then(|state| {
+        state
+            .meeting
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take()
+    });
+    if let Some(handle) = handle {
+        tracing::info!("Stopping the active meeting before exit");
+        handle.stop_and_join();
+    }
+    if let Ok(dir) = murmur_core::meeting::record::MeetingRecord::default_dir() {
+        let removed = murmur_core::meeting::spool::sweep(&dir);
+        if removed > 0 {
+            tracing::warn!(removed, "Removed meeting audio spool file(s) at exit");
+        }
+    }
 }
 
 /// File-based logging so release builds have visible logs. The returned
