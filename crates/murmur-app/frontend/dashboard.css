@@ -135,15 +135,28 @@
   animation: expand-in 0.25s var(--ease-out);
 }
 
+.view-header {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
 .view-header h2 {
-  font-size: 1.05rem;
+  font-size: 1.2rem;
   font-weight: 700;
   color: var(--color-text);
-  letter-spacing: 0.01em;
+  letter-spacing: -0.01em;
+}
+
+.view-header__sub {
+  font-size: 0.78rem;
+  line-height: 1.5;
+  color: var(--color-text-secondary);
+  max-width: 70ch;
 }
 
 /* ─── Legacy layout overrides for the dashboard ─────────────────────────── */
-/* Collapsible triggers are driven programmatically — hide them. */
+/* Collapsible triggers are driven programmatically, so hide them. */
 .collapsible__trigger {
   display: none;
 }

@@ -27,7 +27,7 @@ updateInstall.addEventListener('click', async () => {
   updateInstall.disabled = true;
   updateInstall.textContent = 'Updating…';
   try {
-    // Backend downloads, installs, and relaunches — this call won't return
+    // Backend downloads, installs, and relaunches, so this call won't return
     // on success.
     await invoke('install_update');
   } catch (err) {

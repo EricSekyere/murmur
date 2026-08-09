@@ -40,20 +40,59 @@ const HARD_CAP_SECS: usize = 30;
 /// Emit a periodic `meeting-state` heartbeat every this many pull ticks (~2s).
 const STATE_EMIT_TICKS: u32 = 4;
 
+/// How the worker wraps up once the stop flag is set.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum FinishMode {
+    /// Normal stop: flush the tail, then diarize the whole spooled meeting.
+    Diarize,
+    /// Quit: drop the spool up front and save transcript only. Whole-meeting
+    /// diarization takes minutes on CPU and would block the exit.
+    TranscriptOnly,
+}
+
 /// Handle to a live meeting held in [`AppState::meeting`].
 pub(crate) struct MeetingHandle {
     stop: Arc<AtomicBool>,
+    /// Set before `stop` to pick [`FinishMode::TranscriptOnly`].
+    skip_diarization: Arc<AtomicBool>,
     join: std::thread::JoinHandle<()>,
+    /// Signalled once the worker thread is fully done, so shutdown can wait
+    /// with a timeout (`JoinHandle` has no bounded join).
+    done: std::sync::mpsc::Receiver<()>,
 }
 
 impl MeetingHandle {
     /// Signal the worker to stop and wait for its final flush + save.
-    /// Blocking (the final chunk still runs inference) — call off the reactor.
+    /// Blocking (the final chunk still runs inference, then the whole meeting
+    /// diarizes) — call off the reactor.
     pub fn stop_and_join(self) {
         self.stop.store(true, Ordering::Release);
         if self.join.join().is_err() {
             tracing::error!("Meeting worker thread panicked during shutdown");
         }
+    }
+
+    /// Quit path: give up speaker labels, then wait at most `timeout` for the
+    /// final transcript chunk and save. Returns `false` if the wait ran out,
+    /// in which case the thread is left detached (the process is exiting) and
+    /// the caller's spool sweep is the remaining backstop. The spool itself is
+    /// already deleted by then: the worker discards it before the final flush.
+    pub fn shutdown_for_exit(self, timeout: Duration) -> bool {
+        self.skip_diarization.store(true, Ordering::Release);
+        self.stop.store(true, Ordering::Release);
+        wait_for_worker(&self.done, timeout)
+    }
+}
+
+/// Bounded wait on the worker's completion signal. Split out so the timeout
+/// behavior is testable without a Tauri runtime.
+fn wait_for_worker(done: &std::sync::mpsc::Receiver<()>, timeout: Duration) -> bool {
+    use std::sync::mpsc::RecvTimeoutError;
+    match done.recv_timeout(timeout) {
+        // A dropped sender means the thread ended without signalling (panic
+        // in the wrapper itself): still finished, not timed out.
+        Ok(()) | Err(RecvTimeoutError::Disconnected) => true,
+        Err(RecvTimeoutError::Timeout) => false,
     }
 }
 
@@ -63,9 +102,12 @@ impl MeetingHandle {
 pub(crate) fn spawn(app: tauri::AppHandle) -> MeetingHandle {
     let stop = Arc::new(AtomicBool::new(false));
     let stop_for_worker = Arc::clone(&stop);
+    let skip_diarization = Arc::new(AtomicBool::new(false));
+    let skip_for_worker = Arc::clone(&skip_diarization);
+    let (done_tx, done) = std::sync::mpsc::sync_channel(1);
     let join = std::thread::spawn(move || {
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            run_meeting(&app, &stop_for_worker);
+            run_meeting(&app, &stop_for_worker, &skip_for_worker);
         }));
         if let Err(panic_info) = outcome {
             let msg = panic_message(panic_info, "unknown panic in meeting worker");
@@ -81,8 +123,15 @@ pub(crate) fn spawn(app: tauri::AppHandle) -> MeetingHandle {
             state.meeting_active.store(false, Ordering::Release);
         }
         emit_state(&app, false, false, 0.0, 0);
+        // Receiver dropped (shutdown timed out and moved on) is expected.
+        let _ = done_tx.send(());
     });
-    MeetingHandle { stop, join }
+    MeetingHandle {
+        stop,
+        skip_diarization,
+        join,
+        done,
+    }
 }
 
 /// Per-meeting capture handles and bookkeeping for the pull loop.
@@ -104,7 +153,7 @@ struct MeetingSession {
     spool: Option<murmur_core::meeting::spool::SpoolWriter>,
 }
 
-fn run_meeting(app: &tauri::AppHandle, stop: &AtomicBool) {
+fn run_meeting(app: &tauri::AppHandle, stop: &AtomicBool, skip_diarization: &AtomicBool) {
     let Some(mut session) = open_session(app) else {
         return;
     };
@@ -133,7 +182,12 @@ fn run_meeting(app: &tauri::AppHandle, stop: &AtomicBool) {
         }
     }
 
-    finish_meeting(app, &mut session);
+    let mode = if skip_diarization.load(Ordering::Acquire) {
+        FinishMode::TranscriptOnly
+    } else {
+        FinishMode::Diarize
+    };
+    finish_meeting(app, &mut session, mode);
 }
 
 /// Open captures and the on-disk record. On failure, surfaces the error and
@@ -286,8 +340,13 @@ fn process_chunk(app: &tauri::AppHandle, session: &mut MeetingSession, cut: usiz
 }
 
 /// Flush the final partial chunk, stop the captures, and save one last time.
-fn finish_meeting(app: &tauri::AppHandle, session: &mut MeetingSession) {
+/// [`FinishMode::TranscriptOnly`] drops the spool first, so the quit path holds
+/// no raw audio on disk while the last chunk transcribes.
+fn finish_meeting(app: &tauri::AppHandle, session: &mut MeetingSession, mode: FinishMode) {
     pull_audio(session);
+    if mode == FinishMode::TranscriptOnly {
+        spool::discard(session.spool.take());
+    }
     while !session.pending.is_empty() {
         // Flush wants completeness, not a tidy cut point — consume as much
         // as the hard cap allows per chunk (the tail can exceed one cap's
@@ -428,5 +487,33 @@ mod tests {
         assert!(meeting_start_blocker(false, true, true).is_some());
         assert!(meeting_start_blocker(false, false, false).is_some());
         assert!(meeting_start_blocker(false, false, true).is_none());
+    }
+
+    #[test]
+    fn wait_for_worker_reports_completion_and_timeout() {
+        let (tx, rx) = std::sync::mpsc::sync_channel::<()>(1);
+        assert!(!wait_for_worker(&rx, Duration::from_millis(10)));
+        assert!(tx.send(()).is_ok());
+        assert!(wait_for_worker(&rx, Duration::from_millis(10)));
+
+        // A worker that ends without signalling counts as finished, not as a
+        // timeout: there is nothing left to wait for.
+        let (tx, rx) = std::sync::mpsc::sync_channel::<()>(1);
+        drop(tx);
+        assert!(wait_for_worker(&rx, Duration::from_secs(30)));
+    }
+
+    #[test]
+    fn discarded_spool_is_gone_before_any_diarization() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut writer =
+            murmur_core::meeting::spool::SpoolWriter::create(dir.path(), 1).expect("create");
+        writer.append(&[0.25; 64]).expect("append");
+        let path = writer.path().to_path_buf();
+
+        spool::discard(Some(writer));
+        assert!(!path.exists());
+        // The exit path always reaches this with an empty slot afterwards.
+        spool::discard(None);
     }
 }

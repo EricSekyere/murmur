@@ -208,10 +208,13 @@ pub fn partial_path(dest: &Path) -> PathBuf {
 }
 
 /// Download `url` to `dest`: stream into a sibling `.partial` (resuming one
-/// left by an earlier interrupted attempt), verify `expected_sha256` (empty =
-/// warn-and-accept, matching [`crate::integrity::verify_or_log_sha256`]), and
+/// left by an earlier interrupted attempt), verify `expected_sha256`, and
 /// rename into place. On a checksum mismatch the partial is deleted and the
 /// mismatch error returned, so a retry refetches cleanly.
+///
+/// `expected_sha256` must be a lowercase 64-character hex digest. An absent or
+/// malformed pin fails before any network request: there is no unverified
+/// download path.
 ///
 /// Returns the artifact length in bytes. `on_progress` receives
 /// `(bytes_present, total_bytes)` where `bytes_present` includes the resumed
@@ -244,6 +247,8 @@ where
     S: FetchSource,
     F: FnMut(u64, Option<u64>),
 {
+    // Refuse an unverifiable artifact before touching the network or the disk.
+    crate::integrity::ensure_pinned(expected_sha256, label)?;
     if let Some(parent) = dest.parent() {
         tokio::fs::create_dir_all(parent)
             .await
@@ -279,8 +284,8 @@ where
         FetchStart::Resumed { start, total } => {
             // A server that starts the range anywhere but the requested offset
             // would splice a gap or an overlap into the partial. The final
-            // checksum catches that for pinned artifacts; this catches it for
-            // unpinned ones too, and points at the real culprit.
+            // checksum would catch that anyway; this catches it earlier and
+            // points at the real culprit.
             if let Some(start) = start {
                 anyhow::ensure!(
                     start == offset,
@@ -335,7 +340,7 @@ where
     let on_disk = hash_file(&partial, &mut hasher).await?;
     let actual = format!("{:x}", hasher.finalize());
     let verified =
-        crate::integrity::verify_hash_or_log(&actual, expected_sha256, label).and_then(|()| {
+        crate::integrity::verify_sha256_hash(&actual, expected_sha256, label).and_then(|()| {
             anyhow::ensure!(
                 on_disk == done,
                 "Downloaded file {label} is {on_disk} bytes on disk, expected {done}"
@@ -354,24 +359,21 @@ where
 }
 
 /// If the partial's checksum matches the pin it is the complete artifact:
-/// rename it into place and return its length. Unpinned artifacts cannot be
-/// proven complete, so they are never finalized here.
+/// rename it into place and return its length. A mismatch returns `None` so the
+/// caller discards the partial and refetches.
 async fn finalize_if_complete(
     partial: &Path,
     dest: &Path,
     expected_sha256: &str,
     label: &str,
 ) -> Result<Option<u64>> {
-    if expected_sha256.is_empty() {
-        return Ok(None);
-    }
     let mut hasher = Sha256::new();
     let len = hash_file(partial, &mut hasher).await?;
     let actual = format!("{:x}", hasher.finalize());
     if actual != expected_sha256 {
         return Ok(None);
     }
-    crate::integrity::verify_hash_or_log(&actual, expected_sha256, label)?;
+    crate::integrity::verify_sha256_hash(&actual, expected_sha256, label)?;
     tokio::fs::rename(partial, dest)
         .await
         .context("Failed to finalize downloaded file")?;
@@ -806,14 +808,75 @@ mod tests {
         let dest = dir.path().join("artifact.bin");
         std::fs::write(partial_path(&dest), &BODY[..10]).expect("seed partial");
 
-        let err = fetch_with_source(&MisalignedSource, "u", &dest, "", "artifact", |_, _| {})
-            .await
-            .expect_err("misaligned resume must be rejected");
+        let err = fetch_with_source(
+            &MisalignedSource,
+            "u",
+            &dest,
+            &sha256_hex(BODY),
+            "artifact",
+            |_, _| {},
+        )
+        .await
+        .expect_err("misaligned resume must be rejected");
 
         assert!(
             err.to_string().contains("resumed artifact at byte 9"),
             "unexpected error: {err}"
         );
+    }
+
+    /// A source that would happily serve the whole body. It must never be
+    /// reached: the missing pin has to fail the call first.
+    struct WouldSucceedSource;
+
+    impl FetchSource for WouldSucceedSource {
+        type Body = FakeBody;
+
+        async fn begin(&self, _url: &str, _offset: u64) -> Result<(FetchStart, FakeBody)> {
+            Ok((
+                FetchStart::Full {
+                    total: Some(BODY.len() as u64),
+                },
+                chunked(BODY),
+            ))
+        }
+    }
+
+    #[tokio::test]
+    async fn an_empty_pin_is_rejected_and_writes_nothing() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let dest = dir.path().join("artifact.bin");
+
+        let err = fetch_with_source(&WouldSucceedSource, "u", &dest, "", "artifact", |_, _| {})
+            .await
+            .expect_err("an unpinned download must be refused");
+
+        assert!(err.to_string().contains("No pinned SHA256"), "got: {err}");
+        assert!(!dest.exists(), "unverified artifact must not be finalized");
+        assert!(
+            !partial_path(&dest).exists(),
+            "no partial should be written either"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_malformed_pin_is_rejected() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let dest = dir.path().join("artifact.bin");
+
+        let err = fetch_with_source(
+            &WouldSucceedSource,
+            "u",
+            &dest,
+            "not-a-sha256",
+            "artifact",
+            |_, _| {},
+        )
+        .await
+        .expect_err("a malformed pin must be refused");
+
+        assert!(err.to_string().contains("not a lowercase"), "got: {err}");
+        assert!(!dest.exists());
     }
 
     /// Sends headers and a first chunk, then stalls forever. Mirrors the hang

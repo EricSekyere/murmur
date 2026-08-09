@@ -15,7 +15,7 @@ if (findPillBtn) {
   findPillBtn.addEventListener('click', async () => {
     try {
       await invoke('locate_widget');
-      showToast('Flashing the pill — look for the glowing widget', 'success');
+      showToast('Flashing the pill, look for the glowing widget', 'success');
     } catch (err) {
       showToast(`Could not locate the pill: ${err}`, 'error');
     }

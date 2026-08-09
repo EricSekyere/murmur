@@ -1,0 +1,53 @@
+name: Bug report
+description: Something is broken or behaving unexpectedly
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please do not report security vulnerabilities here — see [SECURITY.md](../../blob/main/SECURITY.md).
+  - type: input
+    id: version
+    attributes:
+      label: Murmur version
+      description: Shown in Settings, or the release you installed.
+      placeholder: v0.17.0
+    validations:
+      required: true
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      options:
+        - Windows 10/11 x64
+        - Linux x64 (.deb)
+        - Linux x64 (AppImage)
+        - macOS (universal .dmg)
+        - Built from source
+    validations:
+      required: true
+  - type: input
+    id: model
+    attributes:
+      label: STT model in use
+      placeholder: e.g. Whisper small.en, Parakeet TDT v2
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What did you do, what did you expect, and what happened instead?
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. ...
+        2. ...
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant log output
+      description: Diagnostics are in the dashboard's Diagnostics view. Logs never contain your dictated text at default levels, but please skim before pasting.
+      render: text

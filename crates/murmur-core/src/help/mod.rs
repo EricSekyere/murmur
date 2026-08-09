@@ -110,7 +110,43 @@ pub fn articles() -> Vec<(&'static str, &'static str)> {
             "Shortcuts and commands reference",
             include_str!("articles/shortcuts-reference.md"),
         ),
+        (
+            "Configuration reference",
+            include_str!("articles/configuration.md"),
+        ),
     ]
+}
+
+/// A browsable entry in the Help index: an article's title plus its section
+/// headings, so a user can see what a page covers before opening it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ArticleSummary {
+    pub title: String,
+    pub headings: Vec<String>,
+}
+
+/// The Help index for browsing: every bundled article with its section
+/// headings. Pure static data; needs no embedder and never blocks on the
+/// search engine being ready.
+pub fn article_summaries() -> Vec<ArticleSummary> {
+    articles()
+        .iter()
+        .map(|(title, markdown)| ArticleSummary {
+            title: (*title).to_string(),
+            headings: chunk_markdown(markdown)
+                .into_iter()
+                .map(|s| s.heading)
+                .collect(),
+        })
+        .collect()
+}
+
+/// The full markdown body of the article with this exact title, if bundled.
+pub fn article_body(title: &str) -> Option<&'static str> {
+    articles()
+        .into_iter()
+        .find(|(t, _)| *t == title)
+        .map(|(_, markdown)| markdown)
 }
 
 /// Split markdown into one section per heading. Text before the first heading is
@@ -265,6 +301,31 @@ mod tests {
             .filter(|w| !w.is_empty())
             .map(|w| w.to_lowercase())
             .collect()
+    }
+
+    #[test]
+    fn article_summaries_cover_every_bundled_article_with_headings() {
+        let summaries = article_summaries();
+        assert_eq!(summaries.len(), articles().len());
+        for summary in &summaries {
+            assert!(!summary.title.is_empty());
+            assert!(
+                !summary.headings.is_empty(),
+                "article '{}' has no sections",
+                summary.title
+            );
+        }
+        // Titles are the lookup key for article_body, so they must be unique.
+        let titles: HashSet<&str> = summaries.iter().map(|s| s.title.as_str()).collect();
+        assert_eq!(titles.len(), summaries.len());
+    }
+
+    #[test]
+    fn article_body_finds_exact_titles_only() {
+        let body = article_body("Configuration reference").unwrap();
+        assert!(body.contains("config.toml"));
+        assert!(article_body("configuration reference").is_none());
+        assert!(article_body("No such article").is_none());
     }
 
     #[test]

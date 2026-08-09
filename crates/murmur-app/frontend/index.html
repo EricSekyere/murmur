@@ -244,7 +244,7 @@
                 <h2>Meetings</h2>
               </div>
               <span class="settings-hint">
-                Meeting recording captures your microphone AND system audio — what
+                Meeting recording captures your microphone AND system audio, so what
                 others in the call say through your speakers. Everything stays on
                 this device, and recording starts only when you press Start.
               </span>
@@ -259,7 +259,7 @@
               <!-- Speaker-label (diarization) model: shown only when this build supports it -->
               <div class="meeting-controls" id="meeting-diar-row" hidden>
                 <button id="meeting-diar-btn" class="btn-small" type="button">Enable speaker labels (469 MB download)</button>
-                <span id="meeting-diar-ready" class="settings-hint" hidden>Speaker labels ready — new meetings get per-speaker transcripts.</span>
+                <span id="meeting-diar-ready" class="settings-hint" hidden>Speaker labels ready. New meetings get per-speaker transcripts.</span>
               </div>
               <div id="meeting-live" class="transcription-output meeting-live" hidden aria-live="polite"></div>
               <ul id="meetings-list" class="history-list"></ul>
@@ -269,7 +269,10 @@
 
         <!-- ── Analytics View ── -->
         <div class="view" id="view-analytics">
-          <div class="view-header"><h2>Analytics</h2></div>
+          <div class="view-header">
+            <h2>Analytics</h2>
+            <p class="view-header__sub">Your dictation volume, streaks, and pace. Everything is computed from the local history log.</p>
+          </div>
           <section id="analytics-section" class="collapsible">
             <button class="collapsible__trigger" id="analytics-toggle" aria-expanded="false">
               <span class="collapsible__title">Analytics</span>
@@ -319,13 +322,19 @@
                   </div>
                 </div>
                 <ul class="usage-apps" id="usage-top-apps" aria-label="Top applications"></ul>
-                <!-- Decorative activity texture (design-language ornament; no JS binds to it) -->
-                <div class="usage-spark" aria-hidden="true">
-                  <i style="height:40%"></i><i style="height:62%"></i><i style="height:30%"></i>
-                  <i style="height:75%"></i><i style="height:55%"></i><i style="height:88%"></i>
-                  <i style="height:48%"></i><i style="height:66%"></i><i style="height:92%"></i>
-                  <i style="height:38%"></i><i style="height:70%"></i><i style="height:58%"></i>
-                  <i style="height:80%"></i><i style="height:100%"></i>
+              </div>
+              <div class="analytics-group">
+                <h3 class="analytics-group__title">Activity</h3>
+                <div class="heatmap" id="activity-heatmap" role="img"
+                     aria-label="Daily dictation activity over the last year"></div>
+                <div class="heatmap-legend" aria-hidden="true">
+                  <span>Less</span>
+                  <i class="heatmap__cell"></i>
+                  <i class="heatmap__cell is-l1"></i>
+                  <i class="heatmap__cell is-l2"></i>
+                  <i class="heatmap__cell is-l3"></i>
+                  <i class="heatmap__cell is-l4"></i>
+                  <span>More</span>
                 </div>
               </div>
               <div class="analytics-group">
@@ -347,20 +356,6 @@
                   </div>
                 </div>
                 <p class="records-note" id="records-note" hidden></p>
-              </div>
-              <div class="analytics-group">
-                <h3 class="analytics-group__title">Activity</h3>
-                <div class="heatmap" id="activity-heatmap" role="img"
-                     aria-label="Daily dictation activity over the last year"></div>
-                <div class="heatmap-legend" aria-hidden="true">
-                  <span>Less</span>
-                  <i class="heatmap__cell"></i>
-                  <i class="heatmap__cell is-l1"></i>
-                  <i class="heatmap__cell is-l2"></i>
-                  <i class="heatmap__cell is-l3"></i>
-                  <i class="heatmap__cell is-l4"></i>
-                  <span>More</span>
-                </div>
               </div>
               <div class="analytics-group">
                 <h3 class="analytics-group__title">Last Session</h3>
@@ -395,20 +390,10 @@
                     <span class="stat-card__label">Sessions</span>
                   </div>
                 </div>
-                <!-- Decorative streak grid (design-language ornament; no JS binds to it) -->
-                <div class="usage-streak" aria-hidden="true">
-                  <i class="on"></i><i class="on"></i><i></i><i class="on"></i><i class="hi"></i><i class="on"></i><i class="on"></i>
-                  <i class="on"></i><i class="hi"></i><i class="on"></i><i class="on"></i><i class="on"></i><i></i><i class="on"></i>
-                  <i class="hi"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="hi"></i><i class="on"></i>
-                </div>
               </div>
               <div class="analytics-group">
-                <h3 class="analytics-group__title">All Time</h3>
+                <h3 class="analytics-group__title">Session averages</h3>
                 <div class="analytics-grid">
-                  <div class="stat-card">
-                    <span class="stat-card__value" id="stat-total-words">0</span>
-                    <span class="stat-card__label">Words</span>
-                  </div>
                   <div class="stat-card">
                     <span class="stat-card__value" id="stat-total-sessions">0</span>
                     <span class="stat-card__label">Sessions</span>
@@ -422,10 +407,7 @@
                     <span class="stat-card__label">Avg Dur.</span>
                   </div>
                 </div>
-              </div>
-              <div class="analytics-group">
-                <h3 class="analytics-group__title">Peak Hour</h3>
-                <p class="analytics-peak" id="stat-peak-hour">No data yet</p>
+                <p class="analytics-peak">Peak hour: <span id="stat-peak-hour">No data yet</span></p>
               </div>
             </div>
           </section>
@@ -433,7 +415,10 @@
 
         <!-- ── Settings View ── -->
         <div class="view" id="view-settings">
-          <div class="view-header"><h2>Settings</h2></div>
+          <div class="view-header">
+            <h2>Settings</h2>
+            <p class="view-header__sub">Recording, speech, output, and integrations. Changes apply immediately and are saved to your local config file.</p>
+          </div>
           <section id="settings-section" class="collapsible">
             <button class="collapsible__trigger" id="settings-toggle" aria-expanded="false">
               <span class="collapsible__title">Settings</span>
@@ -445,6 +430,7 @@
               <div class="settings-actions">
                 <button id="whats-new-btn" class="btn-small">What's New</button>
               </div>
+              <h3 class="settings-section-title">Recording &amp; activation</h3>
               <!-- Hotkey -->
               <div class="settings-group">
                 <div class="settings-row">
@@ -504,6 +490,7 @@
                 </div>
               </div>
 
+              <h3 class="settings-section-title">Speech &amp; language</h3>
               <!-- Transcription Profile -->
               <div class="settings-group">
                 <div class="settings-row">
@@ -564,6 +551,7 @@
                 </div>
               </div>
 
+              <h3 class="settings-section-title">Audio &amp; timing</h3>
               <!-- Audio Device -->
               <div class="settings-group">
                 <div class="settings-row">
@@ -641,6 +629,7 @@
                 </div>
               </div>
 
+              <h3 class="settings-section-title">Behavior &amp; interface</h3>
               <!-- Daily Word Goal -->
               <div class="settings-group">
                 <div class="settings-row">
@@ -760,11 +749,12 @@
                 </div>
               </div>
 
+              <h3 class="settings-section-title">Vocabulary</h3>
               <!-- Personal Dictionary -->
               <div class="settings-group">
                 <div class="settings-row__text">
                   <label class="settings-label" for="vocabulary-input">Personal Dictionary</label>
-                  <span class="settings-hint">Names, jargon, or terms the model gets wrong. One per line — they bias transcription toward correct spelling.</span>
+                  <span class="settings-hint">Names, jargon, or terms the model gets wrong. One per line; they bias transcription toward correct spelling.</span>
                 </div>
                 <textarea id="vocabulary-input" class="settings-textarea" rows="4" placeholder="GitHub&#10;Kubernetes&#10;PostgreSQL"></textarea>
                 <div class="settings-actions">
@@ -804,6 +794,7 @@
                 </div>
               </div>
 
+              <h3 class="settings-section-title">Integrations</h3>
               <!-- Editor integration (MCP) -->
               <div class="settings-group">
                 <div class="settings-row__text">
@@ -836,6 +827,7 @@
                 </div>
               </div>
 
+              <h3 class="settings-section-title">Text expansion &amp; app profiles</h3>
               <!-- Text Snippets -->
               <div class="settings-group">
                 <div class="settings-row__text">
@@ -870,6 +862,7 @@
                 </div>
               </div>
 
+              <h3 class="settings-section-title">Speech model</h3>
               <!-- STT Model -->
               <div class="settings-group">
                 <label class="settings-label">STT Model</label>
@@ -896,7 +889,10 @@
 
         <!-- ── Diagnostics View ── -->
         <div class="view" id="view-diagnostics">
-          <div class="view-header"><h2>Diagnostics</h2></div>
+          <div class="view-header">
+            <h2>Diagnostics</h2>
+            <p class="view-header__sub">Live microphone signal and why phrases were accepted or rejected. Useful when dictation seems to miss you.</p>
+          </div>
           <section id="diagnostics-section" class="collapsible">
             <button class="collapsible__trigger" id="diagnostics-toggle" aria-expanded="false">
               <span class="collapsible__title">Diagnostics</span>
@@ -989,16 +985,25 @@
 
         <!-- ── Help View ── -->
         <div class="view" id="view-help">
-          <div class="view-header"><h2>Help</h2></div>
+          <div class="view-header">
+            <h2>Help</h2>
+            <p class="view-header__sub">Browse the built-in guides or search them. Answers come from your local copy; nothing leaves this machine.</p>
+          </div>
           <section class="help-search">
             <span class="help-search-field">
               <span class="help-search-field__icon" aria-hidden="true"></span>
               <input id="help-search" class="help-search-input" type="search" placeholder="Ask a question about Murmur…" aria-label="Search help" autocomplete="off">
             </span>
-            <p class="help-hint" id="help-hint">Tip: you can dictate into this box too — start recording and ask out loud.</p>
+            <p class="help-hint" id="help-hint">Tip: you can dictate into this box too: start recording and ask out loud.</p>
             <p class="help-preparing" id="help-preparing" hidden>Preparing help search…</p>
-            <ul id="help-results" class="help-results" aria-live="polite"></ul>
-            <p class="help-empty" id="help-empty">Ask a question about configuring or using Murmur, like "how do I change the hotkey" or "is my voice sent to the cloud".</p>
+            <nav id="help-index" class="help-index" aria-label="Help articles"></nav>
+            <ul id="help-results" class="help-results" aria-live="polite" hidden></ul>
+            <p class="help-empty" id="help-empty" hidden>No matching sections. Try different words, or clear the search to browse all articles.</p>
+            <article id="help-article" class="help-article" hidden>
+              <button id="help-back" class="help-back" type="button">&#8592; All articles</button>
+              <h3 id="help-article-title" class="help-article__title"></h3>
+              <div id="help-article-body" class="help-article__body"></div>
+            </article>
           </section>
         </div>
 
@@ -1027,7 +1032,7 @@
         <!-- Step 1: Welcome -->
         <div class="onboarding__panel onboarding__panel--active" data-step="0">
           <h2 class="onboarding__title">Welcome to Murmur</h2>
-          <p class="onboarding__text">Private, on-device dictation. Speak and your words appear in whatever app you're using — nothing leaves your machine.</p>
+          <p class="onboarding__text">Private, on-device dictation. Speak and your words appear in whatever app you're using, and nothing leaves your machine.</p>
           <ul class="onboarding__list">
             <li><kbd>Double-tap Right Ctrl</kbd> to start and stop</li>
             <li>Or press your hotkey <kbd id="onboarding-hotkey">ctrl+shift+space</kbd></li>

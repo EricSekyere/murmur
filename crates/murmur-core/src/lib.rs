@@ -1,3 +1,16 @@
+//! Core library for Murmur, a local-first voice-to-text tool.
+//!
+//! Everything shared by the desktop app, CLI, and MCP server lives here:
+//! audio capture and VAD ([`audio`]), speech-to-text engines and model
+//! management ([`stt`]), meeting recording and diarization ([`meeting`]),
+//! local LLM rewrites ([`llm`]), text delivery ([`output`]), voice commands
+//! ([`voice_commands`], [`command`]), transcription history ([`history`]),
+//! and configuration ([`config`]).
+//!
+//! Heavy native dependencies (whisper.cpp, ONNX Runtime, llama.cpp,
+//! tree-sitter) are behind cargo features so a default build stays light;
+//! see the feature table in the crate manifest.
+
 pub mod audio;
 pub mod cloud;
 pub mod command;
