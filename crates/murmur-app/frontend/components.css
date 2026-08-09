@@ -2164,6 +2164,9 @@ footer {
   color: var(--color-text-secondary);
 }
 .help-article__body code {
+  /* Articles teach literal output ("fat arrow" gives =>); mono ligatures
+     would render those as single glyphs and misteach the result. */
+  font-variant-ligatures: none;
   padding: 1px 5px;
   font-family: var(--font-mono);
   font-size: 0.9em;
@@ -2190,6 +2193,138 @@ footer {
   display: flex;
   flex-direction: column;
   gap: 4px;
+}
+
+/* Lead: the article's opening summary, set brighter and slightly larger so a
+   reader can tell in seconds whether they are on the right page. */
+.help-article__body .help-lead {
+  font-size: 0.92rem;
+  line-height: 1.65;
+  color: var(--color-text);
+}
+
+/* Say-this-get-that tables: spoken phrase in bone, result in mono. */
+.help-table-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+}
+.help-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.82rem;
+}
+.help-table th {
+  padding: 8px 16px;
+  text-align: left;
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+  border-bottom: 1px solid var(--color-border);
+}
+.help-table td {
+  padding: 8px 16px;
+  vertical-align: top;
+  color: var(--color-text-secondary);
+  border-bottom: 1px solid var(--color-border);
+}
+.help-table tbody tr:last-child td { border-bottom: none; }
+.help-table tbody tr:hover td { background: var(--color-accent-dim); }
+.help-table td:first-child { color: var(--color-text); }
+.help-table td code {
+  background: var(--color-surface-raised);
+  white-space: pre;
+}
+
+/* Keyboard chips: each key of a chord rendered as a physical keycap. */
+.help-kbd { white-space: nowrap; }
+.help-kbd kbd {
+  display: inline-block;
+  padding: 1px 7px;
+  font-family: var(--font-mono);
+  font-size: 0.78em;
+  line-height: 1.5;
+  color: var(--color-text);
+  background: var(--color-surface-raised);
+  border: 1px solid var(--color-border-hover);
+  border-bottom-width: 2px;
+  border-radius: var(--radius-sm);
+}
+.help-kbd__sep {
+  margin: 0 3px;
+  color: var(--color-text-muted);
+  font-size: 0.8em;
+}
+
+/* Callouts: tips, notes, warnings, and privacy asides pulled out of the prose
+   with a signal-coloured spine. */
+.help-callout {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px 16px;
+  border-left: 2px solid var(--color-accent);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  background: var(--color-accent-dim);
+}
+.help-callout__label {
+  font-size: 0.66rem;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--color-accent-light);
+}
+.help-callout__body {
+  font-size: 0.82rem;
+  line-height: 1.6;
+  color: var(--color-text-secondary);
+}
+.help-callout--warning {
+  border-left-color: var(--color-processing);
+  background: var(--color-processing-dim);
+}
+.help-callout--warning .help-callout__label { color: var(--color-processing); }
+.help-callout--privacy {
+  border-left-color: var(--color-done);
+  background: var(--color-done-dim);
+}
+.help-callout--privacy .help-callout__label { color: var(--color-done); }
+
+/* Numbered steps: a violet counter chip per step instead of a plain list. */
+.help-steps {
+  list-style: none;
+  counter-reset: help-step;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-left: 2px;
+}
+.help-steps li {
+  counter-increment: help-step;
+  position: relative;
+  padding-left: 32px;
+  min-height: 22px;
+}
+.help-steps li::before {
+  content: counter(help-step);
+  position: absolute;
+  left: 0;
+  top: 1px;
+  width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: var(--color-accent-light);
+  background: var(--color-accent-dim);
+  border: 1px solid var(--color-accent-glow);
+  border-radius: 50%;
 }
 
 .help-card__open {
