@@ -32,7 +32,11 @@ const ORT_ARCHIVE_SHA256: &str = "0b9f47d140411d938e47915824d8daaa424df95a88b5f1
     all(target_os = "linux", target_arch = "x86_64"),
     all(target_os = "linux", target_arch = "aarch64")
 )))]
-const ORT_ARCHIVE_SHA256: &str = "";
+compile_error!(
+    "No ONNX Runtime archive is pinned for this target. `download_url()` cannot build a URL for it \
+     either, so the download would be both impossible and unverifiable. Add the target's release \
+     asset URL and its SHA256 above before building here."
+);
 
 /// ONNX Runtime DLL filename for the current platform.
 #[cfg(target_os = "windows")]
