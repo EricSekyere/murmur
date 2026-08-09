@@ -997,8 +997,14 @@
             </span>
             <p class="help-hint" id="help-hint">Tip: you can dictate into this box too — start recording and ask out loud.</p>
             <p class="help-preparing" id="help-preparing" hidden>Preparing help search…</p>
-            <ul id="help-results" class="help-results" aria-live="polite"></ul>
-            <p class="help-empty" id="help-empty">Ask a question about configuring or using Murmur, like "how do I change the hotkey" or "is my voice sent to the cloud".</p>
+            <nav id="help-index" class="help-index" aria-label="Help articles"></nav>
+            <ul id="help-results" class="help-results" aria-live="polite" hidden></ul>
+            <p class="help-empty" id="help-empty" hidden>No matching sections. Try different words, or clear the search to browse all articles.</p>
+            <article id="help-article" class="help-article" hidden>
+              <button id="help-back" class="help-back" type="button">&#8592; All articles</button>
+              <h3 id="help-article-title" class="help-article__title"></h3>
+              <div id="help-article-body" class="help-article__body"></div>
+            </article>
           </section>
         </div>
 
