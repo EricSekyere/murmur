@@ -6,6 +6,10 @@
 
 Fast, private, on-device dictation for your desktop. Press a hotkey, speak, and your words appear in whatever app has focus — fully offline.
 
+![Double-tap right Ctrl, speak, and the transcribed phrase is typed into the focused window](assets/dictation-flow.gif)
+
+<sub>Animation of the dictation flow, drawn from the app's own interface styling. Not a screen capture.</sub>
+
 Murmur exists because dictation should not require streaming your voice to a cloud service. Everything — audio capture, voice activity detection, speech-to-text, and even LLM-powered rewrites and meeting summaries — runs locally on your machine. The only network traffic is downloading models (SHA-256 verified) and checking GitHub Releases for updates.
 
 ## Features
