@@ -1,65 +1,79 @@
 # Per-app profiles
 
-App Profiles let you override settings automatically based on the app you are
-dictating into. For example, turn on developer mode in your editor and off in
-chat, or use clipboard paste only in your terminal. Set them in Settings.
+App Profiles let you override settings automatically based on the app you
+are dictating into. For example, turn on developer mode in your editor
+and off in chat, or use clipboard paste only in your terminal. Set them
+in Settings.
 
 ## How to write a profile
 
-Enter one profile per line as app = options. The options are dev or plain for
-developer mode, and auto, keyboard, clipboard_paste, or clipboard for output
-mode. For example: code = dev, or windowsterminal = dev, clipboard, or
-slack = plain.
+Enter one profile per line as app = options.
+
+| Option | Values | What it does |
+| --- | --- | --- |
+| Developer mode | `dev` or `plain` | Code post-processing on or off in this app |
+| Output mode | `auto`, `keyboard`, `clipboard_paste`, or `clipboard` | How text is delivered in this app |
+| Rewrite prompt | `prompt = "..."` | Custom instruction for Rewrite selection in this app |
+| Auto-submit | `submit = enter` or `submit = ctrl_enter` | Key pressed once when a session that delivered text ends |
+
+For example: `code = dev`, or `windowsterminal = dev, clipboard`, or
+`slack = plain, submit = enter`.
 
 ## How matching works
 
-The app name is matched against the focused window's process name when a session
-starts. Matching is case-insensitive and matches a whole word, so code matches
-Code.exe and code-insiders.exe but not unicode.exe. A multi-word pattern such as
-visual studio matches as a substring instead.
+The app name is matched against the focused window's process name when a
+session starts. Matching is case-insensitive and matches a whole word, so
+code matches Code.exe and code-insiders.exe but not unicode.exe. A
+multi-word pattern such as visual studio matches as a substring instead.
 
 ## Which profile wins
 
-The first profile whose pattern matches the foreground app is applied for that
-session. Fields you leave out fall back to your global settings, so a profile that
-only sets dev keeps your normal output mode.
+The first profile whose pattern matches the foreground app is applied for
+that session. Fields you leave out fall back to your global settings, so
+a profile that only sets dev keeps your normal output mode.
 
 ## When a profile applies
 
-A profile is evaluated at the moment a session starts, based on whatever window is
-focused then. If no profile matches, your global developer mode and output mode
-are used. You can store up to 50 profiles.
+A profile is evaluated at the moment a session starts, based on whatever
+window is focused then. If no profile matches, your global developer mode
+and output mode are used. You can store up to 50 profiles.
 
 ## Custom rewrite instructions
 
 On builds with the local rewrite model, a profile can also carry the
-instruction used when you rewrite a selection in that app. Add prompt = "..."
-to the profile line, for example slack = plain, prompt = "Keep it casual and
-under three sentences". The quoted instruction replaces the built-in rewrite
-text for that app only; profiles without one keep the standard behavior.
+instruction used when you rewrite a selection in that app. Add
+prompt = "..." to the profile line, for example slack = plain,
+prompt = "Keep it casual and under three sentences". The quoted
+instruction replaces the built-in rewrite text for that app only;
+profiles without one keep the standard behavior.
 
 ## Auto-submit after dictation
 
-A profile can press the send key for you when dictation ends, so a chat or AI
-agent message goes out fully hands-free. Add submit = enter or
-submit = ctrl_enter to the profile line, for example slack = plain,
-submit = enter. When the session ends, Murmur presses the key once, and only
-if the session actually typed or pasted text into that app and its window is
-still focused. Nothing is pressed in clipboard-only mode, after a session
-that delivered nothing, or when you have switched to another window. This is
-deliberately a per-app option with no global version, because pressing Enter
-in the wrong app can be destructive.
+A profile can press the send key for you when dictation ends, so a chat
+or AI agent message goes out fully hands-free. Add submit = enter or
+submit = ctrl_enter to the profile line. When the session ends, Murmur
+presses the key once, and only if the session actually typed or pasted
+text into that app and its window is still focused. Nothing is pressed in
+clipboard-only mode, after a session that delivered nothing, or when you
+have switched to another window.
+
+> **Warning:** Auto-submit is deliberately a per-app option with no
+> global version, because pressing Enter in the wrong app can be
+> destructive.
 
 ## Context-aware rewrites
 
-The Context-aware rewrites toggle adds the target app's name and your current
-clipboard text to the rewrite prompt, so rewrites can match where the text is
-going. It is off by default because clipboard contents are sensitive, and like
-every rewrite the context only ever enters the local model on your machine; it
-is never logged or sent anywhere.
+The Context-aware rewrites toggle adds the target app's name and your
+current clipboard text to the rewrite prompt, so rewrites can match where
+the text is going.
+
+> **Privacy:** It is off by default because clipboard contents are
+> sensitive, and like every rewrite the context only ever enters the
+> local model on your machine; it is never logged or sent anywhere.
 
 ## Common uses
 
-Use dev for editors and terminals so code transcribes cleanly, and plain for
-Slack, email, and docs so prose stays natural. Use clipboard_paste for a terminal
-that drops directly typed characters, while leaving everything else on auto.
+Use dev for editors and terminals so code transcribes cleanly, and plain
+for Slack, email, and docs so prose stays natural. Use clipboard_paste
+for a terminal that drops directly typed characters, while leaving
+everything else on auto.
