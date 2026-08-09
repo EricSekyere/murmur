@@ -129,7 +129,7 @@ function renderMeetings(meetings) {
   if (meetings.length === 0) {
     const li = document.createElement('li');
     li.className = 'history-empty';
-    li.textContent = 'No meetings recorded yet.';
+    li.textContent = 'No meetings yet. Press Start Meeting before your next call to capture both sides of it.';
     meetingsList.appendChild(li);
     return;
   }
@@ -242,7 +242,7 @@ function buildSummarizeButton(id, detail, viewBtn) {
 }
 
 // Render one meeting's detail: the persisted summary (if any) on top, then
-// the backend's precomputed blocks — "Speaker N:" prefixes when diarization
+// the backend's precomputed blocks: "Speaker N:" prefixes when diarization
 // ran, plain timestamped lines otherwise. Assignment logic lives entirely in
 // the backend (get_meeting.blocks); this only formats.
 function renderMeetingDetail(container, data) {

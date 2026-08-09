@@ -54,6 +54,37 @@
 
   // ── Article index ──
 
+  // Static grouping for the index; anything the map does not know lands in
+  // the last group so new backend articles never disappear.
+  const CATEGORY_ORDER = [
+    'Get started',
+    'Dictate and edit',
+    'Models and audio',
+    'Workflows',
+    'Reference and troubleshooting',
+  ];
+  const CATEGORY_BY_TITLE = {
+    'Getting started': 'Get started',
+    'The floating pill': 'Get started',
+    'Shortcuts and commands reference': 'Get started',
+    'Voice commands and editing': 'Dictate and edit',
+    'Developer mode and code dictation': 'Dictate and edit',
+    'Snippets and personal dictionary': 'Dictate and edit',
+    'Output and delivery': 'Dictate and edit',
+    'Models, languages and translation': 'Models and audio',
+    'Microphone and audio': 'Models and audio',
+    'Codebase vocabulary': 'Models and audio',
+    'Meetings': 'Workflows',
+    'Per-app profiles': 'Workflows',
+    'History and analytics': 'Workflows',
+    'Integrations and updates': 'Workflows',
+    'Configuration reference': 'Reference and troubleshooting',
+    'Diagnostics': 'Reference and troubleshooting',
+    'Privacy and your data': 'Reference and troubleshooting',
+    'Troubleshooting': 'Reference and troubleshooting',
+  };
+  const HEADINGS_SHOWN = 4;
+
   function renderIndexEntry(summary) {
     const button = document.createElement('button');
     button.type = 'button';
@@ -64,20 +95,46 @@
     title.className = 'help-index__title';
     title.textContent = summary.title;
 
+    const all = summary.headings || [];
+    const shown = all.slice(0, HEADINGS_SHOWN);
     const headings = document.createElement('span');
     headings.className = 'help-index__headings';
-    headings.textContent = (summary.headings || []).join(' · ');
+    headings.textContent = all.length > shown.length
+      ? `${shown.join(' · ')} +${all.length - shown.length} more`
+      : shown.join(' · ');
 
     button.append(title, headings);
     return button;
   }
 
+  function renderIndexGroups(summaries) {
+    const buckets = new Map(CATEGORY_ORDER.map((name) => [name, []]));
+    const fallback = CATEGORY_ORDER[CATEGORY_ORDER.length - 1];
+    for (const summary of summaries) {
+      const category = CATEGORY_BY_TITLE[summary.title] || fallback;
+      buckets.get(category).push(summary);
+    }
+    const frag = document.createDocumentFragment();
+    for (const [name, entries] of buckets) {
+      if (entries.length === 0) continue;
+      const group = document.createElement('section');
+      group.className = 'help-index__group';
+      const label = document.createElement('h3');
+      label.className = 'help-index__group-title';
+      label.textContent = name;
+      const grid = document.createElement('div');
+      grid.className = 'help-index__grid';
+      for (const entry of entries) grid.appendChild(renderIndexEntry(entry));
+      group.append(label, grid);
+      frag.appendChild(group);
+    }
+    return frag;
+  }
+
   invoke('help_articles')
     .then((summaries) => {
       if (!Array.isArray(summaries)) return;
-      const frag = document.createDocumentFragment();
-      for (const summary of summaries) frag.appendChild(renderIndexEntry(summary));
-      indexNav.replaceChildren(frag);
+      indexNav.replaceChildren(renderIndexGroups(summaries));
     })
     .catch((err) => console.error('Help article list failed:', err));
 
@@ -189,7 +246,10 @@
     try {
       const article = await invoke('help_article', { title });
       articleTitle.textContent = article.title;
-      articleBody.replaceChildren(renderMarkdown(article.markdown || ''));
+      // The page already shows the title; drop the markdown's own leading h1
+      // so it is not rendered twice.
+      const markdown = (article.markdown || '').replace(/^#\s[^\n]*\n+/, '');
+      articleBody.replaceChildren(renderMarkdown(markdown));
       show('article');
       backButton.focus();
     } catch (err) {
