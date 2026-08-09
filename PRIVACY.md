@@ -25,8 +25,7 @@ information about you or how you use Murmur.
 - **Meeting mode** is the one exception: when speaker labels are enabled (the
   diarization model is downloaded), meeting audio is temporarily spooled to a
   file in Murmur's config directory so it can be processed after the meeting.
-  That file is deleted immediately after processing, on any error, and — if the
-  app crashed mid-meeting — swept on the next launch. It never leaves your
+  That file is deleted immediately after processing, on any error, and, if the app crashed mid-meeting, swept on the next launch. It never leaves your
   machine and there is no setting that retains it.
 - Transcribed text is typed into whichever application you have focused. It is
   never transmitted to us or any third party.
@@ -35,16 +34,16 @@ information about you or how you use Murmur.
 
 The following is stored **only on your own computer**, never in the cloud:
 
-- **Settings** — your configuration file, in your operating system's standard
+- **Settings:** your configuration file, in your operating system's standard
   config directory.
-- **Transcription history** — by default, delivered phrases are saved to a
+- **Transcription history:** by default, delivered phrases are saved to a
   local, searchable history (capped at the most recent 500 entries). You can
   turn this off ("Save History") in Settings and clear it at any time.
-- **Meeting records** — transcripts, speaker labels, and summaries from
+- **Meeting records:** transcripts, speaker labels, and summaries from
   meetings you record are saved locally alongside the config directory.
-- **Diagnostic logs** — local log files for troubleshooting. Transcript text is
+- **Diagnostic logs:** local log files for troubleshooting. Transcript text is
   not written to logs at the default log level.
-- **Models** — downloaded speech-to-text model files.
+- **Models:** downloaded speech-to-text model files.
 
 You can remove any of this by clearing history in the app, deleting Murmur's
 config directory, or uninstalling the Software.
@@ -53,14 +52,14 @@ config directory, or uninstalling the Software.
 
 Murmur connects to the internet only for the following purposes:
 
-1. **Model and runtime downloads** — on first use, or when you select a new
+1. **Model and runtime downloads:** on first use, or when you select a new
    model, Murmur downloads the required model and runtime files from their
    hosting providers (such as Hugging Face and GitHub) and verifies their
    integrity with a SHA-256 checksum.
-2. **Update checks** — at startup, Murmur checks GitHub Releases for new
+2. **Update checks:** at startup, Murmur checks GitHub Releases for new
    versions and can download and install updates. Update packages are
    signature-verified before install.
-3. **Optional cloud rewrite (off by default)** — builds compiled with the
+3. **Optional cloud rewrite (off by default):** builds compiled with the
    `cloud` feature can send text you explicitly rewrite to an
    OpenAI-compatible endpoint that **you** configure with **your own** API
    key. This requires the feature to be compiled in, the setting to be

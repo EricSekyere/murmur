@@ -5,9 +5,9 @@ Thanks for your interest. This document covers what you need to build, test, and
 ## Prerequisites
 
 - **Rust 1.93+** (edition 2024)
-- **CMake** — whisper.cpp is built from source by `whisper-rs`
-- **LLVM/libclang** — required by bindgen. On Windows, set `LIBCLANG_PATH` (typically `C:\Program Files\LLVM\bin`)
-- **Tauri CLI** — `cargo install tauri-cli --version '^2'` (desktop app only)
+- **CMake:** whisper.cpp is built from source by `whisper-rs`
+- **LLVM/libclang:** required by bindgen. On Windows, set `LIBCLANG_PATH` (typically `C:\Program Files\LLVM\bin`)
+- **Tauri CLI:** `cargo install tauri-cli --version '^2'` (desktop app only)
 
 Platform extras:
 
@@ -61,11 +61,11 @@ Unit tests live next to the code behind `#[cfg(test)]`; integration tests in eac
 The full engineering conventions live in [CLAUDE.md](CLAUDE.md) and [AGENTS.md](AGENTS.md); the short version:
 
 - **Errors:** `thiserror` enums in `murmur-core`, `anyhow` with `.context()` in binaries. No `unwrap()`/`expect()`/`panic!` in production code.
-- **Logging:** the `tracing` crate only — no `println!` in library code. Never log transcript contents above `trace` level; this is a privacy-sensitive app.
+- **Logging:** the `tracing` crate only, never `println!` in library code. Never log transcript contents above `trace` level; this is a privacy-sensitive app.
 - **Async:** tokio. CPU-heavy work (STT inference) runs on dedicated worker threads, never on the async reactor.
 - **Config:** TOML with `#[serde(default)]` on every field (old and new configs must load across versions), atomic tempfile-and-rename writes, and recovery to defaults on a corrupt file.
 - **Downloads:** every model/runtime download is verified against a pinned SHA-256 before use.
-- **Commits:** [Conventional Commits](https://www.conventionalcommits.org/) — `feat(core): ...`, `fix(app): ...`. Scopes: `core`, `cli`, `app`, `audio`, `stt`, `config`. Releases are versioned automatically from commit subjects on the release branch, and a `Whats-New: Title | body` trailer on a user-visible commit becomes an in-app What's New bullet.
+- **Commits:** [Conventional Commits](https://www.conventionalcommits.org/): `feat(core): ...`, `fix(app): ...`. Scopes: `core`, `cli`, `app`, `audio`, `stt`, `config`. Releases are versioned automatically from commit subjects on the release branch, and a `Whats-New: Title | body` trailer on a user-visible commit becomes an in-app What's New bullet.
 
 ## Project layout
 
@@ -80,4 +80,4 @@ docs/                 deeper docs (local-api.md)
 
 ## Questions
 
-Open a [discussion or issue](https://github.com/EricSekyere/murmur/issues). For security reports, see [SECURITY.md](SECURITY.md) — please do not open public issues for vulnerabilities.
+Open a [discussion or issue](https://github.com/EricSekyere/murmur/issues). For security reports, see [SECURITY.md](SECURITY.md). Please do not open public issues for vulnerabilities.

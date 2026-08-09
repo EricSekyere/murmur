@@ -61,7 +61,7 @@ All frames are JSON text frames.
 
 ### Events (server to client)
 
-`{ "type": "event", "name": <event>, "payload": <json> }` — the same payloads
+`{ "type": "event", "name": <event>, "payload": <json> }`. These are the same payloads
 the Murmur frontend receives, forwarded verbatim:
 
 | Name | Payload | Meaning |
@@ -82,18 +82,18 @@ disconnected.
 
 ### Requests (client to server)
 
-`{ "type": "request", "id": <any json>, "method": <name> }` — the `id` is
+`{ "type": "request", "id": <any json>, "method": <name> }`. The `id` is
 opaque and echoed back verbatim (it may be omitted; the response then carries
 `"id": null`). Methods:
 
-- `toggle_recording` — same as the hotkey; starts or stops a dictation
+- `toggle_recording`: same as the hotkey; starts or stops a dictation
   session. Result: `{ "ok": true }`.
-- `get_status` — result: `{ "recording": bool, "processing": bool }`.
-- `start_meeting` — begin a meeting recording (microphone plus system audio
+- `get_status`: result: `{ "recording": bool, "processing": bool }`.
+- `start_meeting`: begin a meeting recording (microphone plus system audio
   where supported), identical to the dashboard's Start Meeting button.
   Refusals (dictation active, meeting already running, model still loading)
   come back as an error response.
-- `stop_meeting` — signal the running meeting to stop. Returns immediately;
+- `stop_meeting`: signal the running meeting to stop. Returns immediately;
   the final chunk transcribes and the record saves in the background.
 
 ```json
@@ -116,4 +116,4 @@ frame-level error, also without closing:
 
 ## Reference clients
 
-- [`editors/vscode/`](../editors/vscode/) — first-party VS Code extension consuming this API.
+- [`editors/vscode/`](../editors/vscode/): first-party VS Code extension consuming this API.

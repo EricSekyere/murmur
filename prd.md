@@ -49,7 +49,7 @@ This PRD was written as a forward-looking plan. The product has since shipped on
 ### Shipped since v0.6
 - **Directory and path mapping** (Section 5.5): spoken path aliases and directory navigation, plus spoken file references resolved in command mode.
 - **Local WebSocket API and VS Code extension** (Section 5.4, Epics 3.2/3.5): the desktop app can expose a localhost-only, token-authenticated API (off by default; see `docs/local-api.md`), and a first-party reference VS Code extension in `editors/vscode/` consumes it.
-- **Meeting mode.** Records microphone plus system audio (Windows WASAPI loopback), transcribes locally, and — when the diarization model is downloaded — adds speaker labels (Sortformer over ONNX Runtime) and on-demand summaries via a local llama.cpp LLM. Audio is spooled to a temp file only while diarization needs it and deleted immediately after processing (swept at startup after a crash).
+- **Meeting mode.** Records microphone plus system audio (Windows WASAPI loopback), transcribes locally, and, when the diarization model is downloaded, adds speaker labels (Sortformer over ONNX Runtime) and on-demand summaries via a local llama.cpp LLM. Audio is spooled to a temp file only while diarization needs it and deleted immediately after processing (swept at startup after a crash).
 - **Command mode with local LLM rewrites.** Selection rewrites and per-profile rewrite prompts run on a local GGUF model (llama.cpp); an optional BYO-key cloud rewrite backend exists behind the off-by-default `cloud` cargo feature and config flag.
 - **MCP additions:** `wait_for_next_dictation` and `request_dictation` (the latter triggers voice capture in the running app via a local file handshake).
 - **Dashboard growth:** activity heatmap, daily word goal, personal records, filler-word rate, vocabulary diversity.
@@ -465,11 +465,11 @@ All dependencies must be compatible with **MIT or Apache 2.0**. No GPL dependenc
 - Status bar indicator showing Murmur connection state
 - **Deliverable:** Voice-to-Cursor with full project awareness
 
-#### Epic 3.3: Claude Code MCP Integration  *(built — `murmur mcp`)*
+#### Epic 3.3: Claude Code MCP Integration  *(built: `murmur mcp`)*
 - [x] MCP server in Murmur over stdio transport (rmcp).
 - [x] Expose the transcription history as tools: `get_recent_transcripts` (newest-first list) and `search_transcripts` (case-insensitive substring search). Read-only and fully local.
 - [x] One-click setup from the desktop app (Settings → Connect to Cursor / Claude) and a one-command CLI equivalent (`murmur mcp install`). Both auto-detect Cursor / Claude Desktop and write the server entry (pointing at the resolved binary path) into their config idempotently. The app binary itself serves MCP when relaunched as `murmur-app mcp`, so no separate sidecar is bundled. For Claude Code: `claude mcp add murmur -- murmur mcp`.
-- [ ] Not built: remote-control tools (`voice_listen` / `voice_transcribe`) that would start recording from the agent — out of scope for a local push-to-talk tool.
+- [ ] Not built: remote-control tools (`voice_listen` / `voice_transcribe`) that would start recording from the agent, out of scope for a local push-to-talk tool.
 - **Deliverable:** Claude/Cursor can pull recent voice transcriptions as a tool.
 
 #### Epic 3.4: Advanced Code Formatting
