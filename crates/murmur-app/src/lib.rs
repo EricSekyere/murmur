@@ -246,6 +246,10 @@ pub fn run() -> anyhow::Result<()> {
             commands::help_search,
             #[cfg(feature = "full")]
             commands::help_ready,
+            #[cfg(feature = "full")]
+            commands::help_articles,
+            #[cfg(feature = "full")]
+            commands::help_article,
             updater::install_update,
         ])
         .setup(move |app| setup_app(app, engine_for_setup, model, &hotkey, show_widget_on_start))

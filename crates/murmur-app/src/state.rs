@@ -159,6 +159,23 @@ pub(crate) struct HelpResultDto {
     pub score: f32,
 }
 
+/// One entry of the browsable Help index: an article title plus its section
+/// headings. Mirrors `murmur_core::help::ArticleSummary`.
+#[cfg(feature = "full")]
+#[derive(serde::Serialize, Clone)]
+pub(crate) struct HelpArticleSummaryDto {
+    pub title: String,
+    pub headings: Vec<String>,
+}
+
+/// A full Help article for the reading view: title plus raw markdown body.
+#[cfg(feature = "full")]
+#[derive(serde::Serialize, Clone)]
+pub(crate) struct HelpArticleDto {
+    pub title: String,
+    pub markdown: String,
+}
+
 /// Emit a `recording-state` event to all windows (main + widget).
 pub(crate) fn emit_recording_state(app: &tauri::AppHandle, recording: bool, processing: bool) {
     let _ = app.emit(

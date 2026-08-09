@@ -980,6 +980,34 @@ pub(crate) fn help_search(
         .collect())
 }
 
+/// The browsable Help index: every bundled article's title and section
+/// headings. Static `include_str!` data, so it never waits on the search
+/// engine or its embedder being ready.
+#[cfg(feature = "full")]
+#[tauri::command]
+pub(crate) fn help_articles() -> Vec<crate::state::HelpArticleSummaryDto> {
+    murmur_core::help::article_summaries()
+        .into_iter()
+        .map(|a| crate::state::HelpArticleSummaryDto {
+            title: a.title,
+            headings: a.headings,
+        })
+        .collect()
+}
+
+/// The full markdown body of one bundled Help article, looked up by the exact
+/// title `help_articles` returned. Static data, independent of the engine.
+#[cfg(feature = "full")]
+#[tauri::command]
+pub(crate) fn help_article(title: String) -> Result<crate::state::HelpArticleDto, String> {
+    murmur_core::help::article_body(&title)
+        .map(|markdown| crate::state::HelpArticleDto {
+            title,
+            markdown: markdown.to_string(),
+        })
+        .ok_or_else(|| "unknown help article".to_string())
+}
+
 /// Whether the local Help search engine has finished preparing.
 #[cfg(feature = "full")]
 #[tauri::command]
