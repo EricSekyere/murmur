@@ -1,3 +1,8 @@
+//! Murmur CLI: dictation from the terminal (`murmur listen`), model
+//! management (`murmur models`), codebase vocabulary indexing
+//! (`murmur index`), config inspection, and the stdio MCP server
+//! (`murmur mcp`, plus `murmur mcp install` to register with editors).
+
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use cpal::SampleFormat;

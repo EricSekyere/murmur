@@ -23,11 +23,11 @@ Murmur will enable developers to compose prompts for AI agents, write documentat
 
 ---
 
-## 1.5 Current Implementation Status (v0.5.1)
+## 1.5 Current Implementation Status (v0.17.0)
 
 This PRD was written as a forward-looking plan. The product has since shipped on Windows, but it took a different path than the original phases: dictation quality and live-preview UX were prioritized, while the heavier "code intelligence" and per-agent integration epics have not been built. This section is the source of truth for what exists today; the phase plans further down are kept for historical context and remaining direction.
 
-### Shipped (Windows + Linux, v0.5.1)
+### Shipped (Windows + Linux, since v0.5)
 - **Dictation.** Global-hotkey activation with toggle, push-to-talk, and double-tap modes. CPAL audio capture with Silero VAD (via ONNX Runtime).
 - **STT.** whisper-rs (whisper.cpp) with base.en, small.en, medium.en, and large-v3-turbo, plus NVIDIA Parakeet TDT 0.6B v2 (ONNX). Default is small.en. GPU acceleration via CUDA on Windows; model switching in settings.
 - **Output.** Direct Unicode typing into the focused application (Windows SendInput), with clipboard-and-paste available as an explicit output mode. The default path never routes through the clipboard, so prior clipboard contents cannot leak.
@@ -46,16 +46,23 @@ This PRD was written as a forward-looking plan. The product has since shipped on
 - **Local Help retrieval.** A Help tab answers questions about Murmur by semantic search over bundled help articles via a small on-device ONNX embedder (reusing the ORT runtime the STT path loads). Fully offline.
 - **Usage dashboard and auto-learned dictionary.** A local dashboard charts words-per-day, day streaks, and top apps; corrections feed an auto-learned vocabulary. Lower idle memory: inference arenas are released between phrases.
 
+### Shipped since v0.6
+- **Directory and path mapping** (Section 5.5): spoken path aliases and directory navigation, plus spoken file references resolved in command mode.
+- **Local WebSocket API and VS Code extension** (Section 5.4, Epics 3.2/3.5): the desktop app can expose a localhost-only, token-authenticated API (off by default; see `docs/local-api.md`), and a first-party reference VS Code extension in `editors/vscode/` consumes it.
+- **Meeting mode.** Records microphone plus system audio (Windows WASAPI loopback), transcribes locally, and — when the diarization model is downloaded — adds speaker labels (Sortformer over ONNX Runtime) and on-demand summaries via a local llama.cpp LLM. Audio is spooled to a temp file only while diarization needs it and deleted immediately after processing (swept at startup after a crash).
+- **Command mode with local LLM rewrites.** Selection rewrites and per-profile rewrite prompts run on a local GGUF model (llama.cpp); an optional BYO-key cloud rewrite backend exists behind the off-by-default `cloud` cargo feature and config flag.
+- **MCP additions:** `wait_for_next_dictation` and `request_dictation` (the latter triggers voice capture in the running app via a local file handshake).
+- **Dashboard growth:** activity heatmap, daily word goal, personal records, filler-word rate, vocabulary diversity.
+- **Dictation niceties:** spoken emoji, spoken Conventional Commit messages, clipboard splicing by voice, phonetic vocabulary correction, resumable model downloads, per-app auto-submit.
+
 ### Not yet built (still aspirational in this document)
-- **Directory and path mapping** from spoken references (Section 5.5).
-- **Other per-agent integrations:** the VS Code / Cursor extension (Section 5.4, Epic 3.2). The local WebSocket API it would build on (Epic 3.5) now ships in the desktop app — localhost-only, token-authenticated, off by default (see `docs/local-api.md`) — but the extension itself is not built. Integration today is the universal OS-level typing path, CLI stdout piping, the MCP server above, and that local WebSocket API.
-- **Distinct coding / prose / command modes** (F6, Epic 2.4). A transcription profile setting exists, but not the full mode system.
+- **Distinct coding / prose / command modes as a full mode system** (F6, Epic 2.4). A transcription profile setting and a command mode exist, but not the complete tri-mode design.
 - **Continuous always-listening mode and wake word** (Epic 4.2).
 
 ### Platform status
 - **Windows (x64)** is the released, signed, auto-updating platform.
 - **Linux (x64)** ships `.deb` and `.AppImage` bundles from the release pipeline and is compile-gated on every PR (see `.github/workflows/ci.yml`). Not yet signed.
-- **macOS** has platform-conditional code and a build target in the tree but is not yet signed or notarized, so it is not shipped (blocked on an Apple Developer account).
+- **macOS** ships a universal (Apple Silicon + Intel) `.dmg` from the release pipeline, currently unsigned and not notarized (Gatekeeper requires a right-click Open on first launch). Signing and notarization are blocked on an Apple Developer account; the release job is already wired to enable them once `APPLE_*` secrets exist.
 
 ### CLI surface
 `murmur listen`, `murmur config`, `murmur models` (with stdout and clipboard output), `murmur index` (codebase vocabulary), and `murmur mcp` (stdio MCP server, plus `murmur mcp install` to register with Cursor / Claude). The WebSocket agent API lives in the desktop app, not the CLI (opt-in; see `docs/local-api.md`).

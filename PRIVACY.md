@@ -20,8 +20,14 @@ information about you or how you use Murmur.
 - Your microphone audio is captured locally, transcribed locally by the bundled
   speech-to-text engine (whisper.cpp or NVIDIA Parakeet), and delivered as text
   on your machine.
-- Audio is held in memory only for the duration of processing. Murmur does not
-  save audio recordings to disk.
+- During dictation, audio is held in memory only for the duration of
+  processing and is never written to disk.
+- **Meeting mode** is the one exception: when speaker labels are enabled (the
+  diarization model is downloaded), meeting audio is temporarily spooled to a
+  file in Murmur's config directory so it can be processed after the meeting.
+  That file is deleted immediately after processing, on any error, and — if the
+  app crashed mid-meeting — swept on the next launch. It never leaves your
+  machine and there is no setting that retains it.
 - Transcribed text is typed into whichever application you have focused. It is
   never transmitted to us or any third party.
 
@@ -32,8 +38,10 @@ The following is stored **only on your own computer**, never in the cloud:
 - **Settings** — your configuration file, in your operating system's standard
   config directory.
 - **Transcription history** — by default, delivered phrases are saved to a
-  local, searchable history. You can turn this off ("Save History") in Settings
-  and clear it at any time.
+  local, searchable history (capped at the most recent 500 entries). You can
+  turn this off ("Save History") in Settings and clear it at any time.
+- **Meeting records** — transcripts, speaker labels, and summaries from
+  meetings you record are saved locally alongside the config directory.
 - **Diagnostic logs** — local log files for troubleshooting. Transcript text is
   not written to logs at the default log level.
 - **Models** — downloaded speech-to-text model files.
@@ -49,11 +57,26 @@ Murmur connects to the internet only for the following purposes:
    model, Murmur downloads the required model and runtime files from their
    hosting providers (such as Hugging Face and GitHub) and verifies their
    integrity with a SHA-256 checksum.
-2. **Update checks** — Murmur checks GitHub Releases for new versions and can
-   download and install updates.
+2. **Update checks** — at startup, Murmur checks GitHub Releases for new
+   versions and can download and install updates. Update packages are
+   signature-verified before install.
+3. **Optional cloud rewrite (off by default)** — builds compiled with the
+   `cloud` feature can send text you explicitly rewrite to an
+   OpenAI-compatible endpoint that **you** configure with **your own** API
+   key. This requires the feature to be compiled in, the setting to be
+   enabled, and the `MURMUR_CLOUD_API_KEY` environment variable to be set;
+   absent any one of those, no such request is ever made. Your API key is
+   read from the environment at call time and is never stored in the config
+   file or logged.
 
 These requests are made directly to those third-party services. We do not
 operate any intermediary servers and do not receive any data about you.
+
+Two local integration surfaces exist, neither of which uses the internet: an
+opt-in WebSocket API for editor plugins (localhost-only, token-authenticated,
+off by default; see `docs/local-api.md`) and an MCP server that editors spawn
+and talk to over stdin/stdout. Both only ever exchange data with software
+running on your own machine.
 
 ## Third-party services
 

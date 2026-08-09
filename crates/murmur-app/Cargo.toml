@@ -3,6 +3,7 @@ name = "murmur-app"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
 rust-version.workspace = true
 description = "Tauri v2 desktop app for Murmur voice-to-text tool"
 
