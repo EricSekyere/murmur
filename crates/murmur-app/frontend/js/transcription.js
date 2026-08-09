@@ -51,7 +51,9 @@ function renderHistory() {
     historyCount.hidden = true;
     const li = document.createElement('li');
     li.className = 'history-empty';
-    li.textContent = historyQuery ? 'No matches.' : 'No history yet.';
+    li.textContent = historyQuery
+      ? 'No matches. Try fewer words, or search by app name (like "code").'
+      : 'Nothing here yet. Dictate a phrase and it will appear here, searchable by text and app.';
     historyList.appendChild(li);
     return;
   }
@@ -126,7 +128,7 @@ if (historyClear) {
 listen('recording-state', (event) => {
   const { recording, processing } = event.payload;
   if (recording) {
-    // Reset the UI only on a fresh start — processing updates during
+    // Reset the UI only on a fresh start; processing updates during
     // streaming must not clear accumulated transcription text.
     if (uiState !== 'recording' && uiState !== 'processing') {
       transcriptionOutput.innerHTML = '';

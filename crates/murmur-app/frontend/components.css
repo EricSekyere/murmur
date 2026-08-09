@@ -377,7 +377,7 @@
 
 .analytics-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
   gap: 8px;
 }
 
@@ -1288,27 +1288,44 @@ footer {
    Per-view component treatments mapped onto the app's real markup so each
    main-window view matches the imported mockup. Additive overrides only; uses
    existing :root tokens. View-id prefixes give specificity without !important.
-   The signature stays the ripple (see style.css) — motion here is minimal and
+   The signature stays the ripple (see style.css); motion here is minimal and
    every animation has a reduced-motion fallback at the end of this block.
    ──────────────────────────────────────────────────────────────────────────── */
 
 /* ── Analytics ──────────────────────────────────────────────────────────────
    Stat cards: big mono number + label, left-aligned like the mockup's .stat-c.
    Top-apps list reads as a bar-chart row (name · track · mono count). */
-#view-analytics .stat-card {
+#view-analytics .stat-card,
+#view-diagnostics .stat-card {
   align-items: flex-start;
   justify-content: flex-start;
-  gap: 5px;
-  padding: 16px 18px;
+  gap: 4px;
+  padding: 12px 14px;
   background: var(--color-surface-solid);
   border-color: var(--color-border);
+}
+#view-diagnostics .stat-card:hover {
+  background: var(--color-surface-solid);
+  border-color: var(--color-border-hover);
+}
+#view-diagnostics .stat-card__value {
+  font-size: 1.35rem;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  color: var(--color-text);
+}
+#view-diagnostics .stat-card__label {
+  font-size: 0.68rem;
+  letter-spacing: 0.06em;
+  text-transform: none;
+  color: var(--color-text-secondary);
 }
 #view-analytics .stat-card:hover {
   background: var(--color-surface-solid);
   border-color: var(--color-border-hover);
 }
 #view-analytics .stat-card__value {
-  font-size: 1.7rem;
+  font-size: 1.45rem;
   font-weight: 600;
   letter-spacing: -0.03em;
   color: var(--color-text);
@@ -1374,6 +1391,10 @@ footer {
 }
 .usage-goal__bar {
   height: 8px;
+}
+/* The goal bar keeps the violet identity (the shared banner fill is warm). */
+.usage-goal__bar .progress-bar__fill {
+  background: linear-gradient(90deg, var(--color-accent), var(--color-accent-light));
 }
 
 /* Words-per-day sparkline (decorative ornament, gradient bars). */
@@ -1518,6 +1539,29 @@ footer {
 #view-settings .settings-label {
   font-family: var(--font-mono);
   letter-spacing: 0.16em;
+}
+
+/* Section headers break the long settings column into scannable chapters. */
+.settings-section-title {
+  margin-top: 26px;
+  padding-top: 18px;
+  border-top: 1px solid var(--color-border);
+  font-size: 0.94rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: var(--color-text);
+}
+.settings-section-title:first-of-type {
+  margin-top: 0;
+  padding-top: 0;
+  border-top: none;
+}
+/* A group directly after a section header should not add its own hairline. */
+#view-settings .settings-section-title + .settings-group,
+.settings-section-title + .settings-group {
+  border-top: none;
+  margin-top: 10px;
+  padding-top: 0;
 }
 
 /* Download banner: shimmering progress fill (maps mockup .banner.dl .prog i).
@@ -1676,7 +1720,7 @@ footer {
 /* ── Design v2: Dictate ──────────────────────────────────────────────────────
    Maps the mockup's Home hub onto the real #view-home markup: a centered column
    around the existing violet ripple mic disc (.mic-wrapper, styled in style.css),
-   a "Hold to speak" display heading, a status/level line, and a model chip — all
+   a "Hold to speak" display heading, a status/level line, and a model chip, all
    purely-decorative siblings inside .hero. The Transcription panel is demoted to
    a quiet, intentional surface so it does not compete with the hub, and the
    History block reads as the mockup's search + rows (time · text · app · count).
@@ -1690,7 +1734,7 @@ footer {
   padding: 14px 0 18px;
 }
 
-/* Display heading — the mockup's "Hold to speak". */
+/* Display heading: the mockup's "Hold to speak". */
 #view-home .hero__heading {
   margin-top: 20px;
   font-size: 1.3rem;
@@ -1732,7 +1776,7 @@ footer {
   50% { height: 13px; }
 }
 
-/* Model chip — mono pill echoing the mockup's "active model …". */
+/* Model chip: mono pill echoing the mockup's "active model …". */
 #view-home .hero__chip {
   display: inline-flex;
   align-items: center;
@@ -1802,7 +1846,7 @@ footer {
   background: var(--color-surface-solid);
 }
 
-/* Destructive "Clear all history" affordance — the mockup's red Clear…. */
+/* Destructive "Clear all history" affordance: the mockup's red Clear…. */
 #view-home #history-clear {
   color: var(--color-error);
   border-color: rgba(251, 113, 133, 0.4);
@@ -1980,35 +2024,61 @@ footer {
 }
 .help-results[hidden] { display: none; }
 
-/* Browsable article index: one button per article, title plus a muted line
-   of its section headings so the page's coverage is visible before opening. */
+/* Browsable article index: articles grouped into a few categories, each a
+   dense multi-column grid of cards (title + a scannable headings line). */
 .help-index {
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+}
+.help-index[hidden] { display: none; }
+
+.help-index__group {
   display: flex;
   flex-direction: column;
   gap: 8px;
 }
-.help-index[hidden] { display: none; }
+
+.help-index__group-title {
+  font-size: 0.65rem;
+  font-weight: 700;
+  font-family: var(--font-mono);
+  color: var(--color-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+}
+
+.help-index__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 8px;
+}
 
 .help-index__item {
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  padding: 12px 16px;
+  align-items: flex-start;
+  gap: 5px;
+  padding: 11px 14px;
   text-align: left;
+  font-family: var(--font-sans);
   background: var(--color-surface);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
   cursor: pointer;
-  transition: border-color var(--transition-fast);
+  transition: border-color var(--transition-fast), background var(--transition-fast);
 }
-.help-index__item:hover { border-color: var(--color-border-hover); }
+.help-index__item:hover {
+  border-color: var(--color-border-hover);
+  background: var(--color-surface-raised);
+}
 .help-index__item:focus-visible {
   outline: 2px solid var(--color-accent);
   outline-offset: 1px;
 }
 
 .help-index__title {
-  font-size: 0.9rem;
+  font-size: 0.86rem;
   font-weight: 600;
   color: var(--color-text);
 }
@@ -2016,7 +2086,11 @@ footer {
 .help-index__headings {
   font-size: 0.72rem;
   line-height: 1.5;
-  color: var(--color-text-muted);
+  color: var(--color-text-secondary);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 
 /* Reading view: one full article rendered from markdown. */
@@ -2045,29 +2119,54 @@ footer {
 }
 
 .help-article__title {
-  font-size: 1.05rem;
-  font-weight: 600;
+  font-size: 1.35rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
   color: var(--color-text);
+  max-width: 70ch;
 }
 
+/* Reading measure: cap line length at roughly 70 characters. */
 .help-article__body {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  font-size: 0.84rem;
-  line-height: 1.6;
+  gap: 10px;
+  max-width: 70ch;
+  font-size: 0.88rem;
+  line-height: 1.7;
   color: var(--color-text-secondary);
+  user-select: text;
 }
+.help-article__body strong { color: var(--color-text); }
+/* Article h1/h2/h3/h4 render as h3..h6 under the page's own h2 header. */
 .help-article__body h3,
-.help-article__body h4,
-.help-article__body h5,
-.help-article__body h6 {
-  margin-top: 8px;
+.help-article__body h4 {
+  margin-top: 18px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--color-border);
+  font-size: 1.02rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--color-text);
+}
+.help-article__body h5 {
+  margin-top: 12px;
   font-size: 0.92rem;
   font-weight: 600;
   color: var(--color-text);
 }
+.help-article__body h6 {
+  margin-top: 10px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--color-text-secondary);
+}
 .help-article__body code {
+  /* Articles teach literal output ("fat arrow" gives =>); mono ligatures
+     would render those as single glyphs and misteach the result. */
+  font-variant-ligatures: none;
   padding: 1px 5px;
   font-family: var(--font-mono);
   font-size: 0.9em;
@@ -2078,9 +2177,11 @@ footer {
 .help-article__body pre {
   padding: 12px 14px;
   overflow-x: auto;
-  background: var(--color-surface);
+  background: var(--color-bg);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
+  font-size: 0.8rem;
+  line-height: 1.6;
 }
 .help-article__body pre code {
   padding: 0;
@@ -2092,6 +2193,138 @@ footer {
   display: flex;
   flex-direction: column;
   gap: 4px;
+}
+
+/* Lead: the article's opening summary, set brighter and slightly larger so a
+   reader can tell in seconds whether they are on the right page. */
+.help-article__body .help-lead {
+  font-size: 0.92rem;
+  line-height: 1.65;
+  color: var(--color-text);
+}
+
+/* Say-this-get-that tables: spoken phrase in bone, result in mono. */
+.help-table-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+}
+.help-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.82rem;
+}
+.help-table th {
+  padding: 8px 16px;
+  text-align: left;
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+  border-bottom: 1px solid var(--color-border);
+}
+.help-table td {
+  padding: 8px 16px;
+  vertical-align: top;
+  color: var(--color-text-secondary);
+  border-bottom: 1px solid var(--color-border);
+}
+.help-table tbody tr:last-child td { border-bottom: none; }
+.help-table tbody tr:hover td { background: var(--color-accent-dim); }
+.help-table td:first-child { color: var(--color-text); }
+.help-table td code {
+  background: var(--color-surface-raised);
+  white-space: pre;
+}
+
+/* Keyboard chips: each key of a chord rendered as a physical keycap. */
+.help-kbd { white-space: nowrap; }
+.help-kbd kbd {
+  display: inline-block;
+  padding: 1px 7px;
+  font-family: var(--font-mono);
+  font-size: 0.78em;
+  line-height: 1.5;
+  color: var(--color-text);
+  background: var(--color-surface-raised);
+  border: 1px solid var(--color-border-hover);
+  border-bottom-width: 2px;
+  border-radius: var(--radius-sm);
+}
+.help-kbd__sep {
+  margin: 0 3px;
+  color: var(--color-text-muted);
+  font-size: 0.8em;
+}
+
+/* Callouts: tips, notes, warnings, and privacy asides pulled out of the prose
+   with a signal-coloured spine. */
+.help-callout {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px 16px;
+  border-left: 2px solid var(--color-accent);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  background: var(--color-accent-dim);
+}
+.help-callout__label {
+  font-size: 0.66rem;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--color-accent-light);
+}
+.help-callout__body {
+  font-size: 0.82rem;
+  line-height: 1.6;
+  color: var(--color-text-secondary);
+}
+.help-callout--warning {
+  border-left-color: var(--color-processing);
+  background: var(--color-processing-dim);
+}
+.help-callout--warning .help-callout__label { color: var(--color-processing); }
+.help-callout--privacy {
+  border-left-color: var(--color-done);
+  background: var(--color-done-dim);
+}
+.help-callout--privacy .help-callout__label { color: var(--color-done); }
+
+/* Numbered steps: a violet counter chip per step instead of a plain list. */
+.help-steps {
+  list-style: none;
+  counter-reset: help-step;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-left: 2px;
+}
+.help-steps li {
+  counter-increment: help-step;
+  position: relative;
+  padding-left: 32px;
+  min-height: 22px;
+}
+.help-steps li::before {
+  content: counter(help-step);
+  position: absolute;
+  left: 0;
+  top: 1px;
+  width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: var(--color-accent-light);
+  background: var(--color-accent-dim);
+  border: 1px solid var(--color-accent-glow);
+  border-radius: 50%;
 }
 
 .help-card__open {

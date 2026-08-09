@@ -1,6 +1,6 @@
 // Dashboard shell: sidebar navigation over the existing sections.
 // Loaded after main.js. Reuses main.js's collapsible toggle handlers
-// (which also lazy-load data) by clicking them programmatically — the
+// (which also lazy-load data) by clicking them programmatically, since the
 // trigger buttons themselves are hidden by CSS in the dashboard layout.
 
 (function () {

@@ -523,7 +523,7 @@ saveHistoryToggle.addEventListener('change', async () => {
   const enabled = saveHistoryToggle.checked;
   try {
     await invoke('update_settings', { save_history: enabled });
-    showToast(enabled ? 'History on' : 'History off — nothing stored', 'success');
+    showToast(enabled ? 'History on' : 'History off, nothing stored', 'success');
   } catch (err) {
     saveHistoryToggle.checked = !enabled;
     showToast(`Failed: ${err}`, 'error');
@@ -534,7 +534,7 @@ cleanSpeechToggle.addEventListener('change', async () => {
   const enabled = cleanSpeechToggle.checked;
   try {
     await invoke('update_settings', { clean_speech: enabled });
-    showToast(enabled ? 'Speech cleanup on' : 'Verbatim — no cleanup', 'success');
+    showToast(enabled ? 'Speech cleanup on' : 'Verbatim, no cleanup', 'success');
   } catch (err) {
     cleanSpeechToggle.checked = !enabled;
     showToast(`Failed: ${err}`, 'error');
@@ -579,7 +579,7 @@ micWarmStartToggle.addEventListener('change', async () => {
   try {
     await invoke('update_settings', { mic_warm_start: enabled });
     showToast(enabled
-      ? 'Instant mic start on — mic stays open, audio discarded until you dictate'
+      ? 'Instant mic start on: mic stays open, audio discarded until you dictate'
       : 'Instant mic start off', 'success');
   } catch (err) {
     micWarmStartToggle.checked = !enabled;
@@ -591,7 +591,7 @@ contextInjectionToggle.addEventListener('change', async () => {
   const enabled = contextInjectionToggle.checked;
   try {
     await invoke('update_settings', { context_injection_enabled: enabled });
-    showToast(enabled ? 'Context-aware rewrites on — stays on this device' : 'Context-aware rewrites off', 'success');
+    showToast(enabled ? 'Context-aware rewrites on, stays on this device' : 'Context-aware rewrites off', 'success');
   } catch (err) {
     contextInjectionToggle.checked = !enabled;
     showToast(`Failed: ${err}`, 'error');

@@ -48,7 +48,7 @@ body { display:flex; align-items:flex-start; justify-content:flex-start; padding
 }
 .pill:active { cursor:grabbing; }
 
-/* ─── Orb (the ripple origin) — also the click target ────────────────────── */
+/* ─── Orb (the ripple origin), also the click target ────────────────────── */
 .orb {
   position:relative; width:24px; height:24px; flex:0 0 auto;
   display:grid; place-items:center; border:none; background:none; padding:0;
@@ -133,7 +133,7 @@ body { display:flex; align-items:flex-start; justify-content:flex-start; padding
 .s-error .label { color:var(--err); }
 .s-error.pill, .s-error .pill { border-color:color-mix(in oklch, var(--err), transparent 55%); }
 
-/* Locate beacon — a transient overlay on top of whatever state. */
+/* Locate beacon: a transient overlay on top of whatever state. */
 .is-locating .core { background:var(--signal-1); }
 .is-locating .ring { border-color:var(--signal-2); border-width:2px; animation:locate 1.3s var(--eo) infinite; }
 .is-locating .ring.r2 { animation-delay:.32s; }

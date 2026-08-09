@@ -265,7 +265,7 @@ listen('recording-state', (event) => {
 
 listen('hotkey-error', (event) => {
   const msg = event.payload?.error || '';
-  // "No speech" is an expected outcome, not an error — go idle quietly.
+  // "No speech" is an expected outcome, not an error, so go idle quietly.
   if (msg.includes('No speech')) {
     applyState('idle', 'murmur');
     return;
@@ -281,7 +281,7 @@ listen('streaming-done', () => {
   applyState('idle', 'murmur');
 });
 
-// "Find pill" from the dashboard — flash the locate beacon so the user can spot
+// "Find pill" from the dashboard: flash the locate beacon so the user can spot
 // the widget. A transient overlay class on top of the current state.
 listen('locate-pill', () => {
   widget.classList.remove('is-locating');
@@ -309,6 +309,6 @@ listen('transcription-error', (event) => {
       label.classList.add('mono');
     }
   } catch (_) {
-    // Backend not ready yet — stay idle; events will correct us.
+    // Backend not ready yet, so stay idle; events will correct us.
   }
 })();
