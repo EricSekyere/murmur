@@ -12,8 +12,10 @@
 //! 2. read/diarize failure — same function, transcript-only record kept;
 //! 3. a mid-meeting write failure — [`append`] deletes it immediately and the
 //!    meeting continues transcript-only;
-//! 4. worker panic — the spawn wrapper sweeps the meetings dir;
-//! 5. app crash — the startup sweep in `lib.rs::setup_app`.
+//! 4. app quit — [`discard`] deletes it before the final flush, so the wait
+//!    for the last transcript chunk never keeps audio on disk;
+//! 5. worker panic — the spawn wrapper sweeps the meetings dir;
+//! 6. app crash — the startup sweep in `lib.rs::setup_app`.
 //!
 //! When diarization is not possible, no spool is ever written (Phase 1
 //! behavior exactly).
@@ -55,6 +57,16 @@ pub(super) fn append(slot: &mut Option<SpoolWriter>, samples: &[f32]) {
         if let Some(writer) = slot.take() {
             writer.delete();
         }
+    }
+}
+
+/// Drop the spooled audio without diarizing: the quit path's way out of an
+/// inference that can run for minutes. Called before the final flush so the
+/// raw audio is gone whatever happens to the rest of the shutdown.
+pub(super) fn discard(slot: Option<SpoolWriter>) {
+    if let Some(writer) = slot {
+        writer.delete();
+        tracing::info!("Skipping meeting speaker labels: the app is quitting");
     }
 }
 
