@@ -262,18 +262,22 @@ pub fn run() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Stop and join an active meeting on the way out, so its final transcript and
-/// speaker labels are saved and — privacy-critical — its raw-audio spool is
-/// deleted. Quit is a deliberate user action, not the crash case the startup
-/// sweep exists for. The sweep afterwards is the backstop for a worker that
-/// never reached its own cleanup.
+/// How long quit waits for the meeting worker's last transcript chunk. Long
+/// enough for one chunk's inference on a slow CPU, short enough that quit
+/// still feels like quit; earlier chunks are already saved regardless.
+const EXIT_MEETING_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// Stop an active meeting on the way out, so its final transcript is saved and
+/// — privacy-critical — its raw-audio spool is deleted. Quit is a deliberate
+/// user action, not the crash case the startup sweep exists for. The sweep
+/// afterwards is the backstop for a worker that never reached its own cleanup.
 ///
-/// This blocks, and not briefly: `finish_meeting` diarizes the whole spooled
-/// meeting, not just the pending chunk, so quitting after a long meeting can
-/// sit here for minutes with no timeout and no window to show progress. That
-/// is accepted only because the alternative is leaving raw meeting audio on
-/// disk. Bounding it (or skipping diarization on this path, which
-/// `diarize_into` already supports) is the open follow-up.
+/// Speaker labels are deliberately sacrificed here: whole-meeting diarization
+/// runs for minutes on CPU, and the main thread is blocked with no window to
+/// show progress. The worker instead deletes the spool up front and saves
+/// transcript only, and this waits at most [`EXIT_MEETING_TIMEOUT`] for the
+/// final chunk. Every outcome (finished, timed out, worker panic) leaves no
+/// audio on disk and keeps the transcript saved through the last chunk.
 fn shutdown_meeting(app: &tauri::AppHandle) {
     let handle = app.try_state::<AppState>().and_then(|state| {
         state
@@ -283,8 +287,13 @@ fn shutdown_meeting(app: &tauri::AppHandle) {
             .take()
     });
     if let Some(handle) = handle {
-        tracing::info!("Stopping the active meeting before exit");
-        handle.stop_and_join();
+        tracing::info!("Stopping the active meeting before exit; skipping speaker labels");
+        if !handle.shutdown_for_exit(EXIT_MEETING_TIMEOUT) {
+            tracing::warn!(
+                timeout_secs = EXIT_MEETING_TIMEOUT.as_secs(),
+                "Meeting worker did not finish in time; quitting anyway"
+            );
+        }
     }
     if let Ok(dir) = murmur_core::meeting::record::MeetingRecord::default_dir() {
         let removed = murmur_core::meeting::spool::sweep(&dir);
