@@ -99,6 +99,10 @@ pub fn articles() -> Vec<(&'static str, &'static str)> {
         ("Meetings", include_str!("articles/meetings.md")),
         ("Diagnostics", include_str!("articles/diagnostics.md")),
         (
+            "Coding agents (Claude and Cursor)",
+            include_str!("articles/coding-agents.md"),
+        ),
+        (
             "Integrations and updates",
             include_str!("articles/integrations-updates.md"),
         ),
