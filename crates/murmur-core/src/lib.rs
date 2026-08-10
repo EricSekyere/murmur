@@ -35,6 +35,7 @@ pub mod integrity;
 pub mod llm;
 pub mod meeting;
 pub mod output;
+pub mod snippets;
 pub mod stt;
 pub mod vocab_correct;
 pub mod voice_commands;

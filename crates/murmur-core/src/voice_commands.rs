@@ -74,9 +74,15 @@ pub fn parse(phrase: &str) -> VoiceCommand {
 /// verbatim, but only when it would otherwise act (a command or snippet), so
 /// prose that merely begins with "literally" is untouched.
 pub fn literal_escape(phrase: &str, snippets: &[Snippet]) -> Option<String> {
+    literal_escape_with(phrase, |rest| match_snippet(rest, snippets).is_some())
+}
+
+/// [`literal_escape`] with a caller-supplied snippet predicate, so compiled
+/// (parameterized) snippet sets can participate without this module knowing
+/// about them.
+pub fn literal_escape_with(phrase: &str, would_expand: impl Fn(&str) -> bool) -> Option<String> {
     let rest = strip_literal_prefix(phrase.trim_start())?.trim_start();
-    let would_act =
-        builtin_command(&normalize(rest)).is_some() || match_snippet(rest, snippets).is_some();
+    let would_act = builtin_command(&normalize(rest)).is_some() || would_expand(rest);
     would_act.then(|| rest.to_string())
 }
 

@@ -553,10 +553,13 @@ fn handle_phrase(
             return;
         }
         // Literal escape ("literally <command>"): deliver the words verbatim.
-        let literal = {
-            let settings = state.settings.lock().unwrap_or_else(|e| e.into_inner());
-            voice_commands::literal_escape(&text, &settings.snippets)
-        };
+        let literal = voice_commands::literal_escape_with(&text, |rest| {
+            state
+                .snippets
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .matches(rest)
+        });
         if let Some(literal_text) = literal {
             deliver_text(
                 app,
@@ -589,13 +592,14 @@ fn handle_phrase(
                     } else {
                         // A user snippet expands to its replacement text; otherwise
                         // the spoken phrase is delivered verbatim.
-                        let (expansion, placeholders) = {
+                        let expansion = state
+                            .snippets
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner())
+                            .expand(&text);
+                        let placeholders = {
                             let settings = state.settings.lock().unwrap_or_else(|e| e.into_inner());
-                            (
-                                voice_commands::match_snippet(&text, &settings.snippets)
-                                    .map(str::to_string),
-                                settings.clipboard_placeholders.clone(),
-                            )
+                            settings.clipboard_placeholders.clone()
                         };
                         let delivered = expansion.as_deref().unwrap_or(text.as_str());
                         // Spoken clipboard placeholder: splice the clipboard text

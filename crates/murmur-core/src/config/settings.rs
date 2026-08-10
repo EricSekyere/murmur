@@ -419,7 +419,8 @@ pub const MAX_CLIPBOARD_PLACEHOLDERS: usize = 16;
 pub const MAX_PATH_ALIASES: usize = 100;
 const MAX_VOCAB_ENTRY_CHARS: usize = 100;
 const MAX_SNIPPET_TRIGGER_CHARS: usize = 100;
-const MAX_SNIPPET_EXPANSION_CHARS: usize = 2_000;
+// Shared with the post-substitution clamp on parameterized snippet output.
+const MAX_SNIPPET_EXPANSION_CHARS: usize = crate::snippets::MAX_EXPANSION_CHARS;
 const MAX_APP_PATTERN_CHARS: usize = 100;
 const MAX_REWRITE_PROMPT_CHARS: usize = 500;
 const MAX_CLIPBOARD_PLACEHOLDER_CHARS: usize = 100;
