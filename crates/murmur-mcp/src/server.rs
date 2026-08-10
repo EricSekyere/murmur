@@ -225,7 +225,7 @@ impl MurmurMcp {
         })
         .await
         .unwrap_or(None);
-        let trigger_path = write_trigger(req.prompt).await?;
+        let (trigger_path, requested_ms) = write_trigger(req.prompt).await?;
         tracing::debug!(waited_secs, ?baseline_ms, "dictation requested, waiting");
         let load = || {
             let path = path.clone();
@@ -240,6 +240,18 @@ impl MurmurMcp {
                 tokio::time::sleep(wait::POLL_INTERVAL)
             })
             .await;
+        // Either way this request is over, so retire its trigger. An answer can
+        // arrive without the trigger being consumed (the user dictated by
+        // hotkey first, or the app was not running yet), and a trigger left
+        // armed stays valid for its whole freshness window, so the app would
+        // open the microphone unprompted minutes later. Only our own trigger is
+        // cleared: the path is shared, and a blind delete would cancel a
+        // concurrent request from another client.
+        let cleanup_path = trigger_path.clone();
+        let _ = tokio::task::spawn_blocking(move || {
+            dictation_request::clear_if_stamped(&cleanup_path, requested_ms)
+        })
+        .await;
         let outcome = match found {
             Some(entry) => {
                 tracing::debug!(timestamp_ms = entry.timestamp_ms, "dictation received");
@@ -249,18 +261,11 @@ impl MurmurMcp {
                     app: entry.app,
                 }
             }
-            None => {
-                // The app never consumed the trigger (not running) or the user
-                // stayed silent; either way it must not fire on a later start.
-                let _ =
-                    tokio::task::spawn_blocking(move || dictation_request::clear(&trigger_path))
-                        .await;
-                WaitOutcome::TimedOut {
-                    waited_secs,
-                    message: "Murmur did not capture anything. Make sure the Murmur app is \
+            None => WaitOutcome::TimedOut {
+                waited_secs,
+                message: "Murmur did not capture anything. Make sure the Murmur app is \
                               running and the user spoke after the prompt.",
-                }
-            }
+            },
         };
         outcome_json(&outcome)
     }
@@ -319,11 +324,12 @@ fn history_json(query: &str, limit: Option<usize>) -> Result<CallToolResult, Mcp
 /// Write the dictation trigger file the running app polls for, on the
 /// blocking pool. Returns the trigger path so a timed-out request can clear
 /// its own trigger.
-async fn write_trigger(prompt: Option<String>) -> Result<std::path::PathBuf, McpError> {
+async fn write_trigger(prompt: Option<String>) -> Result<(std::path::PathBuf, u64), McpError> {
     let trigger_path = dictation_request::default_path()
         .map_err(|e| McpError::internal_error(format!("trigger path: {e}"), None))?;
+    let requested_ms = now_epoch_ms();
     let trigger = DictationRequest {
-        requested_ms: now_epoch_ms(),
+        requested_ms,
         prompt,
     };
     let write_path = trigger_path.clone();
@@ -331,7 +337,7 @@ async fn write_trigger(prompt: Option<String>) -> Result<std::path::PathBuf, Mcp
         .await
         .map_err(|e| McpError::internal_error(format!("trigger write task: {e}"), None))?
         .map_err(|e| McpError::internal_error(format!("trigger write: {e}"), None))?;
-    Ok(trigger_path)
+    Ok((trigger_path, requested_ms))
 }
 
 /// Unix epoch milliseconds, the same clock history entries are stamped with.

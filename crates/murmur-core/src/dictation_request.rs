@@ -63,6 +63,24 @@ pub fn take(path: &Path) -> Option<DictationRequest> {
     }
 }
 
+/// Delete the trigger only if it is still the one stamped `requested_ms`.
+///
+/// A request must clean up after itself without disarming a different
+/// request: the trigger path is shared, so two clients (or two editors) can
+/// each have one outstanding, and a blind delete would cancel the other's.
+/// A trigger already consumed by the app is gone, which is a no-op here.
+pub fn clear_if_stamped(path: &Path, requested_ms: u64) {
+    let Ok(bytes) = std::fs::read(path) else {
+        return;
+    };
+    match serde_json::from_slice::<DictationRequest>(&bytes) {
+        Ok(req) if req.requested_ms == requested_ms => clear(path),
+        // Someone else's trigger, or an unreadable one that take() will
+        // consume and discard on its next poll. Either way, not ours to delete.
+        _ => {}
+    }
+}
+
 /// Best-effort delete for startup cleanup and abandoned requests. A missing
 /// file is the normal case, not an error.
 pub fn clear(path: &Path) {
@@ -139,6 +157,41 @@ mod tests {
     fn clear_ignores_a_missing_file() {
         let dir = tempfile::tempdir().expect("tempdir");
         clear(&dir.path().join("absent.json"));
+    }
+
+    #[test]
+    fn clear_if_stamped_only_removes_its_own_trigger() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("dictation-request.json");
+        write(
+            &path,
+            &DictationRequest {
+                requested_ms: 2_000,
+                prompt: None,
+            },
+        )
+        .expect("write");
+
+        // A different request's cleanup must not disarm this one: the trigger
+        // path is shared, so two clients can each have one outstanding.
+        clear_if_stamped(&path, 1_000);
+        assert!(path.exists(), "another request's trigger must survive");
+
+        clear_if_stamped(&path, 2_000);
+        assert!(!path.exists(), "its own trigger must be retired");
+    }
+
+    #[test]
+    fn clear_if_stamped_tolerates_missing_and_unreadable_triggers() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("dictation-request.json");
+        // Already consumed by the app: nothing to do, and no panic.
+        clear_if_stamped(&path, 1_000);
+
+        // Non-UTF-8 bytes are not ours to judge; take() consumes them.
+        std::fs::write(&path, [0xFF, 0x00]).expect("write");
+        clear_if_stamped(&path, 1_000);
+        assert!(path.exists());
     }
 
     #[test]
