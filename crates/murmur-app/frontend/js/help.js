@@ -77,6 +77,7 @@
     'Meetings': 'Workflows',
     'Per-app profiles': 'Workflows',
     'History and analytics': 'Workflows',
+    'Coding agents (Claude and Cursor)': 'Workflows',
     'Integrations and updates': 'Workflows',
     'Configuration reference': 'Reference and troubleshooting',
     'Diagnostics': 'Reference and troubleshooting',
