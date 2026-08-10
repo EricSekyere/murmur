@@ -90,6 +90,13 @@ pub fn run() -> anyhow::Result<()> {
     let hotkey = settings.hotkey.clone();
     let show_widget_on_start = settings.show_widget;
 
+    // Per-snippet error tolerance: a bad snippet is skipped with a warning
+    // and never blocks startup.
+    let (compiled_snippets, snippet_warnings) = murmur_core::snippets::compile(&settings.snippets);
+    for warning in &snippet_warnings {
+        tracing::warn!(%warning, "snippet compile warning");
+    }
+
     let history_path = murmur_core::history::History::default_path()
         .context("Failed to determine history path")?;
     let history = murmur_core::history::History::load(&history_path);
@@ -168,6 +175,7 @@ pub fn run() -> anyhow::Result<()> {
             session_generation: std::sync::atomic::AtomicU64::new(0),
             streaming_worker: Mutex::new(None),
             settings: Mutex::new(settings),
+            snippets: Mutex::new(compiled_snippets),
             last_toggle: Mutex::new(Instant::now() - Duration::from_secs(10)),
             session_prev_text: Mutex::new(String::new()),
             last_delivered_len: Mutex::new(0),

@@ -539,8 +539,10 @@ pub(crate) fn update_settings(
             })
             .filter(|s| !s.trigger.is_empty() && !s.expansion.is_empty())
             .collect();
-        // Warn about snippets that can never fire (shadowed by a built-in, or duplicate).
-        let warnings = murmur_core::voice_commands::snippet_warnings(&settings.snippets);
+        // Recompile the matcher set; a snippet that can never fire (shadowed
+        // by a built-in, duplicate, or malformed slots) only warns.
+        let (compiled, warnings) = murmur_core::snippets::compile(&settings.snippets);
+        *state.snippets.lock().unwrap_or_else(|e| e.into_inner()) = compiled;
         emit_settings_warnings(&app, warnings);
     }
     if let Some(lang) = language {
