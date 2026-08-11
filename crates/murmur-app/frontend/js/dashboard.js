@@ -49,6 +49,16 @@
     item.addEventListener('click', () => activateView(item.dataset.view));
   }
 
+  // Backend-driven navigation (e.g. the tray's Settings item).
+  const unlistenNavigate = listen('navigate-view', (event) => {
+    const view = event.payload && event.payload.view;
+    if (view && viewEls[view]) activateView(view);
+  });
+
+  window.addEventListener('beforeunload', () => {
+    unlistenNavigate.then((off) => off()).catch(() => {});
+  });
+
   // Initial state: home view with history expanded.
   activateView('home');
 })();
