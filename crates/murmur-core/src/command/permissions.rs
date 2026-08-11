@@ -61,10 +61,15 @@ pub struct PermissionStore {
 }
 
 impl PermissionStore {
-    /// The default store file path: `<config_dir>/murmur/command_permissions.toml`.
+    /// The default store file path: `<config base>/murmur/command_permissions.toml`.
     pub fn path() -> Result<PathBuf, CommandError> {
-        let dir = dirs::config_dir().ok_or(CommandError::ConfigDirUnavailable)?;
-        Ok(dir.join("murmur").join(PERMISSIONS_FILE))
+        let base = crate::fsutil::config_base_dir().ok_or(CommandError::ConfigDirUnavailable)?;
+        Ok(Self::path_in(&base))
+    }
+
+    /// The store file path under an explicit config base directory.
+    pub fn path_in(config_base: &std::path::Path) -> PathBuf {
+        config_base.join("murmur").join(PERMISSIONS_FILE)
     }
 
     /// The saved permission for a tool name, defaulting to `Ask` when unset.

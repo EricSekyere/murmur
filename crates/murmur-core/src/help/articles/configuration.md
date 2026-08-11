@@ -108,6 +108,21 @@ API key is never stored in the file; it is read from the
 > **Privacy:** With no `[cloud]` table, or `enabled = false`, Murmur makes
 > no network calls.
 
+## Relocating the config directory
+
+For testing, portable setups, or scripted runs, two environment variables
+move where Murmur looks for its files. Most users never need these.
+
+| Variable | What it overrides |
+| --- | --- |
+| `MURMUR_CONFIG_DIR` | The system config base; Murmur then uses `<value>/murmur` for its config, history, and related files |
+| `MURMUR_HOME_DIR` | The home directory used when writing editor MCP configs such as `~/.cursor/mcp.json` |
+
+> **Note:** Only absolute paths are honored; an empty or relative value is
+> ignored and the platform default is used. If the override points somewhere
+> unwritable, Murmur still starts and simply runs with defaults it cannot
+> persist.
+
 ## Settings only in the file
 
 Most settings appear in the Settings view, but a couple are file-only:
