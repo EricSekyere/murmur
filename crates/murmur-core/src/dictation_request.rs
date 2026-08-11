@@ -23,12 +23,16 @@ pub struct DictationRequest {
     pub prompt: Option<String>,
 }
 
-/// Default trigger file path (`<config dir>/murmur/dictation-request.json`).
+/// Default trigger file path (`<config base>/murmur/dictation-request.json`).
 pub fn default_path() -> Result<PathBuf> {
-    let dir = dirs::config_dir()
-        .ok_or_else(|| anyhow::anyhow!("Could not determine config directory"))?
-        .join("murmur");
-    Ok(dir.join("dictation-request.json"))
+    let base = crate::fsutil::config_base_dir()
+        .ok_or_else(|| anyhow::anyhow!("Could not determine config directory"))?;
+    Ok(default_path_in(&base))
+}
+
+/// The trigger file path under an explicit config base directory.
+pub fn default_path_in(config_base: &Path) -> PathBuf {
+    config_base.join("murmur").join("dictation-request.json")
 }
 
 /// Write the trigger atomically (tempfile + rename), so the polling app can

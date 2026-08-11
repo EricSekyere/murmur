@@ -64,12 +64,16 @@ pub struct Insights {
 }
 
 impl Insights {
-    /// Default aggregate file path (`<config dir>/murmur/insights.json`).
+    /// Default aggregate file path (`<config base>/murmur/insights.json`).
     pub fn default_path() -> Result<PathBuf> {
-        let dir = dirs::config_dir()
-            .ok_or_else(|| anyhow::anyhow!("Could not determine config directory"))?
-            .join("murmur");
-        Ok(dir.join("insights.json"))
+        let base = crate::fsutil::config_base_dir()
+            .ok_or_else(|| anyhow::anyhow!("Could not determine config directory"))?;
+        Ok(Self::default_path_in(&base))
+    }
+
+    /// The insights file path under an explicit config base directory.
+    pub fn default_path_in(config_base: &Path) -> PathBuf {
+        config_base.join("murmur").join("insights.json")
     }
 
     /// Load from disk; on a read/parse error fall back to empty. A file that

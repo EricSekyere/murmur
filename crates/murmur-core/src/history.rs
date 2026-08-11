@@ -71,12 +71,16 @@ pub struct History {
 }
 
 impl History {
-    /// Default history file path (`<config dir>/murmur/history.json`).
+    /// Default history file path (`<config base>/murmur/history.json`).
     pub fn default_path() -> Result<PathBuf> {
-        let dir = dirs::config_dir()
-            .ok_or_else(|| anyhow::anyhow!("Could not determine config directory"))?
-            .join("murmur");
-        Ok(dir.join("history.json"))
+        let base = crate::fsutil::config_base_dir()
+            .ok_or_else(|| anyhow::anyhow!("Could not determine config directory"))?;
+        Ok(Self::default_path_in(&base))
+    }
+
+    /// The history file path under an explicit config base directory.
+    pub fn default_path_in(config_base: &std::path::Path) -> PathBuf {
+        config_base.join("murmur").join("history.json")
     }
 
     /// Load from disk; on a read/parse error fall back to empty. A file that
