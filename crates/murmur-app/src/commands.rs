@@ -236,7 +236,10 @@ pub(crate) fn get_history(
 /// Clear all stored history and persist the empty log. The per-day insights
 /// aggregate is derived from those transcripts, so it is forgotten too.
 #[tauri::command]
-pub(crate) fn clear_history(state: State<'_, AppState>) -> Result<(), String> {
+pub(crate) fn clear_history(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
     {
         let mut history = state.history.lock().unwrap_or_else(|e| e.into_inner());
         history.clear();
@@ -245,6 +248,8 @@ pub(crate) fn clear_history(state: State<'_, AppState>) -> Result<(), String> {
             .map_err(|e| e.to_string())?;
     }
     purge_insights(&state);
+    // The tray's Copy Last Transcript item has nothing left to copy.
+    crate::tray::update_menu(&app);
     Ok(())
 }
 

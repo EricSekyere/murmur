@@ -28,6 +28,7 @@ mod session;
 mod sound;
 mod state;
 mod transcribe;
+mod tray;
 mod updater;
 mod watcher;
 
@@ -38,12 +39,7 @@ use anyhow::Context;
 use murmur_core::config::Settings;
 use murmur_core::output::OutputMode;
 use murmur_core::stt::engine::SttEngine;
-use tauri::{
-    Emitter, Manager,
-    image::Image,
-    menu::{Menu, MenuItem},
-    tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-};
+use tauri::{Emitter, Manager};
 use tauri_plugin_global_shortcut::GlobalShortcutExt;
 
 use state::AppState;
@@ -403,7 +399,7 @@ fn setup_app(
     #[cfg(windows)]
     focus::spawn_foreground_tracker(app.handle().clone());
 
-    build_tray(app)?;
+    tray::build(app)?;
     register_hotkey(app, hotkey);
     command_mode::register_hotkey(app);
     configure_widget(app, show_widget_on_start);
@@ -585,50 +581,6 @@ pub(crate) fn spawn_help_index(app: tauri::AppHandle) {
         let _ = app.emit("help-ready", serde_json::json!({ "ready": true }));
         tracing::info!("Help search ready");
     });
-}
-
-fn build_tray(app: &mut tauri::App) -> tauri::Result<()> {
-    let show_i = MenuItem::with_id(app, "show", "Show", true, None::<&str>)?;
-    let widget_i = MenuItem::with_id(app, "toggle_widget", "Toggle Widget", true, None::<&str>)?;
-    let quit_i = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&show_i, &widget_i, &quit_i])?;
-
-    let icon = app.default_window_icon().cloned().unwrap_or_else(|| {
-        tracing::warn!("No default window icon found, using fallback");
-        Image::new_owned(vec![0, 0, 0, 0], 1, 1)
-    });
-
-    TrayIconBuilder::new()
-        .icon(icon)
-        .menu(&menu)
-        .show_menu_on_left_click(false)
-        .tooltip("Murmur - Voice to Text")
-        .on_menu_event(|app, event| match event.id.as_ref() {
-            "quit" => app.exit(0),
-            "show" => show_main_window(app),
-            "toggle_widget" => {
-                if let Some(widget) = app.get_webview_window("widget") {
-                    let _ = if widget.is_visible().unwrap_or(false) {
-                        widget.hide()
-                    } else {
-                        widget.show()
-                    };
-                }
-            }
-            _ => {}
-        })
-        .on_tray_icon_event(|tray, event| {
-            if let TrayIconEvent::Click {
-                button: MouseButton::Left,
-                button_state: MouseButtonState::Up,
-                ..
-            } = event
-            {
-                show_main_window(tray.app_handle());
-            }
-        })
-        .build(app)?;
-    Ok(())
 }
 
 fn show_main_window(app: &tauri::AppHandle) {
