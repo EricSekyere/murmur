@@ -48,13 +48,16 @@ impl ClientKind {
     }
 
     fn config_path(self) -> Option<PathBuf> {
+        // Resolved via murmur-core's seam so MURMUR_HOME_DIR and
+        // MURMUR_CONFIG_DIR redirect these writes too (the config base is
+        // %APPDATA% on Windows, ~/Library/Application Support on macOS, and
+        // ~/.config on Linux by default).
         match self {
-            ClientKind::Cursor => dirs::home_dir().map(|h| h.join(".cursor").join("mcp.json")),
-            // config_dir is %APPDATA% (Windows), ~/Library/Application Support
-            // (macOS), and ~/.config (Linux) — the right base on each OS.
-            ClientKind::ClaudeDesktop => {
-                dirs::config_dir().map(|c| c.join("Claude").join("claude_desktop_config.json"))
+            ClientKind::Cursor => {
+                murmur_core::fsutil::home_dir().map(|h| h.join(".cursor").join("mcp.json"))
             }
+            ClientKind::ClaudeDesktop => murmur_core::fsutil::config_base_dir()
+                .map(|c| c.join("Claude").join("claude_desktop_config.json")),
         }
     }
 }
@@ -106,10 +109,19 @@ fn write_client(client: ClientKind, exe: &str) -> Result<String> {
     let path = client
         .config_path()
         .ok_or_else(|| anyhow!("could not resolve a config path for {}", client.label()))?;
-    let merged = upsert_server(read_json(&path)?, SERVER_NAME, exe)
-        .with_context(|| format!("{} has an unexpected shape", path.display()))?;
-    write_atomic(&path, &merged).with_context(|| format!("writing {}", path.display()))?;
+    install_at(&path, exe)?;
     Ok(path.display().to_string())
+}
+
+/// Merge the `murmur` server entry into the MCP client config at an explicit
+/// `path`. Foreign servers and keys are preserved, the write is atomic, and a
+/// file that is not valid JSON is left byte-for-byte untouched. The seam
+/// [`install`] goes through, exposed so tests can exercise the merge against
+/// fixture files.
+pub fn install_at(path: &Path, exe: &str) -> Result<()> {
+    let merged = upsert_server(read_json(path)?, SERVER_NAME, exe)
+        .with_context(|| format!("{} has an unexpected shape", path.display()))?;
+    write_atomic(path, &merged).with_context(|| format!("writing {}", path.display()))
 }
 
 /// A client is "detected" if its config file or its parent dir already exists,

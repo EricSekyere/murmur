@@ -56,13 +56,16 @@ impl MeetingRecord {
         }
     }
 
-    /// Default meetings directory (`<config dir>/murmur/meetings`).
+    /// Default meetings directory (`<config base>/murmur/meetings`).
     pub fn default_dir() -> Result<PathBuf> {
-        let dir = dirs::config_dir()
-            .ok_or_else(|| anyhow::anyhow!("Could not determine config directory"))?
-            .join("murmur")
-            .join("meetings");
-        Ok(dir)
+        let base = crate::fsutil::config_base_dir()
+            .ok_or_else(|| anyhow::anyhow!("Could not determine config directory"))?;
+        Ok(Self::default_dir_in(&base))
+    }
+
+    /// The meetings directory under an explicit config base directory.
+    pub fn default_dir_in(config_base: &Path) -> PathBuf {
+        config_base.join("murmur").join("meetings")
     }
 
     /// The record file path for meeting `id` inside `dir`.

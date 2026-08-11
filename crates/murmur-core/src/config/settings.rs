@@ -5,7 +5,7 @@ use crate::stt::models::SttModel;
 use crate::voice_commands::Snippet;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// Per-application override applied for the duration of a session when the
 /// foreground app matches. Unset fields fall back to the global settings.
@@ -562,24 +562,39 @@ impl Default for Settings {
 }
 
 impl Settings {
-    /// Get the default config file path (~/.murmur/config.toml).
+    /// Get the default config file path (`<config base>/murmur/config.toml`).
     pub fn default_path() -> Result<PathBuf> {
-        let dir = dirs::config_dir()
-            .ok_or_else(|| anyhow::anyhow!("Could not determine config directory"))?
-            .join("murmur");
-        Ok(dir.join("config.toml"))
+        let base = crate::fsutil::config_base_dir()
+            .ok_or_else(|| anyhow::anyhow!("Could not determine config directory"))?;
+        Ok(Self::default_path_in(&base))
     }
 
-    /// Migrate config directory from legacy "voitex" name if it exists.
-    ///
-    /// If the old `voitex` config directory exists and the new `murmur` directory
-    /// does not, renames the directory so existing settings carry over seamlessly.
+    /// The config file path under an explicit config base directory.
+    pub fn default_path_in(config_base: &Path) -> PathBuf {
+        config_base.join("murmur").join("config.toml")
+    }
+
+    /// Migrate config directory from legacy "voitex" name if it exists,
+    /// under the resolved config base directory.
     pub fn migrate_from_voitex() {
-        let Some(config_base) = dirs::config_dir() else {
+        let Some(config_base) = crate::fsutil::config_base_dir() else {
             return;
         };
+        Self::migrate_from_voitex_in(&config_base);
+    }
+
+    /// [`Self::migrate_from_voitex`] against an explicit config base, so the
+    /// rename/copy/delete logic is testable on fixture directories.
+    ///
+    /// If the old `voitex` directory exists and the new `murmur` directory
+    /// does not, the directory is renamed so existing settings carry over. A
+    /// leftover staging directory from an interrupted copy migration is
+    /// cleared first; it never masks the intact source.
+    pub fn migrate_from_voitex_in(config_base: &Path) {
         let old_dir = config_base.join("voitex");
         let new_dir = config_base.join("murmur");
+        // Best-effort: an interrupted copy migration must not leave debris.
+        let _ = std::fs::remove_dir_all(Self::migration_staging_dir(config_base));
         if !old_dir.exists() || new_dir.exists() {
             return;
         }
@@ -593,13 +608,11 @@ impl Settings {
             return;
         }
 
-        // rename fails across volumes (EXDEV) — e.g. a legacy config on a
-        // different drive than the new config dir. Fall back to a recursive
-        // copy so settings still carry over; remove a partial copy on failure
-        // so a later run can retry from the intact old directory.
-        match Self::copy_dir_recursive(&old_dir, &new_dir) {
+        // rename fails across volumes (EXDEV), e.g. a legacy config on a
+        // different drive than the new config dir. Fall back to a staged
+        // recursive copy so settings still carry over.
+        match Self::migrate_by_copy(config_base, &old_dir, &new_dir) {
             Ok(()) => {
-                let _ = std::fs::remove_dir_all(&old_dir);
                 tracing::info!(
                     "Migrated config directory (copied) from {} to {}",
                     old_dir.display(),
@@ -607,7 +620,6 @@ impl Settings {
                 );
             }
             Err(e) => {
-                let _ = std::fs::remove_dir_all(&new_dir);
                 tracing::warn!(
                     "Failed to migrate config directory from {} to {}: {}",
                     old_dir.display(),
@@ -616,6 +628,28 @@ impl Settings {
                 );
             }
         }
+    }
+
+    fn migration_staging_dir(config_base: &Path) -> PathBuf {
+        config_base.join("murmur.migrating")
+    }
+
+    /// Copy `old_dir` into place via a staging sibling, then remove the
+    /// source. Staging first means `murmur` only ever appears complete: a
+    /// process killed mid-copy leaves debris under `murmur.migrating` (cleared
+    /// on the next run) instead of a partial `murmur` directory that would
+    /// permanently mask the intact `voitex` config. On any failure the
+    /// staging area is removed and the source is left untouched for a retry.
+    fn migrate_by_copy(config_base: &Path, old_dir: &Path, new_dir: &Path) -> std::io::Result<()> {
+        let staging = Self::migration_staging_dir(config_base);
+        let staged = Self::copy_dir_recursive(old_dir, &staging)
+            .and_then(|()| std::fs::rename(&staging, new_dir));
+        if let Err(e) = staged {
+            let _ = std::fs::remove_dir_all(&staging);
+            return Err(e);
+        }
+        let _ = std::fs::remove_dir_all(old_dir);
+        Ok(())
     }
 
     fn copy_dir_recursive(from: &std::path::Path, to: &std::path::Path) -> std::io::Result<()> {
@@ -1509,5 +1543,114 @@ mod tests {
         };
         assert_eq!(settings.rewrite_mode_for("Code.exe"), None);
         assert_eq!(settings.rewrite_mode_for("unmatched.exe"), None);
+    }
+
+    #[test]
+    fn default_path_in_places_config_under_murmur() {
+        let base = Path::new("base");
+        assert_eq!(
+            Settings::default_path_in(base),
+            base.join("murmur").join("config.toml")
+        );
+    }
+
+    /// Build a legacy `voitex` tree with a nested file so migration has to
+    /// recurse.
+    fn seed_voitex(base: &Path) -> std::path::PathBuf {
+        let old = base.join("voitex");
+        std::fs::create_dir_all(old.join("meetings")).expect("mkdir");
+        std::fs::write(old.join("config.toml"), "save_history = true").expect("write");
+        std::fs::write(old.join("meetings").join("1.json"), "{}").expect("write");
+        old
+    }
+
+    fn assert_migrated_tree(new_dir: &Path) {
+        assert_eq!(
+            std::fs::read_to_string(new_dir.join("config.toml")).expect("read"),
+            "save_history = true"
+        );
+        assert_eq!(
+            std::fs::read_to_string(new_dir.join("meetings").join("1.json")).expect("read"),
+            "{}"
+        );
+    }
+
+    #[test]
+    fn migrate_renames_voitex_to_murmur() {
+        let base = tempfile::tempdir().expect("tempdir");
+        let old = seed_voitex(base.path());
+        Settings::migrate_from_voitex_in(base.path());
+        assert!(!old.exists(), "source must be gone after migration");
+        assert_migrated_tree(&base.path().join("murmur"));
+    }
+
+    #[test]
+    fn migrate_is_a_noop_without_a_voitex_dir() {
+        let base = tempfile::tempdir().expect("tempdir");
+        Settings::migrate_from_voitex_in(base.path());
+        assert!(!base.path().join("murmur").exists());
+        assert!(!base.path().join("voitex").exists());
+    }
+
+    #[test]
+    fn migrate_never_touches_an_existing_murmur_dir() {
+        let base = tempfile::tempdir().expect("tempdir");
+        let old = seed_voitex(base.path());
+        let new_dir = base.path().join("murmur");
+        std::fs::create_dir_all(&new_dir).expect("mkdir");
+        std::fs::write(new_dir.join("config.toml"), "current").expect("write");
+
+        Settings::migrate_from_voitex_in(base.path());
+        // The live config wins; the legacy dir stays intact for the user.
+        assert_eq!(
+            std::fs::read_to_string(new_dir.join("config.toml")).expect("read"),
+            "current"
+        );
+        assert!(old.join("config.toml").exists());
+    }
+
+    #[test]
+    fn migrate_clears_leftover_staging_and_still_migrates() {
+        let base = tempfile::tempdir().expect("tempdir");
+        seed_voitex(base.path());
+        // A process killed mid-copy leaves debris in the staging dir, never
+        // in `murmur`; the next run must discard it and migrate cleanly.
+        let staging = base.path().join("murmur.migrating");
+        std::fs::create_dir_all(&staging).expect("mkdir");
+        std::fs::write(staging.join("config.toml"), "torn partial copy").expect("write");
+
+        Settings::migrate_from_voitex_in(base.path());
+        assert!(!staging.exists(), "stale staging debris must be removed");
+        assert_migrated_tree(&base.path().join("murmur"));
+    }
+
+    #[test]
+    fn migrate_by_copy_moves_the_tree_and_removes_the_source() {
+        // Exercises the cross-device fallback directly: rename can't be made
+        // to fail portably inside one tempdir.
+        let base = tempfile::tempdir().expect("tempdir");
+        let old = seed_voitex(base.path());
+        let new_dir = base.path().join("murmur");
+        Settings::migrate_by_copy(base.path(), &old, &new_dir).expect("copy migration");
+        assert!(!old.exists(), "source must be removed after a full copy");
+        assert_migrated_tree(&new_dir);
+        assert!(!base.path().join("murmur.migrating").exists());
+    }
+
+    #[test]
+    fn failed_copy_migration_preserves_the_source_and_leaves_no_partial() {
+        let base = tempfile::tempdir().expect("tempdir");
+        let old = seed_voitex(base.path());
+        let new_dir = base.path().join("murmur");
+        // Force the copy to fail: a directory in staging where the source has
+        // a file makes fs::copy error partway through the tree.
+        let staging = base.path().join("murmur.migrating");
+        std::fs::create_dir_all(staging.join("config.toml")).expect("mkdir");
+
+        let result = Settings::migrate_by_copy(base.path(), &old, &new_dir);
+        assert!(result.is_err(), "the forced copy failure must surface");
+        assert!(old.join("config.toml").exists(), "source must survive");
+        assert!(!new_dir.exists(), "no partial murmur dir may appear");
+        assert!(!staging.exists(), "failed staging must be cleaned up");
     }
 }
