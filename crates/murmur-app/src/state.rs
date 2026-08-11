@@ -42,6 +42,9 @@ pub(crate) struct AppState {
     /// that single channel at once (which would split or drop phrases).
     pub streaming_worker: Mutex<Option<std::thread::JoinHandle<()>>>,
     pub settings: Mutex<Settings>,
+    /// Snippets compiled for matching (static + parameterized), built at
+    /// startup and rebuilt whenever the snippets setting is saved.
+    pub snippets: Mutex<murmur_core::snippets::CompiledSnippets>,
     pub last_toggle: Mutex<Instant>,
     /// Trailing text of the running session transcript, fed to whisper as
     /// `initial_prompt` so cross-phrase punctuation stays consistent.

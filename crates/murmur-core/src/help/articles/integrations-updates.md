@@ -1,45 +1,17 @@
 # Integrations and updates
 
-Murmur can share your recent dictation with AI coding tools through a
-local MCP server, and it keeps itself current with a signed auto-updater.
+Murmur connects to coding agents and editor plugins, and keeps itself
+current with a signed auto-updater.
 
-## The MCP server
+## Coding agents
 
-Murmur includes a built-in Model Context Protocol server that lets Claude
-and Cursor work with your dictation. It exposes two read-only tools, one
-that returns your most recent transcripts and one that searches them by
-text, plus an optional tool that lets an agent ask you to dictate an
-answer (see below).
+Murmur includes a built-in MCP server with four tools that let Claude
+and Cursor read and search your recent dictation, and ask you questions
+you answer by voice. It is fully local, and one click in Settings
+(Connect editors) wires it up.
 
-> **Privacy:** The server is fully local and talks over standard input
-> and output, so nothing leaves your machine.
-
-## Connect your editor
-
-1. In Settings, under Connect to Cursor / Claude, click Connect editors.
-2. Murmur detects installed clients (Cursor and Claude Desktop) and adds the server entry to their config in one click.
-3. Restart the editor afterward to finish.
-
-The entry points at the Murmur app, which serves MCP when relaunched, so
-there is no separate program to install.
-
-## What the editor can see
-
-The history tools are read-only: they can read your stored dictation
-history and nothing else, and they can never change anything. If you turn
-Save History off, there is nothing for them to read. Whether an agent may
-also start a dictation session is a separate, explicit toggle, described
-next.
-
-## Voice answers for coding agents
-
-With "Allow agents to start dictation" on (the default), a connected
-coding agent can ask you a question mid-task through a dictation-request
-tool: Murmur starts an ordinary dictation session, you answer by
-speaking, and the transcribed answer is returned to the agent. The
-session looks and behaves like any other, so you always see when it is
-listening. Turn the toggle off in Settings to keep the MCP connection
-strictly read-only.
+> **Tip:** See the "Coding agents (Claude and Cursor)" article for the
+> tool reference, setup steps, privacy controls, and troubleshooting.
 
 ## Local API for editor plugins
 

@@ -876,7 +876,9 @@ fn apply_casing_formatters(text: &str) -> String {
     result.join(" ")
 }
 
-fn apply_case(kind: &str, words: &[String]) -> String {
+/// `pub(crate)` so parameterized snippet transforms reuse the exact casing
+/// the spoken formatters produce instead of duplicating it.
+pub(crate) fn apply_case(kind: &str, words: &[String]) -> String {
     match kind {
         "camel" => {
             let mut out = String::new();
