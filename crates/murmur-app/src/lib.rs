@@ -5,6 +5,7 @@
 // token-by-token expansion overflows the default limit of 128.
 #![recursion_limit = "256"]
 
+mod about;
 mod audio_worker;
 mod calibration;
 mod caption;
@@ -212,6 +213,9 @@ pub fn run() -> anyhow::Result<()> {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            about::about_info,
+            about::open_about_link,
+            about::diagnostics_report,
             commands::get_status,
             commands::take_startup_notice,
             commands::set_output_suppressed,

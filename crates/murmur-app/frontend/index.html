@@ -102,6 +102,7 @@
           <span id="hotkey-display" class="hotkey-badge">ctrl+shift+space</span>
           <span id="output-mode-display" class="output-mode-badge">keyboard</span>
           <span id="model-info" class="model-info">Model: Parakeet TDT 0.6B v2</span>
+          <span id="app-version-chip" class="model-info app-version-chip" hidden></span>
         </footer>
       </aside>
 
@@ -883,6 +884,50 @@
                   </label>
                 </div>
               </div>
+
+              <h3 class="settings-section-title">About</h3>
+              <div class="settings-group" id="about-group">
+                <div class="settings-row">
+                  <div class="settings-row__text">
+                    <span class="settings-label">Murmur</span>
+                    <span class="settings-hint" id="about-build-line">Private, on-device dictation.</span>
+                  </div>
+                  <span class="about-version" id="about-version">v&#8211;</span>
+                </div>
+                <div class="about-links" role="group" aria-label="Project links">
+                  <button id="about-link-repo" class="btn-small" type="button">Project page</button>
+                  <button id="about-link-issues" class="btn-small" type="button">Report a problem</button>
+                  <button id="about-link-license" class="btn-small" type="button">License (MIT)</button>
+                  <button id="about-link-privacy" class="btn-small" type="button">Privacy</button>
+                  <button id="about-link-terms" class="btn-small" type="button">Terms</button>
+                </div>
+                <div class="settings-row">
+                  <div class="settings-row__text">
+                    <span class="settings-label" id="about-diag-label">Diagnostics for a bug report</span>
+                    <span class="settings-hint">Copies version, OS, and build details. Never includes anything you dictated.</span>
+                  </div>
+                  <button id="about-copy-diagnostics" class="btn-small" type="button" aria-labelledby="about-diag-label">Copy diagnostics</button>
+                </div>
+                <details class="about-licenses" id="about-licenses">
+                  <summary>Open-source licenses</summary>
+                  <p class="settings-hint">
+                    Murmur is MIT licensed. It bundles speech models and Rust libraries
+                    under their own licenses, listed below with links to each project.
+                  </p>
+                  <h4 class="about-licenses__heading">Speech and language models</h4>
+                  <ul class="about-model-list" id="about-model-list">
+                    <li><button class="about-model-link" data-link="model-parakeet-v2" type="button">Parakeet TDT 0.6B v2</button> <span>NVIDIA &middot; CC-BY-4.0</span></li>
+                    <li><button class="about-model-link" data-link="model-parakeet-v3" type="button">Parakeet TDT 0.6B v3</button> <span>NVIDIA &middot; CC-BY-4.0</span></li>
+                    <li><button class="about-model-link" data-link="model-whisper" type="button">Whisper</button> <span>OpenAI &middot; MIT</span></li>
+                    <li><button class="about-model-link" data-link="model-silero" type="button">Silero VAD</button> <span>Silero Team &middot; MIT</span></li>
+                    <li><button class="about-model-link" data-link="model-sortformer" type="button">Streaming Sortformer</button> <span>NVIDIA &middot; CC-BY-4.0</span></li>
+                    <li><button class="about-model-link" data-link="model-bge" type="button">BGE-small-en v1.5</button> <span>BAAI &middot; MIT</span></li>
+                    <li><button class="about-model-link" data-link="model-qwen" type="button">Qwen3 1.7B</button> <span>Alibaba &middot; Apache-2.0</span></li>
+                  </ul>
+                  <h4 class="about-licenses__heading" id="about-crate-heading">Rust libraries</h4>
+                  <div class="about-crate-list" id="about-crate-list" tabindex="0" role="region" aria-labelledby="about-crate-heading"></div>
+                </details>
+              </div>
             </div>
           </section>
         </div>
@@ -1146,6 +1191,8 @@
   <script src="js/transcription.js"></script>
   <script src="js/meetings.js"></script>
   <script src="js/settings.js"></script>
+  <script src="js/licenses.data.js"></script>
+  <script src="js/about.js"></script>
   <script src="js/analytics.js"></script>
   <script src="js/help.js"></script>
   <script src="js/updater.js"></script>

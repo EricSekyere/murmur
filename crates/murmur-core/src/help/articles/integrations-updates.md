@@ -38,6 +38,11 @@ After an update, the What's New panel highlights what changed. It opens
 once per update, and you can reopen it any time from the button in
 Settings.
 
+Your installed version is shown in the About section at the bottom of
+Settings (and in the sidebar footer). About also has the project links,
+open-source license attributions, and a Copy diagnostics button that
+copies your version and build details for a bug report.
+
 ## Platform support
 
 | Platform | Status |
