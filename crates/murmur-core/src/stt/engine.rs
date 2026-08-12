@@ -158,17 +158,11 @@ impl SttEngine {
 
         #[cfg(not(feature = "stt"))]
         {
-            let _ = n_threads;
-            tracing::warn!("STT feature not enabled, whisper engine is a no-op stub");
-            Ok(Self {
-                inner: EngineInner::Stub,
-                model_path: model_path.to_string(),
-                model: None,
-                initial_prompt: None,
-                vocabulary: None,
-                language: None,
-                translate: false,
-            })
+            let _ = (n_threads, model_path);
+            Err(anyhow::anyhow!(
+                "This build has no Whisper backend (the `stt` feature is compiled out). \
+                 Rebuild with `--features full` to enable transcription."
+            ))
         }
     }
 
@@ -231,16 +225,20 @@ impl SttEngine {
         #[cfg(not(feature = "parakeet"))]
         {
             let _ = model_dir;
-            tracing::warn!("Parakeet feature not enabled, engine is a no-op stub");
-            Ok(Self {
-                inner: EngineInner::Stub,
-                model_path: model_dir.to_string(),
-                model: None,
-                initial_prompt: None,
-                vocabulary: None,
-                language: None,
-                translate: false,
-            })
+            Err(anyhow::anyhow!(
+                "This build has no Parakeet backend (the `parakeet` feature is compiled out). \
+                 Rebuild with `--features full` to enable transcription."
+            ))
+        }
+    }
+
+    /// Whether this build contains a real inference backend for `backend`.
+    /// False means the corresponding constructor will refuse to load a model,
+    /// so callers can fail fast (before, say, downloading one).
+    pub fn backend_available(backend: super::models::Backend) -> bool {
+        match backend {
+            super::models::Backend::Whisper => cfg!(feature = "stt"),
+            super::models::Backend::Parakeet => cfg!(feature = "parakeet"),
         }
     }
 

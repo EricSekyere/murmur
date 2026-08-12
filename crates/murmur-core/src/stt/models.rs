@@ -300,7 +300,7 @@ impl ModelManager {
 
     /// Get the default models directory (data_dir/murmur/models/).
     pub fn default_dir() -> Result<PathBuf> {
-        let dir = dirs::data_dir()
+        let dir = crate::fsutil::data_base_dir()
             .ok_or_else(|| anyhow::anyhow!("Could not determine data directory"))?
             .join("murmur")
             .join("models");
