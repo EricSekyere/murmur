@@ -20,6 +20,7 @@ mod input;
 mod local_api;
 mod meeting_commands;
 mod meeting_worker;
+mod menu;
 mod model_setup;
 pub mod native_actions;
 mod preview;
@@ -259,6 +260,7 @@ pub fn run() -> anyhow::Result<()> {
             #[cfg(feature = "full")]
             commands::help_article,
             updater::install_update,
+            updater::check_for_updates,
         ])
         .setup(move |app| setup_app(app, engine_for_setup, model, &hotkey, show_widget_on_start))
         .build(tauri::generate_context!())
@@ -400,6 +402,7 @@ fn setup_app(
     focus::spawn_foreground_tracker(app.handle().clone());
 
     tray::build(app)?;
+    menu::build(app)?;
     register_hotkey(app, hotkey);
     command_mode::register_hotkey(app);
     configure_widget(app, show_widget_on_start);
@@ -415,7 +418,7 @@ fn setup_app(
     dictation_trigger::spawn(app.handle().clone());
     idle_unload::spawn(app.handle().clone());
     local_api::spawn(app.handle().clone());
-    updater::spawn_startup_check(app.handle().clone());
+    updater::spawn_check(app.handle().clone(), updater::CheckKind::Startup);
     spawn_project_index(app.handle().clone());
     #[cfg(feature = "full")]
     spawn_help_index(app.handle().clone());
@@ -581,6 +584,19 @@ pub(crate) fn spawn_help_index(app: tauri::AppHandle) {
         let _ = app.emit("help-ready", serde_json::json!({ "ready": true }));
         tracing::info!("Help search ready");
     });
+}
+
+/// Show or hide the floating pill; shared by the tray and the View menu.
+fn toggle_widget(app: &tauri::AppHandle) {
+    if let Some(widget) = app.get_webview_window("widget") {
+        // Visibility toggling is cosmetic; a race with window teardown is
+        // safe to drop.
+        let _ = if widget.is_visible().unwrap_or(false) {
+            widget.hide()
+        } else {
+            widget.show()
+        };
+    }
 }
 
 fn show_main_window(app: &tauri::AppHandle) {

@@ -456,8 +456,9 @@ fn emit_state(
             "segments": segments,
         }),
     );
-    // Keep the tray's dictation item in step with meeting activity.
+    // Keep the tray and app-menu items in step with meeting activity.
     crate::tray::update_menu(app);
+    crate::menu::update_menu(app);
 }
 
 /// Why a meeting cannot start right now, or `None` when it can. Pure so the

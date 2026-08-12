@@ -1,7 +1,7 @@
 //! System tray: menu construction, actions, and state-driven item updates.
 
 use tauri::{
-    AppHandle, Emitter, Manager, Wry,
+    AppHandle, Manager, Wry,
     image::Image,
     menu::{Menu, MenuItem, PredefinedMenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
@@ -111,15 +111,7 @@ pub(crate) fn build(app: &mut tauri::App) -> tauri::Result<()> {
             "settings" => open_settings(app),
             "dictate" => crate::session::handle_toggle(app),
             "copy_last" => copy_last_transcript(app),
-            "toggle_widget" => {
-                if let Some(widget) = app.get_webview_window("widget") {
-                    let _ = if widget.is_visible().unwrap_or(false) {
-                        widget.hide()
-                    } else {
-                        widget.show()
-                    };
-                }
-            }
+            "toggle_widget" => crate::toggle_widget(app),
             _ => {}
         })
         .on_tray_icon_event(|tray, event| {
@@ -167,7 +159,8 @@ pub(crate) fn update_menu(app: &AppHandle) {
 
 /// Copy the newest history entry to the clipboard: the recovery move when
 /// dictation landed in the wrong window. The transcript text is never logged.
-fn copy_last_transcript(app: &AppHandle) {
+/// Shared with the application menu's Copy Last Transcript item.
+pub(crate) fn copy_last_transcript(app: &AppHandle) {
     let Some(state) = app.try_state::<AppState>() else {
         return;
     };
@@ -194,11 +187,7 @@ fn copy_last_transcript(app: &AppHandle) {
 
 /// Show the main window on its Settings view.
 fn open_settings(app: &AppHandle) {
-    crate::show_main_window(app);
-    // Delivery is best effort: with the window just shown, the dashboard
-    // listener is attached; if the webview is still booting, the user simply
-    // lands on the default view.
-    let _ = app.emit("navigate-view", serde_json::json!({ "view": "settings" }));
+    crate::menu::navigate(app, "settings");
 }
 
 #[cfg(test)]

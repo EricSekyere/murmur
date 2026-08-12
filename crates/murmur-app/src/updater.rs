@@ -12,12 +12,21 @@ struct UpdateAvailable {
     notes: String,
 }
 
-/// Check for an update in the background and, if one is found, emit
-/// `update-available` so the UI can offer it. On failure (no network, or a
-/// `latest.json` that 404s because the repo is private) emit
-/// `update-check-failed` so the UI can note that updates aren't reaching the
-/// user, instead of failing silently. Never disrupts the app.
-pub(crate) fn spawn_startup_check(app: tauri::AppHandle) {
+/// Who asked for the check. A startup check stays quiet when there is nothing
+/// to report; a check the user asked for must always answer, otherwise the
+/// menu item looks broken.
+#[derive(Clone, Copy, PartialEq)]
+pub(crate) enum CheckKind {
+    Startup,
+    Requested,
+}
+
+/// Check for an update and, if one is found, emit `update-available` so the UI
+/// can offer it. On failure (no network, or a `latest.json` that 404s because
+/// the repo is private) emit `update-check-failed` so the UI can note that
+/// updates aren't reaching the user, instead of failing silently. A requested
+/// check also emits `update-none` when already current. Never disrupts the app.
+pub(crate) fn spawn_check(app: tauri::AppHandle, kind: CheckKind) {
     tauri::async_runtime::spawn(async move {
         let result = match app.updater() {
             Ok(updater) => updater.check().await,
@@ -34,7 +43,12 @@ pub(crate) fn spawn_startup_check(app: tauri::AppHandle) {
                     },
                 );
             }
-            Ok(None) => tracing::debug!("No update available"),
+            Ok(None) => {
+                tracing::debug!("No update available");
+                if kind == CheckKind::Requested {
+                    let _ = app.emit("update-none", ());
+                }
+            }
             Err(e) => {
                 tracing::warn!("Update check failed: {}", e);
                 let _ = app.emit(
@@ -44,6 +58,12 @@ pub(crate) fn spawn_startup_check(app: tauri::AppHandle) {
             }
         }
     });
+}
+
+/// Check on the user's behalf, from the menu or the About panel.
+#[tauri::command]
+pub(crate) fn check_for_updates(app: tauri::AppHandle) {
+    spawn_check(app, CheckKind::Requested);
 }
 
 /// Download, install, and relaunch into the new version. Returns an error
