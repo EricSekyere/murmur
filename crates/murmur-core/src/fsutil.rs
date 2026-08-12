@@ -13,6 +13,10 @@ pub const CONFIG_DIR_ENV: &str = "MURMUR_CONFIG_DIR";
 /// configs (Cursor's `~/.cursor/mcp.json`).
 pub const HOME_DIR_ENV: &str = "MURMUR_HOME_DIR";
 
+/// Environment variable overriding the data base directory (the parent of
+/// the `murmur` data folder holding models, ONNX Runtime, and caches).
+pub const DATA_DIR_ENV: &str = "MURMUR_DATA_DIR";
+
 /// The base directory all Murmur config paths hang off: `MURMUR_CONFIG_DIR`
 /// when set to an absolute path, otherwise the platform default
 /// (`dirs::config_dir()`: `%APPDATA%`, `~/Library/Application Support`, or
@@ -38,6 +42,13 @@ pub fn config_base_dir() -> Option<PathBuf> {
 /// [`config_base_dir`].
 pub fn home_dir() -> Option<PathBuf> {
     resolve_base(std::env::var_os(HOME_DIR_ENV), HOME_DIR_ENV, dirs::home_dir)
+}
+
+/// The base directory model and cache paths hang off: `MURMUR_DATA_DIR` when
+/// set to an absolute path, otherwise `dirs::data_dir()`. Same override
+/// semantics as [`config_base_dir`].
+pub fn data_base_dir() -> Option<PathBuf> {
+    resolve_base(std::env::var_os(DATA_DIR_ENV), DATA_DIR_ENV, dirs::data_dir)
 }
 
 fn resolve_base(

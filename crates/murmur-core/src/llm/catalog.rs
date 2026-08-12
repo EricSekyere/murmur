@@ -28,7 +28,7 @@ pub const QWEN3_1_7B_SHA256: &str =
 
 /// Directory where LLM models are stored (`data_dir()/murmur/llm/`).
 pub fn llm_dir() -> Result<PathBuf> {
-    let dir = dirs::data_dir()
+    let dir = crate::fsutil::data_base_dir()
         .ok_or_else(|| anyhow::anyhow!("Could not determine data directory"))?
         .join("murmur")
         .join("llm");

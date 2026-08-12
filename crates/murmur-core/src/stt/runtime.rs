@@ -93,7 +93,7 @@ fn download_url() -> String {
 
 /// Directory where the ONNX Runtime DLL is cached.
 pub fn ort_dir() -> Result<PathBuf> {
-    let dir = dirs::data_dir()
+    let dir = crate::fsutil::data_base_dir()
         .ok_or_else(|| anyhow::anyhow!("Could not determine data directory"))?
         .join("murmur")
         .join("onnxruntime");

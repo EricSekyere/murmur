@@ -50,7 +50,7 @@ pub enum DiarizeError {
 
 /// Directory that caches the diarization model.
 pub fn model_dir() -> anyhow::Result<PathBuf> {
-    let dir = dirs::data_dir()
+    let dir = crate::fsutil::data_base_dir()
         .ok_or_else(|| anyhow::anyhow!("Could not determine data directory"))?
         .join("murmur")
         .join("diarization");
