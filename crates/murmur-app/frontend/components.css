@@ -2645,3 +2645,23 @@ footer {
   white-space: nowrap;
   flex-shrink: 0;
 }
+
+.aboutbox { max-width: 380px; text-align: center; }
+.aboutbox__version {
+  font-family: var(--font-mono);
+  font-size: 1.15rem;
+  color: var(--color-accent-light);
+  margin: 8px 0 0;
+}
+.aboutbox__build {
+  font-size: 0.78rem;
+  color: var(--color-text-muted);
+  margin: 4px 0 0;
+}
+.aboutbox__tagline {
+  font-size: 0.85rem;
+  color: var(--color-text-secondary);
+  line-height: 1.5;
+  margin: 16px 0 0;
+}
+.aboutbox .cmdconfirm__actions { justify-content: center; flex-wrap: wrap; }

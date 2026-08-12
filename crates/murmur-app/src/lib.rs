@@ -260,6 +260,7 @@ pub fn run() -> anyhow::Result<()> {
             #[cfg(feature = "full")]
             commands::help_article,
             updater::install_update,
+            updater::check_for_updates,
         ])
         .setup(move |app| setup_app(app, engine_for_setup, model, &hotkey, show_widget_on_start))
         .build(tauri::generate_context!())
@@ -417,7 +418,7 @@ fn setup_app(
     dictation_trigger::spawn(app.handle().clone());
     idle_unload::spawn(app.handle().clone());
     local_api::spawn(app.handle().clone());
-    updater::spawn_startup_check(app.handle().clone());
+    updater::spawn_check(app.handle().clone(), updater::CheckKind::Startup);
     spawn_project_index(app.handle().clone());
     #[cfg(feature = "full")]
     spawn_help_index(app.handle().clone());

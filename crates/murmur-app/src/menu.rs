@@ -22,6 +22,7 @@ const ID_COMMAND_MODE: &str = "app:command-mode";
 const ID_COPY_LAST: &str = "app:copy-last";
 const ID_MEETING: &str = "app:meeting";
 const ID_PILL: &str = "app:pill";
+const ID_CHECK_UPDATES: &str = "app:check-updates";
 const ID_HELP_CENTER: &str = "app:help-center";
 const ID_REPORT: &str = "app:report";
 const ID_PROJECT: &str = "app:project";
@@ -227,6 +228,15 @@ fn build_help_menu(app: &tauri::App) -> tauri::Result<Submenu<Wry>> {
     let help_center = MenuItem::with_id(app, ID_HELP_CENTER, "Help Center", true, Some("F1"))?;
     let report = MenuItem::with_id(app, ID_REPORT, "Report a Problem", true, None::<&str>)?;
     let project = MenuItem::with_id(app, ID_PROJECT, "Project Page", true, None::<&str>)?;
+    // macOS puts this in the application menu, next to About.
+    #[cfg(not(target_os = "macos"))]
+    let check_updates = MenuItem::with_id(
+        app,
+        ID_CHECK_UPDATES,
+        "Check for Updates\u{2026}",
+        true,
+        None::<&str>,
+    )?;
     #[cfg(not(target_os = "macos"))]
     {
         // The About section lives in Settings; macOS gets the predefined
@@ -242,6 +252,7 @@ fn build_help_menu(app: &tauri::App) -> tauri::Result<Submenu<Wry>> {
                 &report,
                 &project,
                 &PredefinedMenuItem::separator(app)?,
+                &check_updates,
                 &about,
             ],
         )
@@ -274,12 +285,20 @@ fn build_mac_app_menu(app: &tauri::App) -> tauri::Result<Submenu<Wry>> {
         true,
         Some("CmdOrCtrl+Comma"),
     )?;
+    let check_updates = MenuItem::with_id(
+        app,
+        ID_CHECK_UPDATES,
+        "Check for Updates\u{2026}",
+        true,
+        None::<&str>,
+    )?;
     Submenu::with_items(
         app,
         "Murmur",
         true,
         &[
             &PredefinedMenuItem::about(app, Some("About Murmur"), Some(metadata))?,
+            &check_updates,
             &PredefinedMenuItem::separator(app)?,
             &settings,
             &PredefinedMenuItem::separator(app)?,
@@ -336,11 +355,17 @@ fn handle_event(app: &AppHandle, id: &str) {
         ID_COPY_LAST => tray::copy_last_transcript(app),
         ID_MEETING => toggle_meeting(app),
         ID_PILL => crate::toggle_widget(app),
+        ID_CHECK_UPDATES => {
+            crate::updater::spawn_check(app.clone(), crate::updater::CheckKind::Requested)
+        }
         ID_HELP_CENTER => navigate(app, "help"),
         ID_REPORT => open_link(app, "issues"),
         ID_PROJECT => open_link(app, "repo"),
         #[cfg(not(target_os = "macos"))]
-        ID_ABOUT => navigate(app, "settings"),
+        ID_ABOUT => {
+            crate::show_main_window(app);
+            let _ = app.emit("show-about", ());
+        }
         _ => {}
     }
 }
