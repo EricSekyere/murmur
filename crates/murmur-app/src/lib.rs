@@ -23,6 +23,8 @@ mod meeting_worker;
 mod model_setup;
 pub mod native_actions;
 mod preview;
+mod retained_audio;
+mod retranscribe;
 mod rewrite;
 mod session;
 mod sound;
@@ -177,6 +179,8 @@ pub fn run() -> anyhow::Result<()> {
             session_prev_text: Mutex::new(String::new()),
             last_delivered_len: Mutex::new(0),
             history: Mutex::new(history),
+            retained_audio: Mutex::new(retained_audio::RetainedAudio::default()),
+            retranscribing: std::sync::atomic::AtomicBool::new(false),
             history_path,
             insights: Mutex::new(insights),
             insights_path,
@@ -218,6 +222,7 @@ pub fn run() -> anyhow::Result<()> {
             commands::toggle_recording,
             commands::get_history,
             commands::clear_history,
+            commands::retranscribe_entry,
             commands::get_config,
             commands::download_model,
             commands::list_models,

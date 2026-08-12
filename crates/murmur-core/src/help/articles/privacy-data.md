@@ -14,7 +14,11 @@ your computer.
 
 Audio is processed and discarded; Murmur does not save recordings. Only
 the text of delivered phrases is ever stored, and only if you leave
-history on.
+history on. To power Re-transcribe, the last few utterances (about ten,
+up to a minute of audio in total) stay in memory while the app runs, and
+only while history is on; that audio is never written to disk and
+vanishes when the app exits, when you clear history, or when you turn
+Save History off.
 
 > **Privacy:** The one exception is meeting speaker labels: with labels
 > enabled, a meeting's audio is spooled to a temporary file so speakers
