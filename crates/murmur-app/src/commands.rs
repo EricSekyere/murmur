@@ -228,9 +228,43 @@ pub(crate) fn get_history(
     query: Option<String>,
     limit: Option<usize>,
 ) -> serde_json::Value {
-    let history = state.history.lock().unwrap_or_else(|e| e.into_inner());
-    let entries = history.search(query.as_deref().unwrap_or(""), limit.unwrap_or(200));
+    let entries = {
+        let history = state.history.lock().unwrap_or_else(|e| e.into_inner());
+        history.search(query.as_deref().unwrap_or(""), limit.unwrap_or(200))
+    };
+    // Flag entries whose utterance audio is still retained in RAM, so the UI
+    // shows Re-transcribe only where it can work.
+    let retained = state
+        .retained_audio
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let entries: Vec<serde_json::Value> = entries
+        .into_iter()
+        .map(|entry| {
+            let has_audio = retained.contains(&entry.id);
+            let mut value = serde_json::json!(entry);
+            if let Some(obj) = value.as_object_mut() {
+                obj.insert("has_audio".to_string(), serde_json::json!(has_audio));
+            }
+            value
+        })
+        .collect();
     serde_json::json!({ "entries": entries })
+}
+
+/// Re-transcribe a history entry's retained audio with the currently active
+/// model. The result is added as a new history entry and copied to the
+/// clipboard; nothing is typed or delivered anywhere. Returns the new text.
+#[tauri::command]
+pub(crate) async fn retranscribe_entry(
+    app: tauri::AppHandle,
+    entry_id: String,
+) -> Result<String, String> {
+    // Blocking thread: inference holds the engine mutex for its full duration
+    // and must stay off the async reactor.
+    tauri::async_runtime::spawn_blocking(move || crate::retranscribe::run(&app, &entry_id))
+        .await
+        .map_err(|e| format!("Re-transcription task failed: {e}"))?
 }
 
 /// Clear all stored history and persist the empty log. The per-day insights
@@ -247,6 +281,13 @@ pub(crate) fn clear_history(
             .save(&state.history_path)
             .map_err(|e| e.to_string())?;
     }
+    // The retained audio exists only to serve history entries; with the
+    // entries gone it must be forgotten too.
+    state
+        .retained_audio
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clear();
     purge_insights(&state);
     // The Copy Last Transcript items have nothing left to copy.
     crate::tray::update_menu(&app);
@@ -626,6 +667,13 @@ pub(crate) fn update_settings(
             // The insights aggregate is transcript-derived; opting out of
             // history must forget it as well.
             purge_insights(&state);
+            // Retained audio serves history entries; with history off there is
+            // nothing to attach to and the user asked to store nothing.
+            state
+                .retained_audio
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .clear();
         }
         settings.save_history = sh;
     }

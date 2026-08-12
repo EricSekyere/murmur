@@ -561,7 +561,7 @@ fn handle_phrase(
                 .matches(rest)
         });
         if let Some(literal_text) = literal {
-            deliver_text(
+            if let Some(entry_id) = deliver_text(
                 app,
                 state,
                 &literal_text,
@@ -570,7 +570,9 @@ fn handle_phrase(
                 PhraseKind::Special,
                 stats,
                 last_delivery,
-            );
+            ) {
+                retain_utterance(state, entry_id, buffer);
+            }
         } else {
             match voice_commands::parse(&text) {
                 VoiceCommand::Text => {
@@ -579,7 +581,7 @@ fn handle_phrase(
                     // and clipboard substitution are skipped so nothing can
                     // rewrite it. Text only — git is never run.
                     if let Some(commit_line) = murmur_core::commit::format_commit(&text) {
-                        deliver_text(
+                        if let Some(entry_id) = deliver_text(
                             app,
                             state,
                             &commit_line,
@@ -588,7 +590,9 @@ fn handle_phrase(
                             PhraseKind::Special,
                             stats,
                             last_delivery,
-                        );
+                        ) {
+                            retain_utterance(state, entry_id, buffer);
+                        }
                     } else {
                         // A user snippet expands to its replacement text; otherwise
                         // the spoken phrase is delivered verbatim.
@@ -631,7 +635,7 @@ fn handle_phrase(
                         // Spoken emoji ("emoji fire" -> 🔥) composes after
                         // clipboard substitution; None means no emoji spoken.
                         let with_emoji = murmur_core::emoji::substitute_emoji(delivered);
-                        deliver_text(
+                        if let Some(entry_id) = deliver_text(
                             app,
                             state,
                             with_emoji.as_deref().unwrap_or(delivered),
@@ -640,7 +644,9 @@ fn handle_phrase(
                             kind,
                             stats,
                             last_delivery,
-                        );
+                        ) {
+                            retain_utterance(state, entry_id, buffer);
+                        }
                     }
                 }
                 command => {
@@ -666,6 +672,7 @@ fn handle_phrase(
 
 /// Deliver a normal text phrase to the focused window and record how many
 /// characters landed so "scratch that" can undo exactly this phrase.
+/// Returns the id of the history entry it recorded, when history is on.
 #[allow(clippy::too_many_arguments)]
 fn deliver_text(
     app: &tauri::AppHandle,
@@ -676,7 +683,7 @@ fn deliver_text(
     kind: PhraseKind,
     stats: &mut SessionStats,
     last_delivery: &mut Option<LastDelivery>,
-) {
+) -> Option<String> {
     // A repaired junction has already backspaced the previous phrase's mark
     // and space; the phrase then lands lowercased with joining spaces.
     let repaired = attempt_junction_repair(state, text, ctx, kind, last_delivery.as_ref());
@@ -714,7 +721,7 @@ fn deliver_text(
 
     // History, events, and captions all mirror what actually landed on
     // screen, so a repaired junction records the lowercased text.
-    record_history(state, text);
+    let entry_id = record_history(state, text);
 
     let _ = app.emit(
         "streaming-phrase",
@@ -737,6 +744,20 @@ fn deliver_text(
         Some(anchor) => crate::caption::show_final(app, anchor, text),
         None => crate::caption::hide(app),
     }
+    entry_id
+}
+
+/// Keep the utterance's audio in RAM, keyed to the history entry it produced,
+/// so the user can re-transcribe it later. Runs on the streaming worker
+/// thread, never the realtime CPAL callback, so the buffer copy is fine here.
+/// Called only after a phrase was both delivered and recorded; rejected or
+/// empty phrases, and phrases with history off, retain nothing.
+fn retain_utterance(state: &AppState, entry_id: String, buffer: &murmur_core::audio::AudioBuffer) {
+    state
+        .retained_audio
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .retain(entry_id, buffer.samples.clone(), buffer.sample_rate);
 }
 
 /// Decide a punctuation junction repair against the previous delivery and,
@@ -800,24 +821,26 @@ fn attempt_junction_repair(
 
 /// Append a delivered phrase to the persistent history and per-day insights
 /// aggregate, saving both. Best effort: a failed write is logged, never
-/// surfaced to the user. Skipped entirely when the user has turned history off.
-fn record_history(state: &AppState, text: &str) {
+/// surfaced to the user. Skipped entirely when the user has turned history
+/// off (returns None then; Some(entry id) once recorded).
+fn record_history(state: &AppState, text: &str) -> Option<String> {
     if !state
         .settings
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .save_history
     {
-        return;
+        return None;
     }
     let app_name = current_app_name();
-    {
+    let entry_id = {
         let mut history = state.history.lock().unwrap_or_else(|e| e.into_inner());
-        history.add(text, app_name);
+        let entry_id = history.add(text, app_name);
         if let Err(e) = history.save(&state.history_path) {
             tracing::warn!("Failed to save history: {}", e);
         }
-    }
+        entry_id
+    };
     // Same epoch-ms clock the history entry was stamped with. Taken after the
     // history lock is released so the two locks are never held together.
     let now_ms = std::time::SystemTime::now()
@@ -829,6 +852,7 @@ fn record_history(state: &AppState, text: &str) {
     if let Err(e) = insights.save(&state.insights_path) {
         tracing::warn!("Failed to save insights: {}", e);
     }
+    Some(entry_id)
 }
 
 /// Name of the foreground application receiving the text, when available.

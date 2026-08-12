@@ -87,8 +87,44 @@ function renderHistory() {
 
     li.appendChild(textSpan);
     li.appendChild(meta);
+    // Only entries whose utterance audio is still held in memory can be
+    // re-transcribed; after eviction or a restart the control is absent.
+    if (entry.has_audio && entry.id) {
+      const retryBtn = document.createElement('button');
+      retryBtn.className = 'history-item__retry';
+      retryBtn.textContent = 'Re-transcribe';
+      retryBtn.setAttribute('aria-label', 'Re-transcribe this entry with the current model');
+      retryBtn.addEventListener('click', () => retranscribeEntry(entry.id, retryBtn));
+      li.appendChild(retryBtn);
+    }
     li.appendChild(copyBtn);
     historyList.appendChild(li);
+  }
+}
+
+// One re-transcription at a time; the backend enforces this too.
+let retranscribeInFlight = false;
+
+async function retranscribeEntry(entryId, btn) {
+  if (retranscribeInFlight) return;
+  retranscribeInFlight = true;
+  const idleLabel = btn.textContent;
+  btn.disabled = true;
+  btn.setAttribute('aria-busy', 'true');
+  btn.textContent = 'Working…';
+  try {
+    await invoke('retranscribe_entry', { entryId });
+    showToast('Re-transcribed with the current model. Result copied to clipboard.', 'success');
+    // The refresh replaces the list (and this button) with the new entry on top.
+    await loadHistory();
+  } catch (err) {
+    showToast(`${err}`, 'error');
+    // The list was not refreshed on failure; restore the button for a retry.
+    btn.disabled = false;
+    btn.removeAttribute('aria-busy');
+    btn.textContent = idleLabel;
+  } finally {
+    retranscribeInFlight = false;
   }
 }
 

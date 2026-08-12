@@ -12,6 +12,31 @@ newest first. Type in the search box to filter by text or app
 drops the oldest past its cap, so it stays a convenience rather than an
 archive.
 
+## Re-transcribe a recent phrase
+
+If a fresh phrase came out mangled, you can run it through the engine
+again without repeating yourself. Recent entries keep their audio in
+memory (roughly the last ten utterances, up to about a minute in total),
+and those entries show a Re-transcribe button:
+
+1. Open History on the Dictate view and find the entry.
+2. Click Re-transcribe. If you switched to a better model since, the
+   re-run uses the current model.
+3. The result appears as a new entry at the top of the list and is
+   copied to your clipboard; nothing is typed into any window, and the
+   original entry stays put.
+
+The button only appears while the audio is still held: it disappears
+after a restart, once older utterances are evicted, or if the re-run
+does not pass the usual quality checks (you get a notice and the
+original entry is left unchanged). Re-transcription waits its turn:
+while you are dictating or recording a meeting it refuses rather than
+slowing live speech.
+
+> **Privacy:** That audio lives in RAM only. It is never written to
+> disk, and it is dropped on exit, on Clear, and when Save History is
+> turned off.
+
 ## Clear history
 
 Click Clear to wipe the stored log.

@@ -56,6 +56,11 @@ pub struct UsageStats {
 /// One delivered phrase.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct HistoryEntry {
+    /// Stable identifier for this entry, so consumers can key work (like
+    /// re-transcription) to it across list refreshes. Empty on entries written
+    /// by versions that predate ids; those simply cannot be re-targeted.
+    #[serde(default)]
+    pub id: String,
     pub text: String,
     /// Unix epoch milliseconds when the phrase was delivered.
     pub timestamp_ms: u64,
@@ -123,17 +128,26 @@ impl History {
         })
     }
 
-    /// Prepend a new entry, dropping the oldest beyond the cap.
-    pub fn add(&mut self, text: &str, app: Option<String>) {
+    /// Prepend a new entry, dropping the oldest beyond the cap. Returns the
+    /// new entry's id so callers can associate follow-up work with it.
+    pub fn add(&mut self, text: &str, app: Option<String>) -> String {
+        let id = new_entry_id();
         self.entries.insert(
             0,
             HistoryEntry {
+                id: id.clone(),
                 text: text.to_string(),
                 timestamp_ms: now_ms(),
                 app,
             },
         );
         self.entries.truncate(MAX_ENTRIES);
+        id
+    }
+
+    /// The entry with the given id, if still stored.
+    pub fn entry_by_id(&self, id: &str) -> Option<&HistoryEntry> {
+        (!id.is_empty()).then(|| self.entries.iter().find(|e| e.id == id))?
     }
 
     /// Up to `limit` most-recent entries whose text contains `query`
@@ -305,6 +319,15 @@ impl History {
     }
 }
 
+/// Process-unique entry id: creation time plus a monotonic counter, so two
+/// phrases delivered in the same millisecond still get distinct ids.
+fn new_entry_id() -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+    format!("{:x}-{:x}", now_ms(), n)
+}
+
 fn now_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -359,6 +382,39 @@ mod tests {
     }
 
     #[test]
+    fn old_format_history_without_ids_still_loads() {
+        // Fixture in the pre-id on-disk format: entries carry no `id` field.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("history.json");
+        std::fs::write(
+            &path,
+            r#"{"entries":[{"text":"hello world","timestamp_ms":123,"app":"code.exe"},{"text":"older","timestamp_ms":100}]}"#,
+        )
+        .expect("write");
+
+        let history = History::load(&path);
+        assert_eq!(history.entries.len(), 2);
+        assert_eq!(history.entries[0].text, "hello world");
+        // Pre-id entries load with an empty id and are simply not addressable.
+        assert!(history.entries.iter().all(|e| e.id.is_empty()));
+        assert!(history.entry_by_id("").is_none());
+        // The old file parsed cleanly, so no .bak recovery rename happened.
+        assert!(!path.with_extension("json.bak").exists());
+    }
+
+    #[test]
+    fn add_generates_unique_ids_and_entry_by_id_finds_them() {
+        let mut h = History::default();
+        let a = h.add("first", None);
+        let b = h.add("second", None);
+        assert!(!a.is_empty());
+        assert_ne!(a, b);
+        assert_eq!(h.entry_by_id(&a).map(|e| e.text.as_str()), Some("first"));
+        assert_eq!(h.entry_by_id(&b).map(|e| e.text.as_str()), Some("second"));
+        assert!(h.entry_by_id("missing").is_none());
+    }
+
+    #[test]
     fn add_prepends_and_caps() {
         let mut h = History::default();
         for i in 0..(MAX_ENTRIES + 10) {
@@ -388,6 +444,7 @@ mod tests {
         let mut h = History::default();
         let push = |h: &mut History, text: &str, ts: u64, app: Option<&str>| {
             h.entries.push(HistoryEntry {
+                id: String::new(),
                 text: text.to_string(),
                 timestamp_ms: ts,
                 app: app.map(str::to_string),
@@ -413,6 +470,7 @@ mod tests {
         let mut h = History::default();
         let push = |h: &mut History, text: &str| {
             h.entries.push(HistoryEntry {
+                id: String::new(),
                 text: text.to_string(),
                 timestamp_ms: now - 1_000,
                 app: None,
@@ -442,6 +500,7 @@ mod tests {
         let mut h = History::default();
         let push = |h: &mut History, text: &str| {
             h.entries.push(HistoryEntry {
+                id: String::new(),
                 text: text.to_string(),
                 timestamp_ms: now - 1_000,
                 app: None,
@@ -462,11 +521,13 @@ mod tests {
         // Newest entry fills the whole window with one repeated word; the
         // older entry's distinct words must not affect the ratio.
         h.entries.push(HistoryEntry {
+            id: String::new(),
             text: "repeat ".repeat(RICHNESS_WINDOW_WORDS),
             timestamp_ms: now - 1_000,
             app: None,
         });
         h.entries.push(HistoryEntry {
+            id: String::new(),
             text: "several distinct older words".to_string(),
             timestamp_ms: now - MS_PER_DAY,
             app: None,
