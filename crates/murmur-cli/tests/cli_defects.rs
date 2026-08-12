@@ -146,9 +146,16 @@ fn transcribe_on_a_directory_is_a_clear_error() {
 
 /// A build without an STT backend must refuse to transcribe instead of
 /// printing an empty transcript with exit 0, and must not start a download.
-#[cfg(not(any(feature = "full", feature = "cuda", feature = "vulkan")))]
 #[test]
 fn stub_build_refuses_to_transcribe() {
+    // Ask the engine rather than this crate's cfg: `cargo test --workspace`
+    // unifies features, so murmur-app pulls murmur-core/full and the CLI gets
+    // a working backend while murmur-cli's own `full` stays off.
+    let model = murmur_core::config::Settings::default().model;
+    if murmur_core::stt::engine::SttEngine::backend_available(model.backend()) {
+        return;
+    }
+
     let sb = Sandbox::new("stub-transcribe");
     let wav = sb.data_base().join("clip.wav");
     std::fs::write(&wav, b"RIFF").expect("write fixture");
