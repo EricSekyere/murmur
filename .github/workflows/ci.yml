@@ -3,7 +3,8 @@ name: CI
 # Enforces the quality bar from CLAUDE.md on every push and PR: formatting,
 # clippy (-D warnings), tests, a feature-gate regression check, an advisory
 # audit, and a license/ban gate. Runs on the two shipping platforms so a
-# Windows- or Linux-breaking change is caught here, not at release time.
+# Windows- or Linux-breaking change is caught here, not at release time; a
+# merge-gated macOS pass keeps main releasable on the in-progress platform.
 on:
   push:
     branches: [main, production]
@@ -34,12 +35,19 @@ jobs:
           components: rustfmt
       - run: cargo fmt --all --check
 
-  # Feature-gate regression check on the core library. Cheap: with every
-  # optional feature off there is no cpal/enigo/whisper/ORT to build, so this
-  # needs no native toolchain. Guards the "compiles with --no-default-features"
-  # invariant that CLAUDE.md's test matrix requires.
+  # Feature-gate regression checks: the build shapes a --workspace run never
+  # exercises. Feature unification there gives murmur-core every non-GPU
+  # feature (murmur-app defaults to `full`), so two other shapes go untested:
+  #   1. murmur-core with no features at all (the --no-default-features
+  #      invariant CLAUDE.md's test matrix requires), and
+  #   2. each crate built alone with its own defaults, which is what
+  #      `cargo test -p <crate>` and downstream consumers actually get. A test
+  #      once passed CI only because unification supplied a backend the
+  #      crate's own features did not enable.
+  # Still cheap: nothing here builds whisper.cpp or ONNX Runtime, so the only
+  # native deps are the ALSA/X11 headers that cpal and enigo need.
   feature-gates:
-    name: Feature gates (core, no-default-features)
+    name: Feature gates (per-crate build shapes)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -48,10 +56,23 @@ jobs:
           toolchain: "1.93.1"
           components: clippy
       - uses: Swatinem/rust-cache@v2
+      # Needed once the default features are on: cpal wants ALSA headers and
+      # enigo wants libxdo/X11 headers. The no-default-features steps don't
+      # need these, but installing first keeps the job a single flow.
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libasound2-dev libxdo-dev \
+            libx11-dev libxtst-dev libxi-dev libxcb1-dev pkg-config
       - name: Clippy (no default features)
         run: cargo clippy -p murmur-core --no-default-features --all-targets -- -D warnings
       - name: Test (no default features)
         run: cargo test -p murmur-core --no-default-features
+      - name: Test core with its own defaults
+        run: cargo test -p murmur-core
+      - name: Check CLI and MCP built alone
+        run: cargo check -p murmur-cli -p murmur-mcp
 
   # Full-feature clippy + tests on both shipping platforms. The app crate's
   # default feature set is `full` (audio + stt + vad + parakeet + keyboard +
@@ -133,6 +154,46 @@ jobs:
       - name: Test (full features)
         run: cargo test --workspace
 
+  # macOS compile + test gate. Nothing else compiles the ~36
+  # `cfg(target_os = "macos")` sites before release-macos, which runs AFTER
+  # release-windows has already published the GitHub release, so a macOS
+  # compile error used to surface mid-publish as a release with no dmg.
+  #
+  # Runs on push to main and on demand, deliberately NOT on pull_request:
+  # most PRs never touch macOS-only code, Windows already covers the
+  # second-platform role, and this is the slowest job in the matrix, so
+  # putting it on every PR buys little and costs the critical path.
+  # Merge-to-main keeps main releasable and gives feedback hours before a
+  # release rather than during one; anyone touching macOS code can trigger it
+  # by hand on their branch via workflow_dispatch.
+  #
+  # Native arch only (aarch64 on macos-14), not universal: universal is a
+  # packaging concern for release.yml, and a single-arch pass catches the
+  # compile errors this job exists to catch.
+  build-and-test-macos:
+    name: Build & test (macos-14, merge gate)
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+    runs-on: macos-14
+    timeout-minutes: 60
+    env:
+      # Same as release-macos: whisper.cpp's ggml uses std::filesystem, which
+      # AppleClang marks unavailable below macOS 10.15. Keep in sync with
+      # tauri.conf.json's bundle.macOS.minimumSystemVersion.
+      MACOSX_DEPLOYMENT_TARGET: "10.15"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.93.1"
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target"
+      - name: Clippy (full features)
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Test (full features)
+        run: cargo test --workspace
+
   # The release pipeline's version bump, notes, and What's New derivation is
   # plain bash (scripts/release.sh); exercise it here so a regression is caught
   # on PR, not when a release ships with wrong notes. Needs only git + bash.
@@ -148,10 +209,26 @@ jobs:
   # audit requirement with a single, centrally-documented ignore-list; the
   # license check mechanizes the MIT/Apache-only, no-GPL rule.
   deny:
-    name: Advisory, license & ban gate
+    name: Advisory, license & attribution gate
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: EmbarkStudios/cargo-deny-action@v2
         with:
           command: check advisories bans licenses sources
+
+      # The in-app attribution list (licenses.data.js) is generated from
+      # `cargo metadata`; without this check a new dependency ships without
+      # appearing in the About section. It lives in this job rather than its
+      # own because it is the same concern (dependency policy), fires on the
+      # same changes (Cargo.toml/Cargo.lock edits), and needs no toolchain
+      # beyond the runner's cargo, so a separate runner spin-up buys nothing.
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+      - name: Attribution data is current
+        run: |
+          uv run scripts/generate_attributions.py
+          if ! git diff --exit-code -- crates/murmur-app/frontend/js/licenses.data.js; then
+            echo "::error::licenses.data.js is stale. Run 'uv run scripts/generate_attributions.py' and commit the result."
+            exit 1
+          fi
