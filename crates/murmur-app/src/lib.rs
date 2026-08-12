@@ -20,6 +20,7 @@ mod input;
 mod local_api;
 mod meeting_commands;
 mod meeting_worker;
+mod menu;
 mod model_setup;
 pub mod native_actions;
 mod preview;
@@ -400,6 +401,7 @@ fn setup_app(
     focus::spawn_foreground_tracker(app.handle().clone());
 
     tray::build(app)?;
+    menu::build(app)?;
     register_hotkey(app, hotkey);
     command_mode::register_hotkey(app);
     configure_widget(app, show_widget_on_start);
@@ -581,6 +583,19 @@ pub(crate) fn spawn_help_index(app: tauri::AppHandle) {
         let _ = app.emit("help-ready", serde_json::json!({ "ready": true }));
         tracing::info!("Help search ready");
     });
+}
+
+/// Show or hide the floating pill; shared by the tray and the View menu.
+fn toggle_widget(app: &tauri::AppHandle) {
+    if let Some(widget) = app.get_webview_window("widget") {
+        // Visibility toggling is cosmetic; a race with window teardown is
+        // safe to drop.
+        let _ = if widget.is_visible().unwrap_or(false) {
+            widget.hide()
+        } else {
+            widget.show()
+        };
+    }
 }
 
 fn show_main_window(app: &tauri::AppHandle) {

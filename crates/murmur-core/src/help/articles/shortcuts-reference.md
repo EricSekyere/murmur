@@ -16,6 +16,23 @@ toggle mode (the default), one press or double-tap starts and the next
 stops. In hold (push to talk) mode, recording lasts only while you hold
 the key. A short silence after you speak can also auto-stop the session.
 
+## Menu shortcuts
+
+These work while the Murmur window is focused, via the application menu
+(use [[Cmd]] instead of [[Ctrl]] on macOS):
+
+| Action | Shortcut |
+| --- | --- |
+| Start or stop dictation | [[Ctrl+D]] |
+| Copy the last transcript | [[Ctrl+Shift+C]] |
+| Open Settings | [[Ctrl+Comma]] |
+| Switch views (Home through Help) | [[Ctrl+1]] to [[Ctrl+5]] |
+| Open the Help Center | [[F1]] |
+| Quit Murmur | [[Ctrl+Q]] |
+
+> **Tip:** The activation keys above work system-wide; menu shortcuts are
+> a convenience for when you are already in the Murmur window.
+
 ## Spoken commands
 
 Commands fire only when spoken as the entire phrase; inside a sentence

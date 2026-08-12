@@ -188,8 +188,10 @@ pub(crate) fn emit_recording_state(app: &tauri::AppHandle, recording: bool, proc
             processing,
         },
     );
-    // The tray's dictation item tracks the same broadcast the frontend does.
+    // The tray and app-menu dictation items track the same broadcast the
+    // frontend does.
     crate::tray::update_menu(app);
+    crate::menu::update_menu(app);
 }
 
 pub(crate) fn emit_hotkey_error(app: &tauri::AppHandle, message: &str) {

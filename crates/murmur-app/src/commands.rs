@@ -248,8 +248,9 @@ pub(crate) fn clear_history(
             .map_err(|e| e.to_string())?;
     }
     purge_insights(&state);
-    // The tray's Copy Last Transcript item has nothing left to copy.
+    // The Copy Last Transcript items have nothing left to copy.
     crate::tray::update_menu(&app);
+    crate::menu::update_menu(&app);
     Ok(())
 }
 

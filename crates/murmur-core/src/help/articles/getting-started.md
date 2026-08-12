@@ -55,6 +55,23 @@ default). During shorter pauses the session stays live: the pill dims to a
 > **Tip:** Set Session Timeout to 0 to keep listening until you stop it
 > yourself, which is useful for hands-free dictation.
 
+## The application menu
+
+The main window has a menu bar (on macOS it sits in the system menu bar).
+It is the quickest map of what Murmur can do:
+
+| Menu | What you find there |
+| --- | --- |
+| **File** | Settings ([[Ctrl+Comma]]) and Quit ([[Ctrl+Q]]) |
+| **Dictation** | Start or stop dictation, Command Mode, Copy Last Transcript, and start or stop a meeting |
+| **Edit** | The standard undo, redo, cut, copy, paste, and select all |
+| **View** | Jump to any view with [[Ctrl+1]] through [[Ctrl+5]], and toggle the floating pill |
+| **Help** | The built-in Help Center ([[F1]]), the project page, and reporting a problem |
+
+On macOS, Settings, About, and Quit live in the Murmur application menu
+instead of File, following platform convention. Menu shortcuts work while
+a Murmur window is focused; the global dictation hotkey works everywhere.
+
 ## The tray menu
 
 Murmur lives in the system tray, so the main window can stay closed while
