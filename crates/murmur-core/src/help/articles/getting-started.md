@@ -55,6 +55,29 @@ default). During shorter pauses the session stays live: the pill dims to a
 > **Tip:** Set Session Timeout to 0 to keep listening until you stop it
 > yourself, which is useful for hands-free dictation.
 
+## The tray menu
+
+Murmur lives in the system tray, so the main window can stay closed while
+you work. Left-click the tray icon to open the main window, or right-click
+it for the menu:
+
+| Item | What it does |
+| --- | --- |
+| **Start / Stop dictation** | Same toggle as the hotkey; the label follows the current state |
+| **Copy Last Transcript** | Puts your most recent phrase on the clipboard |
+| **Show** | Opens the main window |
+| **Settings** | Opens the main window straight to the Settings view |
+| **Toggle Widget** | Shows or hides the floating pill |
+| **Quit** | Exits Murmur |
+
+The menu also shows the version you are running, and Copy Last Transcript
+stays greyed out until you have dictated something. While a meeting is
+recording, the dictation item reads "Dictation paused (meeting active)"
+because the two modes cannot run at once.
+
+> **Tip:** If dictation landed in the wrong window, use Copy Last
+> Transcript and paste the text where it was meant to go.
+
 ## First-run setup
 
 The first time you open Murmur, a short onboarding walks you through the
