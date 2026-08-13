@@ -4,13 +4,30 @@ on:
   # Build on PRs (covers feature branches) and on pushes to the long-lived
   # branches. Scoping push this way avoids the duplicate run you'd otherwise
   # get when pushing to a branch that already has an open PR.
+  # Doc-only changes skip this heavy bundle build. Only root-level markdown
+  # and docs/ are ignored: markdown under crates/ (the help articles) is
+  # compiled into the app, so it must still trigger a build. Fast required
+  # checks (fmt, deny) live in ci.yml with no path filter, so every PR still
+  # reports.
   push:
     branches: [main, production]
+    paths-ignore:
+      - "*.md"
+      - "docs/**"
   pull_request:
+    paths-ignore:
+      - "*.md"
+      - "docs/**"
   workflow_dispatch:
+
+# A newer push to the same ref supersedes an in-flight run (mirrors ci.yml).
+concurrency:
+  group: build-linux-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build-linux:
+    name: Build Linux bundles (deb + AppImage)
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
