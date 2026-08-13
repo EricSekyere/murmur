@@ -21,7 +21,9 @@ information about you or how you use Murmur.
   speech-to-text engine (whisper.cpp or NVIDIA Parakeet), and delivered as text
   on your machine.
 - During dictation, audio is held in memory only for the duration of
-  processing and is never written to disk.
+  processing and is never written to disk. The most recent few utterances may
+  also be kept in memory until the app exits so a phrase can be re-transcribed
+  from its history entry; that audio is likewise never written to disk.
 - **Meeting mode** is the one exception: when speaker labels are enabled (the
   diarization model is downloaded), meeting audio is temporarily spooled to a
   file in Murmur's config directory so it can be processed after the meeting.

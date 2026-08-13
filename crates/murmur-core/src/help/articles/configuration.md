@@ -110,12 +110,13 @@ API key is never stored in the file; it is read from the
 
 ## Relocating the config directory
 
-For testing, portable setups, or scripted runs, two environment variables
+For testing, portable setups, or scripted runs, three environment variables
 move where Murmur looks for its files. Most users never need these.
 
 | Variable | What it overrides |
 | --- | --- |
 | `MURMUR_CONFIG_DIR` | The system config base; Murmur then uses `<value>/murmur` for its config, history, and related files |
+| `MURMUR_DATA_DIR` | The system data base; Murmur then uses `<value>/murmur` for downloaded models, the ONNX Runtime, and other caches |
 | `MURMUR_HOME_DIR` | The home directory used when writing editor MCP configs such as `~/.cursor/mcp.json` |
 
 > **Note:** Only absolute paths are honored; an empty or relative value is

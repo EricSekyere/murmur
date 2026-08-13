@@ -93,6 +93,7 @@ mod tests {
 
     fn entry(text: &str, timestamp_ms: u64) -> HistoryEntry {
         HistoryEntry {
+            id: String::new(),
             text: text.into(),
             timestamp_ms,
             app: None,

@@ -13,6 +13,11 @@ listen('update-available', (event) => {
   updateBanner.hidden = false;
 });
 
+// Only a check the user asked for emits this, so it always deserves an answer.
+listen('update-none', () => {
+  showToast('Murmur is up to date', 'success');
+});
+
 // Update check failed (offline or feed unreachable): note it gently, once.
 listen('update-check-failed', () => {
   console.warn('Update check failed; updates may not be reaching this install.');

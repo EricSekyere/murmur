@@ -26,7 +26,7 @@ const MAX_TOKENS: usize = 256;
 
 /// Filesystem path where the embedding model is cached.
 pub fn model_path() -> Result<std::path::PathBuf> {
-    let dir = dirs::data_dir()
+    let dir = crate::fsutil::data_base_dir()
         .ok_or_else(|| anyhow::anyhow!("Could not determine data directory"))?
         .join("murmur")
         .join("help");

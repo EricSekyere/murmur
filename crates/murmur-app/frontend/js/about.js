@@ -14,18 +14,85 @@
     document.querySelectorAll('#about-group .btn-small[id^="about-link-"], .about-model-link')
   );
 
+  const dialog = document.getElementById('about-dialog');
+  const dialogCard = dialog ? dialog.querySelector('[role="dialog"]') : null;
+  const dialogVersion = document.getElementById('about-dialog-version');
+  const dialogBuild = document.getElementById('about-dialog-build');
+  const dialogClose = document.getElementById('about-dialog-close');
+  const dialogDetails = document.getElementById('about-dialog-details');
+  const dialogUpdates = document.getElementById('about-dialog-updates');
+  let dialogLastFocused = null;
+
   async function loadInfo() {
     try {
       const info = await invoke('about_info');
       const v = `v${info.version}${info.debug_build ? ' (dev)' : ''}`;
+      const build =
+        `${info.os} ${info.arch} · GPU: ${info.gpu_backend} · Tauri ${info.tauri_version}`;
       versionEl.textContent = v;
       versionChip.textContent = v;
       versionChip.hidden = false;
-      buildLine.textContent =
-        `${info.os} ${info.arch} · GPU: ${info.gpu_backend} · Tauri ${info.tauri_version}`;
+      buildLine.textContent = build;
+      if (dialogVersion) dialogVersion.textContent = v;
+      if (dialogBuild) dialogBuild.textContent = build;
     } catch (err) {
       console.error('Failed to load about info:', err);
     }
+  }
+
+  function openDialog() {
+    if (!dialog) return;
+    dialogLastFocused = document.activeElement;
+    dialog.hidden = false;
+    if (dialogClose) dialogClose.focus();
+  }
+
+  function closeDialog() {
+    if (!dialog) return;
+    dialog.hidden = true;
+    if (dialogLastFocused && typeof dialogLastFocused.focus === 'function') {
+      dialogLastFocused.focus();
+    }
+    dialogLastFocused = null;
+  }
+
+  // Escape closes, and Tab stays inside, matching the command dialogs.
+  function onDialogKeydown(event) {
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      closeDialog();
+      return;
+    }
+    if (event.key !== 'Tab' || !dialogCard) return;
+    const items = Array.from(dialogCard.querySelectorAll('button:not([disabled])'));
+    if (!items.length) return;
+    const first = items[0];
+    const last = items[items.length - 1];
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  }
+
+  function onDialogBackdrop(event) {
+    if (event.target === dialog) closeDialog();
+  }
+
+  function onDetails() {
+    closeDialog();
+    const nav = document.querySelector('.nav__item[data-view="settings"]');
+    if (nav) nav.click();
+    const group = document.getElementById('about-group');
+    if (group) group.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+
+  function onCheckUpdates() {
+    invoke('check_for_updates').catch((err) => {
+      showToast(`Could not check for updates: ${err}`, 'error');
+    });
   }
 
   function onLinkClick(event) {
@@ -83,11 +150,27 @@
   for (const btn of linkButtons) btn.addEventListener('click', onLinkClick);
   copyBtn.addEventListener('click', onCopyDiagnostics);
   licensesEl.addEventListener('toggle', onToggle);
+  if (dialog) {
+    dialogClose.addEventListener('click', closeDialog);
+    dialogDetails.addEventListener('click', onDetails);
+    dialogUpdates.addEventListener('click', onCheckUpdates);
+    dialog.addEventListener('keydown', onDialogKeydown);
+    dialog.addEventListener('click', onDialogBackdrop);
+  }
+  const unlistenAbout = listen('show-about', openDialog);
   loadInfo();
 
   window.addEventListener('beforeunload', () => {
     for (const btn of linkButtons) btn.removeEventListener('click', onLinkClick);
     copyBtn.removeEventListener('click', onCopyDiagnostics);
     licensesEl.removeEventListener('toggle', onToggle);
+    if (dialog) {
+      dialogClose.removeEventListener('click', closeDialog);
+      dialogDetails.removeEventListener('click', onDetails);
+      dialogUpdates.removeEventListener('click', onCheckUpdates);
+      dialog.removeEventListener('keydown', onDialogKeydown);
+      dialog.removeEventListener('click', onDialogBackdrop);
+    }
+    unlistenAbout.then((off) => off()).catch(() => {});
   });
 })();

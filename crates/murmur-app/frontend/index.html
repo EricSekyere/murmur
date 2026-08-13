@@ -1153,6 +1153,23 @@
       </div>
     </div>
 
+    <div id="about-dialog" class="cmdconfirm" hidden>
+      <div class="cmdconfirm__card aboutbox" role="dialog" aria-modal="true"
+           aria-labelledby="about-dialog-title">
+        <h2 class="cmdconfirm__title" id="about-dialog-title">Murmur</h2>
+        <p class="aboutbox__version" id="about-dialog-version">Loading…</p>
+        <p class="aboutbox__build" id="about-dialog-build"></p>
+        <p class="aboutbox__tagline">
+          Fast, private, on-device dictation. Everything runs on your machine.
+        </p>
+        <div class="cmdconfirm__actions">
+          <button type="button" class="btn-small" id="about-dialog-updates">Check for updates</button>
+          <button type="button" class="btn-small" id="about-dialog-details">Details &amp; licences</button>
+          <button type="button" class="model-card__btn" id="about-dialog-close">Close</button>
+        </div>
+      </div>
+    </div>
+
     <!-- Spoken path picker: shown when several indexed paths match a spoken
          "open the … file" query almost equally well. Murmur inserts only the
          candidate the user physically picks. -->

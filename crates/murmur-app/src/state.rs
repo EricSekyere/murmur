@@ -56,6 +56,12 @@ pub(crate) struct AppState {
     pub last_delivered_len: Mutex<usize>,
     /// Persistent, searchable transcription history.
     pub history: Mutex<murmur_core::history::History>,
+    /// Recent utterance audio kept in RAM only, keyed by history entry id, so
+    /// an entry can be re-transcribed. Never written to disk; cleared on
+    /// Clear History and when Save History is turned off.
+    pub retained_audio: Mutex<crate::retained_audio::RetainedAudio>,
+    /// Single-flight flag: at most one re-transcription runs at a time.
+    pub retranscribing: AtomicBool,
     /// Where `history` is saved on disk.
     pub history_path: std::path::PathBuf,
     /// Persistent per-day dictation aggregate. Survives the history cap and
@@ -188,8 +194,10 @@ pub(crate) fn emit_recording_state(app: &tauri::AppHandle, recording: bool, proc
             processing,
         },
     );
-    // The tray's dictation item tracks the same broadcast the frontend does.
+    // The tray and app-menu dictation items track the same broadcast the
+    // frontend does.
     crate::tray::update_menu(app);
+    crate::menu::update_menu(app);
 }
 
 pub(crate) fn emit_hotkey_error(app: &tauri::AppHandle, message: &str) {

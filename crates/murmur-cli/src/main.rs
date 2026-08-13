@@ -14,10 +14,31 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+const AFTER_HELP: &str = "\
+EXAMPLES:
+  murmur transcribe meeting.wav > notes.txt   Batch transcribe to a file
+  murmur listen --stdout | grep TODO          Dictate straight into a pipe
+  murmur index . --max 100                    Show the vocabulary for this project
+  murmur models --list                        See which models are downloaded
+  murmur mcp install --client cursor          Let Cursor read your history
+
+NOTES:
+  Transcription needs a build with the stt feature (cargo install with
+  --features full). Without it, transcribe and listen refuse to run rather
+  than returning empty text.
+
+  Logs go to stderr and transcripts to stdout, so piping is safe. Set
+  RUST_LOG=warn to quieten the logs, or RUST_LOG=debug for more.
+
+  Settings live in a config.toml under your config directory; run
+  'murmur config --show' to print it. MURMUR_CONFIG_DIR and MURMUR_DATA_DIR
+  override where settings and models are kept.";
+
 #[derive(Parser)]
 #[command(name = "murmur")]
 #[command(about = "Voice-to-text for developers", long_about = None)]
 #[command(version)]
+#[command(after_help = AFTER_HELP)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
@@ -26,8 +47,12 @@ struct Cli {
 #[derive(Subcommand)]
 enum Commands {
     /// Start listening for voice input (push-to-talk via global hotkey).
+    ///
+    /// Runs until interrupted. The transcript is typed into the focused
+    /// window unless --stdout is given. Needs a build with the stt feature.
     Listen {
         /// Output to stdout instead of simulating keystrokes.
+        /// Takes precedence over --clipboard.
         #[arg(long)]
         stdout: bool,
 
@@ -56,13 +81,16 @@ enum Commands {
     },
 
     /// Manage configuration.
+    ///
+    /// Only the hotkey is settable here; --show prints the file path for the
+    /// rest. A value the app would reject is refused rather than saved.
     Config {
         /// Show the current configuration.
-        #[arg(long)]
+        #[arg(long, conflicts_with_all = ["reset", "hotkey"])]
         show: bool,
 
         /// Reset configuration to defaults.
-        #[arg(long)]
+        #[arg(long, conflicts_with = "hotkey")]
         reset: bool,
 
         /// Set the global hotkey (e.g., "Ctrl+Shift+Space").
@@ -97,6 +125,8 @@ enum Commands {
     },
 
     /// Index a project and print the ranked codebase vocabulary it would inject.
+    ///
+    /// Honours .gitignore. Read-only: it changes no settings.
     Index {
         /// Project root to scan.
         path: PathBuf,
@@ -148,9 +178,11 @@ impl From<ClientArg> for murmur_mcp::ClientKind {
 #[tokio::main]
 async fn main() -> Result<()> {
     // Logs go to stderr so they never corrupt stdout, which the `mcp`
-    // subcommand uses as the MCP JSON-RPC channel.
+    // subcommand uses as the MCP JSON-RPC channel. Colour only when stderr is
+    // a terminal, so redirected logs stay free of ANSI escapes.
     tracing_subscriber::fmt()
         .with_writer(std::io::stderr)
+        .with_ansi(std::io::IsTerminal::is_terminal(&std::io::stderr()))
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
                 .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
@@ -220,6 +252,15 @@ fn cmd_mcp_install(client: Option<murmur_mcp::ClientKind>) -> Result<()> {
 /// without the STT features and is the cheap way to eyeball the ranking.
 fn cmd_index(path: PathBuf, max: usize) -> Result<()> {
     use murmur_core::indexer::{IndexConfig, index_project_ranked};
+
+    let meta =
+        std::fs::metadata(&path).with_context(|| format!("Cannot access {}", path.display()))?;
+    if !meta.is_dir() {
+        anyhow::bail!(
+            "{} is a file; `murmur index` expects a project directory to scan",
+            path.display()
+        );
+    }
 
     let cfg = IndexConfig {
         max_symbols: max,
@@ -404,9 +445,11 @@ async fn cmd_listen(stdout: bool, clipboard: bool, model_name: Option<String>) -
         None => settings.model,
     };
 
+    ensure_backend_available(model)?;
+
     let model_mgr = ModelManager::new(ModelManager::default_dir()?);
     if !model_mgr.is_downloaded(model) {
-        tracing::info!("Model {} not found, downloading...", model.name());
+        announce_download(model);
         model_mgr.download(model).await?;
     }
 
@@ -508,8 +551,40 @@ fn read_wav(path: &std::path::Path) -> Result<(Vec<f32>, u32, u16)> {
     Ok((samples, spec.sample_rate, spec.channels))
 }
 
+/// Refuse to proceed when this build has no inference backend for `model`,
+/// so a stub engine can never print an empty transcript with exit 0 (or
+/// trigger a model download it cannot use).
+fn ensure_backend_available(model: SttModel) -> Result<()> {
+    if !murmur_core::stt::engine::SttEngine::backend_available(model.backend()) {
+        anyhow::bail!(
+            "This build of murmur cannot run {} (the `{}` backend is compiled out). \
+             Rebuild with `--features full` to enable transcription.",
+            model.name(),
+            model.backend()
+        );
+    }
+    Ok(())
+}
+
+/// Print a notice before an implicit model download so a multi-hundred-MB
+/// fetch never starts silently. Goes to stderr: stdout may carry the transcript.
+fn announce_download(model: SttModel) {
+    eprintln!(
+        "Model {} is not downloaded; fetching about {} MB now (Ctrl+C to abort).",
+        model.name(),
+        model.size_mb()
+    );
+}
+
 /// Transcribe a WAV file offline and print the text to stdout.
 async fn cmd_transcribe(path: PathBuf, model_name: Option<String>) -> Result<()> {
+    if path.is_dir() {
+        anyhow::bail!(
+            "{} is a directory; `murmur transcribe` expects a WAV file",
+            path.display()
+        );
+    }
+
     let settings = Settings::load(&Settings::default_path()?)?;
 
     let model = match model_name {
@@ -524,9 +599,11 @@ async fn cmd_transcribe(path: PathBuf, model_name: Option<String>) -> Result<()>
         None => settings.model,
     };
 
+    ensure_backend_available(model)?;
+
     let model_mgr = ModelManager::new(ModelManager::default_dir()?);
     if !model_mgr.is_downloaded(model) {
-        tracing::info!("Model {} not found, downloading...", model.name());
+        announce_download(model);
         model_mgr.download(model).await?;
     }
     let model_path = model_mgr.model_path(model);
@@ -576,6 +653,14 @@ fn cmd_config(show: bool, reset: bool, hotkey: Option<String>) -> Result<()> {
         let path = Settings::default_path()?;
         let mut settings = Settings::load(&path)?;
         settings.hotkey = hotkey;
+        // Validate before saving: an invalid value written here would make the
+        // next load reject the whole file and reset every setting to defaults.
+        settings.validate().with_context(|| {
+            format!(
+                "Invalid hotkey '{}'; configuration not changed",
+                settings.hotkey
+            )
+        })?;
         settings.save(&path)?;
         println!("Hotkey updated.");
     } else {

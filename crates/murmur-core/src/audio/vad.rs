@@ -269,7 +269,7 @@ const SILERO_VAD_SHA256: &str = "1a153a22f4509e292a94e67d6f9b85e8deb25b4988682b7
 /// Filesystem path where the Silero VAD ONNX model is cached.
 #[cfg(feature = "vad")]
 pub fn model_path() -> Result<std::path::PathBuf> {
-    let dir = dirs::data_dir()
+    let dir = crate::fsutil::data_base_dir()
         .ok_or_else(|| anyhow::anyhow!("Could not determine data directory"))?
         .join("murmur")
         .join("vad");

@@ -109,6 +109,15 @@ struct PreparedAudio {
     duration_secs: f32,
 }
 
+/// Whether a transcription belongs to the live dictation session (reads and
+/// feeds the rolling decoder prompt) or is a detached re-run of retained
+/// audio, which must leave all session state untouched.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PromptContext {
+    Session,
+    Detached,
+}
+
 /// Transcribe an audio buffer and return (text, processing_time_ms), or
 /// None when the chunk is rejected. Infrastructure failures emit
 /// `transcription-error`; benign rejections only emit diagnostics.
@@ -116,12 +125,34 @@ pub(crate) fn transcribe_chunk(
     app: &tauri::AppHandle,
     audio: &murmur_core::audio::AudioBuffer,
 ) -> Option<(String, u64)> {
+    transcribe_with(app, audio, PromptContext::Session)
+}
+
+/// Re-transcription entry point: the same engine, quality gates, vocabulary
+/// correction, and post-processing as live dictation, but with no session
+/// context read or written and nothing delivered anywhere.
+pub(crate) fn transcribe_detached(
+    app: &tauri::AppHandle,
+    audio: &murmur_core::audio::AudioBuffer,
+) -> Option<(String, u64)> {
+    transcribe_with(app, audio, PromptContext::Detached)
+}
+
+fn transcribe_with(
+    app: &tauri::AppHandle,
+    audio: &murmur_core::audio::AudioBuffer,
+    context: PromptContext,
+) -> Option<(String, u64)> {
     let state = app.state::<AppState>();
-    // A matched app profile can override developer mode for this session.
-    let dev_override = *state
-        .session_dev_mode
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    // A matched app profile can override developer mode for this session; a
+    // detached run has no session, so it uses the global settings.
+    let dev_override = match context {
+        PromptContext::Session => *state
+            .session_dev_mode
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()),
+        PromptContext::Detached => None,
+    };
     let (developer_mode, clean_speech, profile, user_vocab, language, translate) = {
         let settings = state.settings.lock().unwrap_or_else(|e| e.into_inner());
         (
@@ -158,12 +189,20 @@ pub(crate) fn transcribe_chunk(
     let non_english = is_non_english_language(&language) && multilingual_model;
 
     let prepared = preprocess(app, audio, &limits)?;
-    let result = run_engine(app, &state, &prepared, &vocabulary, &language, translate)?;
+    let result = run_engine(
+        app,
+        &state,
+        &prepared,
+        &vocabulary,
+        &language,
+        translate,
+        context,
+    )?;
 
     if let Some(reason) =
         quality_reject_reason(&result, &limits, prepared.duration_secs, non_english)
     {
-        return reject(app, &state, reason, &prepared, Some(&result.text));
+        return reject(app, &state, reason, &prepared, Some(&result.text), context);
     }
 
     let text = postprocess_text(&result, developer_mode, clean_speech);
@@ -172,14 +211,16 @@ pub(crate) fn transcribe_chunk(
         return None;
     }
     if let Some(reason) = hallucination_reason(&text, profile, non_english) {
-        return reject(app, &state, reason, &prepared, Some(&text));
+        return reject(app, &state, reason, &prepared, Some(&text), context);
     }
 
     tracing::info!("Transcription accepted ({} chars)", text.chars().count());
     // Transcript only at trace, so debug-level diagnostics never log it.
     tracing::trace!("Accepted text: '{}'", text);
     emit_diag(app, "accepted", "accepted", &prepared);
-    update_session_context(&state, &text);
+    if context == PromptContext::Session {
+        update_session_context(&state, &text);
+    }
     Some((text, result.processing_time_ms))
 }
 
@@ -264,6 +305,7 @@ fn preprocess(
 
 /// Run inference with the running session transcript as decoder prompt
 /// (whisper.cpp's streaming pattern for cross-phrase consistency).
+#[allow(clippy::too_many_arguments)]
 fn run_engine(
     app: &tauri::AppHandle,
     state: &AppState,
@@ -271,6 +313,7 @@ fn run_engine(
     vocabulary: &[String],
     language: &str,
     translate: bool,
+    context: PromptContext,
 ) -> Option<TranscriptionResult> {
     let mut engine_guard = state.engine.lock().unwrap_or_else(|e| e.into_inner());
     let Some(engine) = engine_guard.as_mut() else {
@@ -284,11 +327,16 @@ fn run_engine(
     engine.set_vocabulary(vocabulary);
     engine.set_language(Some(language.to_string()));
     engine.set_translate(translate);
-    let prev = state
-        .session_prev_text
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .clone();
+    // A detached re-run decodes without the live session's rolling prompt:
+    // the utterance stands alone, exactly as a fresh session's first phrase.
+    let prev = match context {
+        PromptContext::Session => state
+            .session_prev_text
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone(),
+        PromptContext::Detached => String::new(),
+    };
     engine.set_initial_prompt((!prev.is_empty()).then_some(prev));
 
     tracing::info!(
@@ -584,14 +632,19 @@ fn reject(
     reason: &str,
     prepared: &PreparedAudio,
     text: Option<&str>,
+    context: PromptContext,
 ) -> Option<(String, u64)> {
     tracing::warn!("Rejected phrase ({})", reason);
     tracing::trace!("Rejected text ({}): {:?}", reason, text.unwrap_or(""));
-    state
-        .session_prev_text
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .clear();
+    // A detached re-run owns no session state, so it must not clear the live
+    // decoder context on rejection.
+    if context == PromptContext::Session {
+        state
+            .session_prev_text
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clear();
+    }
     emit_diag(app, "rejected", reason, prepared);
     None
 }
