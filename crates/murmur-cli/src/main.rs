@@ -32,7 +32,11 @@ NOTES:
 
   Settings live in a config.toml under your config directory; run
   'murmur config --show' to print it. MURMUR_CONFIG_DIR and MURMUR_DATA_DIR
-  override where settings and models are kept.";
+  override where settings and models are kept.
+
+  A missing model is normally downloaded on demand. Pass --no-download to
+  transcribe/listen (or set MURMUR_NO_DOWNLOAD=1) to fail cleanly instead;
+  the error names the 'murmur models --download' command to run.";
 
 #[derive(Parser)]
 #[command(name = "murmur")]
@@ -63,13 +67,19 @@ enum Commands {
         /// STT model to use (e.g. whisper-small-en, parakeet-tdt-06b-v2).
         #[arg(long, short)]
         model: Option<String>,
+
+        /// Fail instead of downloading a missing model
+        /// (MURMUR_NO_DOWNLOAD=1 has the same effect).
+        #[arg(long)]
+        no_download: bool,
     },
 
     /// Transcribe a WAV file and print the text to stdout.
     ///
     /// Non-interactive: reads the file, resamples to 16 kHz mono, runs STT,
     /// and prints the transcript. Useful for batch processing and for
-    /// verifying an STT backend (e.g. a GPU build) end to end.
+    /// verifying an STT backend (e.g. a GPU build) end to end. Reads the
+    /// config but never creates or modifies it.
     Transcribe {
         /// Path to a WAV file. Any sample rate / channel count is accepted
         /// (it is resampled to 16 kHz mono before inference).
@@ -78,12 +88,19 @@ enum Commands {
         /// STT model to use (e.g. whisper-base-en). Defaults to the configured model.
         #[arg(long, short)]
         model: Option<String>,
+
+        /// Fail instead of downloading a missing model
+        /// (MURMUR_NO_DOWNLOAD=1 has the same effect).
+        #[arg(long)]
+        no_download: bool,
     },
 
     /// Manage configuration.
     ///
     /// Only the hotkey is settable here; --show prints the file path for the
     /// rest. A value the app would reject is refused rather than saved.
+    /// --show never modifies the file: an invalid config is reported as an
+    /// error instead of being reset to defaults.
     Config {
         /// Show the current configuration.
         #[arg(long, conflicts_with_all = ["reset", "hotkey"])]
@@ -189,7 +206,6 @@ async fn main() -> Result<()> {
         )
         .init();
 
-    murmur_core::config::Settings::migrate_from_voitex();
     let cli = Cli::parse();
 
     match cli.command {
@@ -197,8 +213,13 @@ async fn main() -> Result<()> {
             stdout,
             clipboard,
             model,
-        } => cmd_listen(stdout, clipboard, model).await?,
-        Commands::Transcribe { path, model } => cmd_transcribe(path, model).await?,
+            no_download,
+        } => cmd_listen(stdout, clipboard, model, no_download).await?,
+        Commands::Transcribe {
+            path,
+            model,
+            no_download,
+        } => cmd_transcribe(path, model, no_download).await?,
         Commands::Config {
             show,
             reset,
@@ -421,7 +442,14 @@ fn build_test_stream(
     Ok(stream)
 }
 
-async fn cmd_listen(stdout: bool, clipboard: bool, model_name: Option<String>) -> Result<()> {
+async fn cmd_listen(
+    stdout: bool,
+    clipboard: bool,
+    model_name: Option<String>,
+    no_download: bool,
+) -> Result<()> {
+    // Interactive desktop use: first run may legitimately create the config.
+    Settings::migrate_from_voitex();
     let config_path = Settings::default_path()?;
     let settings = Settings::load(&config_path)?;
 
@@ -448,10 +476,7 @@ async fn cmd_listen(stdout: bool, clipboard: bool, model_name: Option<String>) -
     ensure_backend_available(model)?;
 
     let model_mgr = ModelManager::new(ModelManager::default_dir()?);
-    if !model_mgr.is_downloaded(model) {
-        announce_download(model);
-        model_mgr.download(model).await?;
-    }
+    ensure_model_present(&model_mgr, model, no_download).await?;
 
     let model_path = model_mgr.model_path(model);
 
@@ -484,12 +509,12 @@ async fn cmd_listen(stdout: bool, clipboard: bool, model_name: Option<String>) -
     loop {
         match hotkey_rx.recv() {
             Ok(murmur_core::hotkey::HotkeyEvent::Pressed) => {
-                tracing::info!("Hotkey pressed — recording...");
+                tracing::info!("Hotkey pressed, recording...");
                 println!("Recording...");
                 capture.start(settings.audio_device.as_deref(), settings.echo_cancellation)?;
             }
             Ok(murmur_core::hotkey::HotkeyEvent::Released) => {
-                tracing::info!("Hotkey released — transcribing...");
+                tracing::info!("Hotkey released, transcribing...");
                 let audio = capture.stop()?;
 
                 if audio.samples.is_empty() {
@@ -576,8 +601,52 @@ fn announce_download(model: SttModel) {
     );
 }
 
+const NO_DOWNLOAD_ENV: &str = "MURMUR_NO_DOWNLOAD";
+
+/// Whether implicit model downloads are refused for this invocation, and by
+/// what: the `--no-download` flag or a non-empty, non-"0" MURMUR_NO_DOWNLOAD.
+fn download_refused_by(no_download_flag: bool) -> Option<&'static str> {
+    if no_download_flag {
+        return Some("--no-download");
+    }
+    match std::env::var(NO_DOWNLOAD_ENV) {
+        Ok(v) if !v.is_empty() && v != "0" => Some(NO_DOWNLOAD_ENV),
+        _ => None,
+    }
+}
+
+/// Ensure `model` is on disk, downloading it unless downloads are refused.
+/// A refusal is a clean, actionable failure: it names the model, its size,
+/// and the exact command that fetches it.
+async fn ensure_model_present(
+    model_mgr: &ModelManager,
+    model: SttModel,
+    no_download: bool,
+) -> Result<()> {
+    if model_mgr.is_downloaded(model) {
+        return Ok(());
+    }
+    if let Some(cause) = download_refused_by(no_download) {
+        anyhow::bail!(
+            "Model {} ({} MB) is not downloaded, and {} forbids downloading it now. \
+             Fetch it first with:\n  murmur models --download {}",
+            model.id(),
+            model.size_mb(),
+            cause,
+            model.id()
+        );
+    }
+    announce_download(model);
+    model_mgr.download(model).await?;
+    Ok(())
+}
+
 /// Transcribe a WAV file offline and print the text to stdout.
-async fn cmd_transcribe(path: PathBuf, model_name: Option<String>) -> Result<()> {
+async fn cmd_transcribe(
+    path: PathBuf,
+    model_name: Option<String>,
+    no_download: bool,
+) -> Result<()> {
     if path.is_dir() {
         anyhow::bail!(
             "{} is a directory; `murmur transcribe` expects a WAV file",
@@ -585,7 +654,10 @@ async fn cmd_transcribe(path: PathBuf, model_name: Option<String>) -> Result<()>
         );
     }
 
-    let settings = Settings::load(&Settings::default_path()?)?;
+    // Read-only config access: decoding a WAV must work on a read-only
+    // filesystem, so a missing or corrupt config yields defaults without
+    // creating, backing up, or rewriting anything.
+    let settings = Settings::load_readonly(&Settings::default_path()?);
 
     let model = match model_name {
         Some(name) => SttModel::from_name(&name).ok_or_else(|| {
@@ -602,10 +674,7 @@ async fn cmd_transcribe(path: PathBuf, model_name: Option<String>) -> Result<()>
     ensure_backend_available(model)?;
 
     let model_mgr = ModelManager::new(ModelManager::default_dir()?);
-    if !model_mgr.is_downloaded(model) {
-        announce_download(model);
-        model_mgr.download(model).await?;
-    }
+    ensure_model_present(&model_mgr, model, no_download).await?;
     let model_path = model_mgr.model_path(model);
 
     let (raw, rate, channels) = read_wav(&path)?;
@@ -640,10 +709,9 @@ async fn cmd_transcribe(path: PathBuf, model_name: Option<String>) -> Result<()>
 }
 
 fn cmd_config(show: bool, reset: bool, hotkey: Option<String>) -> Result<()> {
+    Settings::migrate_from_voitex();
     if show {
-        let path = Settings::default_path()?;
-        let settings = Settings::load(&path)?;
-        println!("{}", toml::to_string_pretty(&settings)?);
+        cmd_config_show()?;
     } else if reset {
         let path = Settings::default_path()?;
         let settings = Settings::default();
@@ -667,6 +735,32 @@ fn cmd_config(show: bool, reset: bool, hotkey: Option<String>) -> Result<()> {
         println!("Use --show, --reset, or --hotkey to manage config.");
     }
     Ok(())
+}
+
+/// Print the configuration without ever modifying it. A missing file shows
+/// the built-in defaults; an invalid file is reported and the command fails,
+/// leaving the file (and no backup) exactly as it was.
+fn cmd_config_show() -> Result<()> {
+    let path = Settings::default_path()?;
+    if !path.exists() {
+        eprintln!(
+            "No config file at {} yet; showing built-in defaults.",
+            path.display()
+        );
+        println!("{}", toml::to_string_pretty(&Settings::default())?);
+        return Ok(());
+    }
+    match Settings::load_strict(&path) {
+        Ok(settings) => {
+            println!("{}", toml::to_string_pretty(&settings)?);
+            Ok(())
+        }
+        Err(e) => Err(e.context(format!(
+            "Config at {} is unreadable or invalid. The file was not modified; \
+             fix it by hand or run `murmur config --reset` to replace it with defaults",
+            path.display()
+        ))),
+    }
 }
 
 async fn cmd_models(list: bool, download: Option<String>) -> Result<()> {

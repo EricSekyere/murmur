@@ -6,10 +6,13 @@ Windows, `~/.config/murmur` on Linux, and `~/Library/Application Support/murmur`
 on macOS. The Settings view edits this file for you, but you can also edit
 it by hand while the app is closed.
 
-> **Note:** Saves are atomic, and if the file is ever corrupt Murmur backs
-> it up to `config.toml.bak` and restarts from defaults rather than failing
-> to launch. A config directory from the app's old name, `voitex`, is
-> migrated automatically on first run.
+> **Note:** Saves are atomic, and if the file is ever corrupt the desktop
+> app backs it up to `config.toml.bak` and restarts from defaults rather
+> than failing to launch. Read-only consumers (`murmur config --show`,
+> `murmur transcribe`, and the MCP server) never create, rewrite, or back
+> up the file; `--show` reports a corrupt file as an error instead. A
+> config directory from the app's old name, `voitex`, is migrated
+> automatically on first run.
 
 ## Recording and activation
 
@@ -130,6 +133,7 @@ Most settings appear in the Settings view, but a couple are file-only:
 `clipboard_placeholders` and `silence_rms_threshold` are edited here when
 you need them.
 
-> **Warning:** If a value you enter is out of range, Murmur rejects the
-> file on load, backs it up, and starts from defaults, so keep a copy of
-> a heavily customized config.
+> **Warning:** If a value you enter is out of range, the desktop app
+> rejects the file on load, backs it up, and starts from defaults, so keep
+> a copy of a heavily customized config. `murmur config --show` is a safe
+> way to check an edit: it reports an invalid file without touching it.
