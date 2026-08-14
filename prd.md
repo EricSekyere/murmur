@@ -3,8 +3,8 @@
 ## 1.0 Executive Summary
 
 **Product Name:** Murmur
-**Status:** Shipping on Windows and Linux (v0.5.1). See Section 1.5 for what is built versus still planned.
-**Date:** Originally drafted February 18, 2026; last reviewed July 2026.
+**Status:** Shipping on Windows, Linux, and macOS. See Section 1.5 for what is built versus still planned, and the releases page for the current version.
+**Date:** Originally drafted February 18, 2026; last reviewed August 2026.
 
 **Objective:** Build an open-source, privacy-first, cross-platform voice-to-text desktop tool designed for developers and general users. Murmur will accurately transcribe technical jargon, integrate natively with AI coding agents (Cursor, Claude Code, Gemini, etc.), map spoken directory references to real file paths, and work equally well for non-coding tasks like documentation, email, and chat.
 
@@ -23,7 +23,7 @@ Murmur will enable developers to compose prompts for AI agents, write documentat
 
 ---
 
-## 1.5 Current Implementation Status (v0.17.0)
+## 1.5 Current Implementation Status (v0.22.0)
 
 This PRD was written as a forward-looking plan. The product has since shipped on Windows, but it took a different path than the original phases: dictation quality and live-preview UX were prioritized, while the heavier "code intelligence" and per-agent integration epics have not been built. This section is the source of truth for what exists today; the phase plans further down are kept for historical context and remaining direction.
 
@@ -54,6 +54,13 @@ This PRD was written as a forward-looking plan. The product has since shipped on
 - **MCP additions:** `wait_for_next_dictation` and `request_dictation` (the latter triggers voice capture in the running app via a local file handshake).
 - **Dashboard growth:** activity heatmap, daily word goal, personal records, filler-word rate, vocabulary diversity.
 - **Dictation niceties:** spoken emoji, spoken Conventional Commit messages, clipboard splicing by voice, phonetic vocabulary correction, resumable model downloads, per-app auto-submit.
+
+### Shipped since v0.17
+- **App shell maturity.** A native application menu on the main window and a tray menu that acts as a real command surface, an About dialog reporting version and build, third-party licence attribution, and an on-demand "check for updates" alongside the existing startup check.
+- **Re-transcribe.** Re-run a recent dictation against a different model from memory. Audio stays in RAM and is never written to disk, so the privacy guarantee in PRIVACY.md holds unchanged.
+- **Help browsing.** Articles can be browsed by category rather than only found by search, including a walkthrough of the MCP server.
+- **Snippets with a spoken argument**, and a reworked dashboard layout.
+- **CLI correctness.** Read-only commands no longer write to the config directory, `config --show` rejects a corrupt config instead of silently overwriting it, and `--no-download` (or `MURMUR_NO_DOWNLOAD`) lets a script refuse a model fetch.
 
 ### Not yet built (still aspirational in this document)
 - **Distinct coding / prose / command modes as a full mode system** (F6, Epic 2.4). A transcription profile setting and a command mode exist, but not the complete tri-mode design.
