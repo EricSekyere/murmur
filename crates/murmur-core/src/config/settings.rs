@@ -725,6 +725,15 @@ impl Settings {
         })
     }
 
+    /// Parse and validate an existing config file with no fallback and no
+    /// disk writes: a missing, unreadable, or invalid file is an error.
+    ///
+    /// For read paths that must report a broken file to the user instead of
+    /// silently substituting defaults (e.g. `murmur config --show`).
+    pub fn load_strict(path: &PathBuf) -> Result<Self> {
+        Self::read_and_validate(path)
+    }
+
     fn read_and_validate(path: &PathBuf) -> Result<Self> {
         let content = std::fs::read_to_string(path)?;
         let mut settings: Settings = toml::from_str(&content)?;

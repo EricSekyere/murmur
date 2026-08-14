@@ -31,12 +31,23 @@ impl Sandbox {
     }
 
     fn run(&self, args: &[&str]) -> Output {
-        Command::new(env!("CARGO_BIN_EXE_murmur"))
-            .args(args)
+        self.run_with_env(args, &[])
+    }
+
+    fn run_with_env(&self, args: &[&str], env: &[(&str, &str)]) -> Output {
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_murmur"));
+        cmd.args(args)
             .env("MURMUR_CONFIG_DIR", self.config_base())
             .env("MURMUR_DATA_DIR", self.data_base())
-            .output()
-            .expect("spawn murmur binary")
+            .env_remove("MURMUR_NO_DOWNLOAD");
+        for (k, v) in env {
+            cmd.env(k, v);
+        }
+        cmd.output().expect("spawn murmur binary")
+    }
+
+    fn config_file(&self) -> PathBuf {
+        self.config_base().join("murmur").join("config.toml")
     }
 }
 
@@ -212,6 +223,150 @@ fn models_list_respects_data_dir_override() {
     assert!(
         !line.contains("not downloaded"),
         "override dir contents must be reported as downloaded: {line}"
+    );
+}
+
+/// `transcribe` is a read path: it must never create a config file, even on
+/// a first run with no config at all.
+#[test]
+fn transcribe_does_not_create_a_config_file() {
+    let sb = Sandbox::new("transcribe-no-config");
+    let wav = sb.data_base().join("clip.wav");
+    std::fs::write(&wav, b"RIFF").expect("write fixture");
+
+    // --no-download keeps the full-featured build off the network; the stub
+    // build fails earlier at the backend check. Both fail after config load.
+    let out = sb.run(&[
+        "transcribe",
+        wav.to_str().expect("utf8 path"),
+        "--no-download",
+    ]);
+    assert!(!out.status.success(), "expected failure, got: {out:?}");
+    assert!(
+        !sb.config_file().exists(),
+        "transcribe must not create a config file"
+    );
+}
+
+/// `config --show` on a corrupt file must report the problem and leave the
+/// file byte-for-byte intact: no rewrite, no .bak, non-zero exit.
+#[test]
+fn config_show_on_corrupt_file_neither_rewrites_nor_backs_up() {
+    let sb = Sandbox::new("show-corrupt");
+    let file = sb.config_file();
+    std::fs::create_dir_all(file.parent().expect("parent")).expect("mkdir");
+    std::fs::write(&file, "not [valid toml").expect("write corrupt config");
+
+    let out = sb.run(&["config", "--show"]);
+    assert!(
+        !out.status.success(),
+        "showing a corrupt config must exit non-zero: {out:?}"
+    );
+    assert!(
+        stderr_text(&out).contains("unreadable or invalid"),
+        "error must name the broken file: {}",
+        stderr_text(&out)
+    );
+    assert_eq!(
+        std::fs::read_to_string(&file).expect("read"),
+        "not [valid toml",
+        "the corrupt file must be left untouched"
+    );
+    assert!(
+        !file.with_extension("toml.bak").exists(),
+        "no backup may be created by a read command"
+    );
+}
+
+/// `config --show` with no file prints defaults, says so, and creates nothing.
+#[test]
+fn config_show_without_a_file_prints_defaults_and_creates_nothing() {
+    let sb = Sandbox::new("show-missing");
+    let out = sb.run(&["config", "--show"]);
+    assert!(
+        out.status.success(),
+        "missing config is not an error: {out:?}"
+    );
+    assert!(
+        stdout_text(&out).contains("hotkey"),
+        "defaults must be printed: {}",
+        stdout_text(&out)
+    );
+    assert!(
+        stderr_text(&out).contains("defaults"),
+        "the user must be told these are defaults: {}",
+        stderr_text(&out)
+    );
+    assert!(!sb.config_file().exists(), "no config file may be created");
+}
+
+/// With downloads refused, a missing model is a clean, actionable failure:
+/// non-zero exit, no fetch, and a message naming the model, size, and command.
+#[test]
+fn no_download_refuses_model_fetch_with_actionable_error() {
+    let sb = Sandbox::new("no-download");
+    let wav = sb.data_base().join("clip.wav");
+    std::fs::write(&wav, b"RIFF").expect("write fixture");
+    let wav = wav.to_str().expect("utf8 path");
+
+    for (args, env) in [
+        (&["transcribe", wav, "--no-download"][..], &[][..]),
+        (&["transcribe", wav][..], &[("MURMUR_NO_DOWNLOAD", "1")][..]),
+    ] {
+        let out = sb.run_with_env(args, env);
+        assert!(
+            !out.status.success(),
+            "{args:?} must exit non-zero: {out:?}"
+        );
+        assert!(
+            !sb.data_base().join("murmur").exists(),
+            "no download may start for {args:?}"
+        );
+
+        // The refusal message only fires when a backend exists; a stub build
+        // correctly fails earlier with its own rebuild instruction.
+        let model = murmur_core::config::Settings::default().model;
+        if murmur_core::stt::engine::SttEngine::backend_available(model.backend()) {
+            let err = stderr_text(&out);
+            assert!(err.contains(model.id()), "must name the model: {err}");
+            assert!(
+                err.contains(&format!("{} MB", model.size_mb())),
+                "must state the size: {err}"
+            );
+            assert!(
+                err.contains(&format!("murmur models --download {}", model.id())),
+                "must give the exact fetch command: {err}"
+            );
+        }
+    }
+}
+
+/// Purely informational invocations must not touch the filesystem: the
+/// voitex migration only runs for commands that actually load settings.
+#[test]
+fn help_and_version_do_not_run_the_voitex_migration() {
+    let sb = Sandbox::new("help-no-migrate");
+    let voitex = sb.config_base().join("voitex");
+    std::fs::create_dir_all(&voitex).expect("mkdir");
+    std::fs::write(voitex.join("config.toml"), "save_history = true").expect("write");
+
+    for args in [&["--help"][..], &["--version"][..]] {
+        let out = sb.run(args);
+        assert!(out.status.success(), "{args:?} must succeed");
+        assert!(
+            voitex.exists() && !sb.config_base().join("murmur").exists(),
+            "{args:?} must not migrate or create config dirs"
+        );
+    }
+
+    // A command that loads settings still migrates the legacy directory.
+    let out = sb.run(&["config", "--show"]);
+    assert!(out.status.success(), "show after migration: {out:?}");
+    assert!(!voitex.exists(), "config --show must run the migration");
+    assert!(
+        stdout_text(&out).contains("save_history = true"),
+        "migrated settings must be shown: {}",
+        stdout_text(&out)
     );
 }
 
