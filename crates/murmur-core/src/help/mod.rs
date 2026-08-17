@@ -89,6 +89,10 @@ pub fn articles() -> Vec<(&'static str, &'static str)> {
             include_str!("articles/microphone-audio.md"),
         ),
         (
+            "Always listening",
+            include_str!("articles/always-listening.md"),
+        ),
+        (
             "Privacy and your data",
             include_str!("articles/privacy-data.md"),
         ),
@@ -330,6 +334,38 @@ mod tests {
         assert!(body.contains("config.toml"));
         assert!(article_body("configuration reference").is_none());
         assert!(article_body("No such article").is_none());
+    }
+
+    #[test]
+    fn always_listening_article_covers_required_topics() {
+        let body = article_body("Always listening").expect("Always listening article is bundled");
+        let lower = body.to_lowercase();
+        assert!(
+            lower.contains("wake phrase"),
+            "article should explain the wake phrase"
+        );
+        assert!(lower.contains("armed"), "article should explain armed mode");
+        assert!(
+            lower.contains("embeddings") || lower.contains("fingerprints"),
+            "article should describe embeddings or fingerprints held in memory"
+        );
+        assert!(
+            lower.contains("sensitivity"),
+            "article should cover sensitivity levels"
+        );
+        assert!(
+            lower.contains("silent")
+                && (lower.contains("4 second")
+                    || lower.contains("~4")
+                    || lower.contains("4 s")
+                    || lower.contains("four second")),
+            "article should describe the ~4 second silent abort"
+        );
+        assert!(
+            lower.contains("hey murmur")
+                && (lower.contains("cannot be changed") || lower.contains("cannot change")),
+            "article should say Hey Murmur cannot be changed"
+        );
     }
 
     #[test]
