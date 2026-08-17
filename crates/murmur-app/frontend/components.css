@@ -1305,7 +1305,6 @@ footer {
 
   .ambient { animation: none; }
   .mic-btn--idle { animation: none; }
-  .mic-btn--armed { animation: none; }
   .mic-btn--recording { animation: none; }
   .mic-wrapper--recording .mic-ring { animation: none; opacity: 0.4; }
   .mic-wrapper--processing .mic-ring { animation: none; opacity: 0.4; }

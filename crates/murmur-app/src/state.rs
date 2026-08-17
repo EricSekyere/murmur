@@ -212,15 +212,6 @@ pub(crate) fn emit_recording_state(app: &tauri::AppHandle, recording: bool, proc
     crate::menu::update_menu(app);
 }
 
-/// Emit a `wake-state` event to all windows. Driven only by the worker's own
-/// armed-state events (via `wake_supervisor`), so the indicator can never say
-/// "armed" while the stream is closed, or vice versa.
-pub(crate) fn emit_wake_state(app: &tauri::AppHandle, armed: bool) {
-    let _ = app.emit("wake-state", serde_json::json!({ "armed": armed }));
-    crate::tray::update_menu(app);
-    crate::menu::update_menu(app);
-}
-
 pub(crate) fn emit_hotkey_error(app: &tauri::AppHandle, message: &str) {
     let _ = app.emit("hotkey-error", serde_json::json!({ "error": message }));
 }

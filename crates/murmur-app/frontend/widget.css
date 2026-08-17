@@ -1,13 +1,10 @@
 /* ─── Murmur pill · the "ripple" ─────────────────────────────────────────────
    One signature motion (a ripple from the orb) runs through every state, but
    states are told apart by SHAPE + MOTION, never colour alone:
-     idle      filled core + breathe     armed      static outlined orb
-     listening rings expand + calm wave  recording  filled orb + fast rings + wave
-     processing rotor (solid)            loading    rotor (dashed)
-     error     collapse to a blinking glyph
+     idle      breathe          listening  rings expand + calm wave
+     recording fast rings + wave processing rotor (solid)
+     loading   rotor (dashed)   error      collapse to a blinking glyph
      locate    triple beacon
-   Armed vs recording must stay distinct in greyscale: hollow static ring vs
-   filled pulsing core plus waveform. Colour may reinforce, never discriminate.
    The OS window (176x50, grows to 320x128 for the caption) hugs the top-left,
    so the pill never shifts on screen when the caption opens. The ripple stays
    contained in the orb so nothing clips at the small window edges. */
@@ -94,16 +91,6 @@ body { display:flex; align-items:flex-start; justify-content:flex-start; padding
 /* ═══ States (set as s-* on #widget by widget.js) ═══════════════════════════ */
 .s-idle .core { background:var(--signal); }
 .s-idle .ring.r1 { animation:breathe 3.4s var(--eo) infinite; }
-
-/* Armed: a hollow, motionless orb. No waveform, no breathe, no pulse — the
-   empty centre is the greyscale tell against idle's filled core and
-   recording's filled core + wave. */
-.s-armed .core {
-  width:13px; height:13px; background:transparent; box-shadow:none; animation:none;
-  border:2px solid var(--bone);
-}
-.s-armed .ring { opacity:0; animation:none; }
-.s-armed .wave { display:none; }
 
 .s-listening .core { background:var(--signal-1); box-shadow:0 0 10px color-mix(in oklch, var(--signal-1), transparent 30%); }
 .s-listening .ring.r1 { animation:breathe 2.6s var(--eo) infinite; }
@@ -218,9 +205,6 @@ body { display:flex; align-items:flex-start; justify-content:flex-start; padding
   .s-processing .arc, .s-loading .arc { opacity:1; transform:rotate(135deg); }
   .s-processing .label::after, .s-loading .label::after { animation:none; content:"…"; }
   .s-error .glyph { opacity:1; }
-  /* Generic reduced-motion rings would look like idle; keep armed a hollow orb. */
-  .s-armed .ring { opacity:0 !important; }
-  .s-armed .core { width:13px; height:13px; background:transparent; border:2px solid var(--bone); }
   .s-recording .wave i:nth-child(1) { height:7px; } .s-recording .wave i:nth-child(2) { height:13px; }
   .s-recording .wave i:nth-child(3) { height:5px; } .s-recording .wave i:nth-child(4) { height:15px; }
   .s-recording .wave i:nth-child(5) { height:9px; } .s-recording .wave i:nth-child(6) { height:11px; }

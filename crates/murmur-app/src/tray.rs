@@ -20,16 +20,6 @@ pub(crate) struct TrayMenu {
     copy_last: MenuItem<Wry>,
     #[cfg(feature = "wake")]
     always_listening: CheckMenuItem<Wry>,
-    tray: tauri::tray::TrayIcon<Wry>,
-}
-
-/// Tray glyph selected from worker-confirmed state. Missing variant = compile
-/// error at every `match` (the indicator cannot silently skip a state).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum TrayIcon {
-    Idle,
-    Armed,
-    Recording,
 }
 
 /// What the dictation item should show for a given app state.
@@ -59,67 +49,6 @@ pub(crate) fn dictation_item(recording: bool, meeting_active: bool) -> Dictation
             label: "Start dictation",
             enabled: true,
         }
-    }
-}
-
-/// Recording wins, then armed, then idle. A meeting owns the mic: never show
-/// Armed while one is active, even if `wake_armed` is stale.
-fn tray_icon_kind(recording: bool, wake_armed: bool, meeting_active: bool) -> TrayIcon {
-    if recording {
-        TrayIcon::Recording
-    } else if wake_armed && !meeting_active {
-        TrayIcon::Armed
-    } else {
-        TrayIcon::Idle
-    }
-}
-
-fn tray_icon_asset_path(icon: TrayIcon) -> &'static str {
-    match icon {
-        TrayIcon::Idle => "icons/32x32.png",
-        TrayIcon::Armed => "icons/tray-armed.png",
-        TrayIcon::Recording => "icons/tray-recording.png",
-    }
-}
-
-fn tray_icon_png_bytes(icon: TrayIcon) -> &'static [u8] {
-    match icon {
-        TrayIcon::Idle => include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/icons/32x32.png")),
-        TrayIcon::Armed => {
-            include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/icons/tray-armed.png"))
-        }
-        TrayIcon::Recording => include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/icons/tray-recording.png"
-        )),
-    }
-}
-
-fn set_tray_icon(app: &AppHandle, icon: TrayIcon) {
-    let Some(items) = app.try_state::<TrayMenu>() else {
-        return;
-    };
-    tracing::debug!(
-        path = tray_icon_asset_path(icon),
-        ?icon,
-        "updating tray icon"
-    );
-    let image = match Image::from_bytes(tray_icon_png_bytes(icon)) {
-        Ok(img) => img.to_owned(),
-        Err(e) => {
-            tracing::warn!(error = %e, ?icon, "failed to decode tray icon");
-            return;
-        }
-    };
-    if let Err(e) = items.tray.set_icon(Some(image.clone())) {
-        tracing::warn!(error = %e, ?icon, "failed to set tray icon");
-    }
-    // tauri.conf.json also constructs a tray with id "main"; keep it in sync
-    // so a leftover config icon cannot show a stale state.
-    if let Some(main) = app.tray_by_id("main")
-        && let Err(e) = main.set_icon(Some(image))
-    {
-        tracing::warn!(error = %e, ?icon, "failed to set config tray icon");
     }
 }
 
@@ -214,7 +143,7 @@ pub(crate) fn build(app: &mut tauri::App) -> tauri::Result<()> {
         Image::new_owned(vec![0, 0, 0, 0], 1, 1)
     });
 
-    let tray = TrayIconBuilder::new()
+    TrayIconBuilder::new()
         .icon(icon)
         .menu(&menu)
         .show_menu_on_left_click(false)
@@ -252,7 +181,6 @@ pub(crate) fn build(app: &mut tauri::App) -> tauri::Result<()> {
         copy_last: copy_i,
         #[cfg(feature = "wake")]
         always_listening: always_listening_i,
-        tray,
     });
 
     // History loaded at startup may already have entries; sync item states.
@@ -261,8 +189,8 @@ pub(crate) fn build(app: &mut tauri::App) -> tauri::Result<()> {
 }
 
 /// Re-derive the state-dependent items from `AppState`. Hooked into the
-/// existing broadcast points (`emit_recording_state`, `emit_wake_state`, the
-/// meeting worker's `meeting-state` emits, history clearing) rather than polling.
+/// existing broadcast points (`emit_recording_state`, the meeting worker's
+/// `meeting-state` emits, history clearing) rather than polling.
 pub(crate) fn update_menu(app: &AppHandle) {
     let (Some(items), Some(state)) = (app.try_state::<TrayMenu>(), app.try_state::<AppState>())
     else {
@@ -272,7 +200,6 @@ pub(crate) fn update_menu(app: &AppHandle) {
     let meeting = state
         .meeting_active
         .load(std::sync::atomic::Ordering::Acquire);
-    let wake_armed = state.wake_armed.load(std::sync::atomic::Ordering::Acquire);
     let item = dictation_item(recording, meeting);
     // Cosmetic updates; the menu can already be torn down mid-exit, so a
     // failure here is safe to drop.
@@ -294,7 +221,6 @@ pub(crate) fn update_menu(app: &AppHandle) {
             .wake_word_enabled;
         let _ = items.always_listening.set_checked(checked);
     }
-    set_tray_icon(app, tray_icon_kind(recording, wake_armed, meeting));
 }
 
 /// Copy the newest history entry to the clipboard: the recovery move when
@@ -394,50 +320,5 @@ mod tests {
         // disagree, the safe rendering is the disabled meeting label.
         let item = dictation_item(true, true);
         assert!(!item.enabled);
-    }
-
-    #[test]
-    fn set_tray_icon_maps_variants_to_distinct_assets() {
-        let idle = tray_icon_asset_path(TrayIcon::Idle);
-        let armed = tray_icon_asset_path(TrayIcon::Armed);
-        let recording = tray_icon_asset_path(TrayIcon::Recording);
-        assert_ne!(idle, armed);
-        assert_ne!(idle, recording);
-        assert_ne!(armed, recording);
-        for path in [idle, armed, recording] {
-            let bytes = std::fs::read(format!("{}/{}", env!("CARGO_MANIFEST_DIR"), path))
-                .unwrap_or_else(|e| panic!("missing tray asset {path}: {e}"));
-            assert!(bytes.starts_with(b"\x89PNG"), "{path} must be a PNG");
-        }
-        assert_ne!(
-            tray_icon_png_bytes(TrayIcon::Idle),
-            tray_icon_png_bytes(TrayIcon::Armed)
-        );
-        assert_ne!(
-            tray_icon_png_bytes(TrayIcon::Idle),
-            tray_icon_png_bytes(TrayIcon::Recording)
-        );
-        assert_ne!(
-            tray_icon_png_bytes(TrayIcon::Armed),
-            tray_icon_png_bytes(TrayIcon::Recording)
-        );
-    }
-
-    #[test]
-    fn tray_icon_priority_recording_then_armed_then_idle() {
-        assert_eq!(tray_icon_kind(false, false, false), TrayIcon::Idle);
-        assert_eq!(tray_icon_kind(false, true, false), TrayIcon::Armed);
-        assert_eq!(tray_icon_kind(true, false, false), TrayIcon::Recording);
-        assert_eq!(tray_icon_kind(true, true, false), TrayIcon::Recording);
-    }
-
-    #[test]
-    fn meeting_does_not_show_armed() {
-        // Supervisor disarms for meetings; if the flags ever disagree,
-        // recording still wins, otherwise idle — never Armed on a meeting mic.
-        assert_eq!(tray_icon_kind(false, true, true), TrayIcon::Idle);
-        assert_eq!(tray_icon_kind(true, true, true), TrayIcon::Recording);
-        assert_eq!(tray_icon_kind(true, false, true), TrayIcon::Recording);
-        assert_eq!(tray_icon_kind(false, false, true), TrayIcon::Idle);
     }
 }

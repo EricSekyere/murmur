@@ -48,8 +48,6 @@ function hideCaption() {
 // States map to an s-<name> class on #widget. "listening" and "recording" are
 // both active dictation; the pill arms as `listening` and the backend's
 // audio-signal-detected promotes it to `recording` (label → mono timer).
-// Always-listening rest is `armed` (static outlined orb) — not dictation.
-// Precedence matches the tray: recording > armed > idle.
 let currentState = 'idle';
 // Monotonic token: every state change bumps it so a delayed revert (error /
 // loading flash) can detect it is stale and skip stomping a newer state.
@@ -59,36 +57,6 @@ let recordStart = 0;
 let heardSpeech = false;
 
 const ACTIVE = new Set(['listening', 'recording']);
-// Worker-confirmed armed flag (wake-state / get_status.wake_armed), not the
-// settings toggle. Recording wins; armed is never treated as active dictation.
-let armed = false;
-let recording = false;
-
-const unlistens = [];
-function onEvent(name, handler) {
-  const p = listen(name, handler);
-  unlistens.push(p);
-  return p;
-}
-
-function restName() {
-  return armed ? 'armed' : 'idle';
-}
-
-function restLabel() {
-  return armed ? 'armed' : 'murmur';
-}
-
-function applyRestState() {
-  applyState(restName(), restLabel());
-}
-
-/** Apply recording > armed > idle unless a session or a flash is showing. */
-function syncArmedIndicator() {
-  if (recording || ACTIVE.has(currentState) || currentState === 'processing') return;
-  if (currentState === 'error' || currentState === 'loading') return;
-  applyRestState();
-}
 
 function setLabel(text) {
   label.textContent = text;
@@ -115,12 +83,12 @@ function applyState(name, text) {
   micBtn.setAttribute('aria-label', ACTIVE.has(name) ? 'Stop recording' : 'Start recording');
 }
 
-/** Show a transient state, then fall back to armed/idle unless something newer happened. */
+/** Show a transient state, then fall back to idle unless something newer happened. */
 function flashState(name, text, ms) {
   applyState(name, text);
   const token = stateToken;
   setTimeout(() => {
-    if (stateToken === token) applyRestState();
+    if (stateToken === token) applyState('idle', 'murmur');
   }, ms);
 }
 
@@ -167,7 +135,7 @@ let signalLevel = 0.002;
 // event (rapid events stay debounced, per the UI guidelines).
 let lastSignalMs = 0;
 
-onEvent('speech-threshold', (event) => {
+listen('speech-threshold', (event) => {
   if (typeof event.payload === 'number' && event.payload > 0) {
     signalLevel = event.payload;
   }
@@ -184,12 +152,12 @@ function dormancySuppressed() {
   return commandMode || outputSuppressed;
 }
 
-onEvent('command-mode-changed', (event) => {
+listen('command-mode-changed', (event) => {
   commandMode = !!event.payload?.active;
   if (dormancySuppressed() && isWaitingNow()) leaveWaiting();
 });
 
-onEvent('output-suppressed', (event) => {
+listen('output-suppressed', (event) => {
   outputSuppressed = !!event.payload?.suppressed;
   if (dormancySuppressed() && isWaitingNow()) leaveWaiting();
 });
@@ -246,7 +214,7 @@ micBtn.addEventListener('click', async () => {
   }
 });
 
-onEvent('audio-level', (event) => {
+listen('audio-level', (event) => {
   if (typeof event.payload !== 'number' || !ACTIVE.has(currentState)) return;
   if (event.payload >= signalLevel) noteSignalActivity();
   // Perceptual lift: speech RMS is small, so raise it toward 1 for the bars.
@@ -254,7 +222,7 @@ onEvent('audio-level', (event) => {
   widget.style.setProperty('--amp', amp.toFixed(3));
 });
 
-onEvent('audio-signal-detected', () => {
+listen('audio-signal-detected', () => {
   heardSpeech = true;
   noteSignalActivity();
   if (currentState === 'listening') {
@@ -265,43 +233,41 @@ onEvent('audio-signal-detected', () => {
 
 // When the caption roams to the active window, the pill must not grow its own.
 let captionAtWindow = false;
-onEvent('caption-mode', (event) => {
+listen('caption-mode', (event) => {
   captionAtWindow = !!event.payload?.at_window;
   if (captionAtWindow) hideCaption();
 });
 
-onEvent('streaming-partial', (event) => {
+listen('streaming-partial', (event) => {
   const text = event.payload?.text;
   if (!text || !ACTIVE.has(currentState) || captionAtWindow) return;
   showCaption(text);
 });
 
-onEvent('streaming-phrase', (event) => {
+listen('streaming-phrase', (event) => {
   const text = event.payload?.text;
   if (!text || !ACTIVE.has(currentState) || captionAtWindow) return;
   // Keep the confirmed phrase on screen until the next interim replaces it.
   showCaption(text);
 });
 
-onEvent('recording-state', (event) => {
-  const { recording: isRecording, processing } = event.payload;
-  recording = !!isRecording;
+listen('recording-state', (event) => {
+  const { recording, processing } = event.payload;
   if (recording) {
     // Arm as listening; audio-signal-detected promotes to recording.
     if (!ACTIVE.has(currentState)) applyState('listening', 'listening');
   } else if (processing) {
     applyState('processing', 'thinking');
   } else {
-    applyRestState();
+    applyState('idle', 'murmur');
   }
 });
 
-onEvent('hotkey-error', (event) => {
+listen('hotkey-error', (event) => {
   const msg = event.payload?.error || '';
-  // "No speech" is an expected outcome, not an error, so rest quietly.
+  // "No speech" is an expected outcome, not an error, so go idle quietly.
   if (msg.includes('No speech')) {
-    recording = false;
-    applyRestState();
+    applyState('idle', 'murmur');
     return;
   }
   if (msg.includes('still loading')) {
@@ -311,21 +277,20 @@ onEvent('hotkey-error', (event) => {
   flashState('error', 'error', 2200);
 });
 
-onEvent('streaming-done', () => {
-  recording = false;
-  applyRestState();
+listen('streaming-done', () => {
+  applyState('idle', 'murmur');
 });
 
 // "Find pill" from the dashboard: flash the locate beacon so the user can spot
 // the widget. A transient overlay class on top of the current state.
-onEvent('locate-pill', () => {
+listen('locate-pill', () => {
   widget.classList.remove('is-locating');
   void widget.offsetWidth; // reflow so re-adding restarts the animation
   widget.classList.add('is-locating');
   setTimeout(() => widget.classList.remove('is-locating'), 2600);
 });
 
-onEvent('transcription-error', (event) => {
+listen('transcription-error', (event) => {
   const msg = event.payload?.error || 'transcription error';
   console.error('Transcription error:', msg);
   // Ignore chunk-level warnings while actively recording.
@@ -333,32 +298,15 @@ onEvent('transcription-error', (event) => {
   flashState('error', 'error', 2200);
 });
 
-onEvent('wake-state', (event) => {
-  armed = !!event.payload?.armed;
-  syncArmedIndicator();
-});
-
-window.addEventListener('beforeunload', () => {
-  for (const p of unlistens) {
-    p.then((off) => off()).catch(() => {});
-  }
-});
-
-// If the widget (re)loads mid-session or while armed, reflect the real
-// backend state instead of assuming idle. Listeners are already live, so a
-// stale snapshot must not write recording=false over a session that started
-// while get_status was in flight.
+// If the widget (re)loads mid-session, reflect the real backend state instead
+// of assuming idle.
 (async () => {
   try {
     const status = await invoke('get_status');
     captionAtWindow = status?.caption_position === 'window';
-    armed = !!status?.wake_armed;
-    if (status?.recording) {
-      recording = true;
+    if (status && status.recording) {
       applyState('recording');
       label.classList.add('mono');
-    } else {
-      syncArmedIndicator();
     }
   } catch (_) {
     // Backend not ready yet, so stay idle; events will correct us.
