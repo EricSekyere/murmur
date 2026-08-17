@@ -80,6 +80,19 @@ pub(crate) fn about_info(app: tauri::AppHandle) -> serde_json::Value {
     })
 }
 
+/// A local build carries the `.dev` identifier so it can run beside an install.
+pub(crate) fn is_dev_build(app: &tauri::AppHandle) -> bool {
+    app.config().identifier.ends_with(".dev")
+}
+
+pub(crate) fn display_name(app: &tauri::AppHandle) -> &'static str {
+    if is_dev_build(app) {
+        "Murmur Dev"
+    } else {
+        "Murmur"
+    }
+}
+
 /// Open one of the curated About links in the system browser.
 #[tauri::command]
 pub(crate) fn open_about_link(id: String) -> Result<(), String> {

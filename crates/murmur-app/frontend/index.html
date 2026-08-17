@@ -574,6 +574,27 @@
                     <span class="toggle-switch__slider"></span>
                   </label>
                 </div>
+                <div class="settings-row" id="wake-word-row" hidden>
+                  <div class="settings-row__text">
+                    <label class="settings-label" for="wake-word-toggle">Always listening (&quot;Hey Murmur&quot;)</label>
+                    <span class="settings-hint" id="wake-word-hint">Say &quot;Hey Murmur&quot; to start dictating. While armed, Murmur holds at most 1 second of audio and a few seconds of non-reversible audio fingerprints in memory. Nothing is written to disk.</span>
+                  </div>
+                  <label class="toggle-switch">
+                    <input type="checkbox" id="wake-word-toggle">
+                    <span class="toggle-switch__slider"></span>
+                  </label>
+                </div>
+                <div class="settings-row" id="wake-sensitivity-row" hidden>
+                  <div class="settings-row__text">
+                    <label class="settings-label" for="wake-sensitivity-select">Wake sensitivity</label>
+                    <span class="settings-hint">Higher fires more readily in noise; lower means fewer false triggers.</span>
+                  </div>
+                  <select id="wake-sensitivity-select" class="settings-select">
+                    <option value="low">Low</option>
+                    <option value="medium" selected>Medium</option>
+                    <option value="high">High</option>
+                  </select>
+                </div>
               </div>
 
               <!-- Mic Sensitivity -->

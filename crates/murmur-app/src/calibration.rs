@@ -59,7 +59,17 @@ pub(crate) fn calibrate(
     } else {
         0.0
     };
+    from_ambient(ambient_rms, configured_threshold, echo_cancellation)
+}
 
+/// Derive gain and speech threshold from a measured ambient floor. Shared by
+/// startup calibration and the wake path's prearmed start, which measured
+/// its ambient during the armed loop instead of pausing to calibrate.
+pub(crate) fn from_ambient(
+    ambient_rms: f32,
+    configured_threshold: f32,
+    echo_cancellation: bool,
+) -> Calibration {
     // Boost quiet mics so detection, the UI level meter, and STT all see
     // usable levels. Capped at 5x: more amplifies the noise floor into
     // whisper-hallucination territory. The echo-cancelled path is already

@@ -9,6 +9,9 @@ pub mod loopback;
 pub mod pulse_aec;
 pub mod silence;
 pub mod vad;
+pub mod wake;
+#[cfg(feature = "wake")]
+pub mod wake_onnx;
 #[cfg(feature = "audio")]
 pub(crate) mod warm;
 #[cfg(all(feature = "audio", windows))]

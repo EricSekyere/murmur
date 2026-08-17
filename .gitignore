@@ -43,3 +43,19 @@ crates/murmur-app/.tauri-signing-key.key.pub
 
 # CI-generated Windows signing config fragment (Trusted Signing)
 crates/murmur-app/.winsign.conf.json
+
+# Python (wake-word training pipeline)
+**/__pycache__/
+.pytest_cache/
+training/wake-word/.venv/
+training/wake-word/data/
+training/wake-word/output/
+training/wake-word/.pytest_cache/
+*.egg-info/
+
+# Training run artifacts
+training/wake-word/train.log
+training/wake-word/data/
+training/wake-word/output/
+
+training/wake-word/eval.log

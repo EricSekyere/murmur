@@ -1,6 +1,6 @@
 # Privacy Policy
 
-**Effective date:** June 18, 2026
+**Effective date:** August 14, 2026
 
 This Privacy Policy explains how **Murmur** (the "Software"), a local-first
 desktop dictation application provided by **Eric S.** ("we," "us," "our"),
@@ -29,6 +29,15 @@ information about you or how you use Murmur.
   file in Murmur's config directory so it can be processed after the meeting.
   That file is deleted immediately after processing, on any error, and, if the app crashed mid-meeting, swept on the next launch. It never leaves your
   machine and there is no setting that retains it.
+- **Always-listening mode** (off by default): while armed, Murmur holds in
+  memory a rolling audio window of at most one second, less than one further
+  frame of audio (under 80 milliseconds) waiting to be scored, and a few
+  seconds of derived audio fingerprints (mel-spectrogram frames and
+  96-dimensional embeddings, which are not reconstructible audio) so it can
+  hear the wake phrase. Nothing is written
+  to disk, nothing leaves your machine, and all of it is discarded the moment
+  the mode is disarmed or the app exits. The wake-word model files are
+  downloaded and checksum-verified like any other model.
 - Transcribed text is typed into whichever application you have focused. It is
   never transmitted to us or any third party.
 

@@ -105,6 +105,7 @@ settingsToggle.addEventListener('click', async () => {
     if (status.mic_warm_start != null) {
       micWarmStartToggle.checked = status.mic_warm_start;
     }
+    applyWakeStatus(status);
     if (status.context_injection_enabled != null) {
       contextInjectionToggle.checked = status.context_injection_enabled;
     }
@@ -583,6 +584,82 @@ micWarmStartToggle.addEventListener('change', async () => {
       : 'Instant mic start off', 'success');
   } catch (err) {
     micWarmStartToggle.checked = !enabled;
+    showToast(`Failed: ${err}`, 'error');
+  }
+});
+
+// --- Always listening ("Hey Murmur") ---
+
+const WAKE_HINT_DEFAULT = wakeWordHint.textContent;
+let wakeDownloaded = false;
+let wakeDownloadMb = 0;
+
+// Rows render only when the build can wake; the size line appears before
+// the first enable so the download is never a surprise.
+function applyWakeStatus(status) {
+  const available = !!status.wake_available;
+  wakeWordRow.hidden = !available;
+  wakeSensitivityRow.hidden = !available;
+  if (!available) return;
+  wakeDownloaded = !!status.wake_downloaded;
+  wakeDownloadMb = status.wake_download_mb || 0;
+  if (status.wake_word_enabled != null) {
+    wakeWordToggle.checked = status.wake_word_enabled;
+  }
+  if (status.wake_word_sensitivity) {
+    wakeSensitivitySelect.value = status.wake_word_sensitivity;
+  }
+  wakeWordHint.textContent = wakeDownloaded
+    ? WAKE_HINT_DEFAULT
+    : `${WAKE_HINT_DEFAULT} First enable downloads 3 model files (${wakeDownloadMb} MB total).`;
+}
+
+listen('wake-download-progress', (event) => {
+  const { label, percent, done } = event.payload || {};
+  if (done) {
+    wakeWordHint.textContent = WAKE_HINT_DEFAULT;
+    return;
+  }
+  const pct = percent != null ? ` ${percent}%` : '';
+  wakeWordHint.textContent = `Downloading ${label || 'wake models'}…${pct}`;
+});
+
+// The supervisor can turn the setting off (models missing, arm failure);
+// re-fetch so the toggle never lies about the persisted state.
+listen('settings-changed', async () => {
+  try {
+    applyWakeStatus(await invoke('get_status'));
+  } catch (err) {
+    console.error('Failed to refresh wake settings:', err);
+  }
+});
+
+wakeWordToggle.addEventListener('change', async () => {
+  const enabled = wakeWordToggle.checked;
+  try {
+    if (enabled && !wakeDownloaded) {
+      wakeWordToggle.disabled = true;
+      await invoke('download_wake_models');
+      wakeDownloaded = true;
+    }
+    await invoke('update_settings', { wake_word_enabled: enabled });
+    showToast(enabled
+      ? 'Always listening on: say "Hey Murmur" to start dictating'
+      : 'Always listening off', 'success');
+  } catch (err) {
+    wakeWordToggle.checked = !enabled;
+    wakeWordHint.textContent = WAKE_HINT_DEFAULT;
+    showToast(`Failed: ${err}`, 'error');
+  } finally {
+    wakeWordToggle.disabled = false;
+  }
+});
+
+wakeSensitivitySelect.addEventListener('change', async () => {
+  try {
+    await invoke('update_settings', { wake_word_sensitivity: wakeSensitivitySelect.value });
+    showToast(`Wake sensitivity: ${wakeSensitivitySelect.value}`, 'success');
+  } catch (err) {
     showToast(`Failed: ${err}`, 'error');
   }
 });

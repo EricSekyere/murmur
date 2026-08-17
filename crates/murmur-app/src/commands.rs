@@ -48,7 +48,7 @@ pub(crate) fn set_output_suppressed(
 }
 
 #[tauri::command]
-pub(crate) fn get_status(state: State<'_, AppState>) -> serde_json::Value {
+pub(crate) fn get_status(app: tauri::AppHandle, state: State<'_, AppState>) -> serde_json::Value {
     let recording = *state.recording.lock().unwrap_or_else(|e| e.into_inner());
     let settings = state
         .settings
@@ -103,6 +103,15 @@ pub(crate) fn get_status(state: State<'_, AppState>) -> serde_json::Value {
         "mcp_dictation_enabled": settings.mcp_dictation_enabled,
         "local_api_enabled": settings.local_api_enabled,
         "mic_warm_start": settings.mic_warm_start,
+        "wake_word_enabled": settings.wake_word_enabled,
+        "wake_word_sensitivity": settings.wake_word_sensitivity,
+        // Compile-time capability vs runtime artifact presence: the toggle
+        // renders only when the build can wake, and the first enable offers
+        // the download when the models aren't on disk yet.
+        "wake_available": cfg!(feature = "wake"),
+        "wake_downloaded": wake_models_ready(),
+        "wake_download_mb": wake_download_mb(),
+        "wake_armed": state.wake_armed.load(std::sync::atomic::Ordering::Acquire),
         "context_injection_enabled": settings.context_injection_enabled,
         "codebase_vocab_enabled": settings.indexer.enabled,
         "codebase_vocab_roots": settings
@@ -117,9 +126,8 @@ pub(crate) fn get_status(state: State<'_, AppState>) -> serde_json::Value {
             .unwrap_or_else(|e| e.into_inner())
             .len(),
         "app_version": env!("CARGO_PKG_VERSION"),
-        // Debug builds are visually identical to installed releases; the UI
-        // shows a badge so a dev build is never mistaken for production.
-        "debug_build": cfg!(debug_assertions),
+        // Local builds are optimised, so the identifier decides, not the profile.
+        "debug_build": cfg!(debug_assertions) || crate::about::is_dev_build(&app),
         "whats_new_seen": settings.whats_new_seen_version,
         "command_mode": state
             .command_mode
@@ -132,6 +140,62 @@ pub(crate) fn get_status(state: State<'_, AppState>) -> serde_json::Value {
         "meeting_diarization_supported": cfg!(feature = "diarization"),
         "meeting_diarization_ready": crate::meeting_commands::diarization_model_ready(),
     })
+}
+
+/// Runtime check for the three wake model files (honours the dev override).
+#[cfg(feature = "wake")]
+pub(crate) fn wake_models_ready() -> bool {
+    murmur_core::audio::wake::resolved_model_paths()
+        .map(|p| p.melspectrogram.exists() && p.embedding.exists() && p.head.exists())
+        .unwrap_or(false)
+}
+
+#[cfg(not(feature = "wake"))]
+fn wake_models_ready() -> bool {
+    false
+}
+
+/// Combined wake model download size in MB, shown before the first enable.
+#[cfg(feature = "wake")]
+fn wake_download_mb() -> u64 {
+    murmur_core::audio::wake::TOTAL_DOWNLOAD_BYTES / (1024 * 1024)
+}
+
+#[cfg(not(feature = "wake"))]
+fn wake_download_mb() -> u64 {
+    0
+}
+
+/// Download the three wake model files, streaming progress to the settings
+/// page as `wake-download-progress` events.
+#[tauri::command]
+pub(crate) async fn download_wake_models(app: tauri::AppHandle) -> Result<(), String> {
+    #[cfg(feature = "wake")]
+    {
+        use tauri::Emitter;
+        let progress_app = app.clone();
+        murmur_core::audio::wake::download(move |label, done, total| {
+            let percent = total
+                .filter(|t| *t > 0)
+                .map(|t| ((done * 100) / t).min(100) as u8);
+            let _ = progress_app.emit(
+                "wake-download-progress",
+                serde_json::json!({ "label": label, "percent": percent, "done": false }),
+            );
+        })
+        .await
+        .map_err(|e| e.to_string())?;
+        let _ = app.emit(
+            "wake-download-progress",
+            serde_json::json!({ "label": "", "percent": 100, "done": true }),
+        );
+        Ok(())
+    }
+    #[cfg(not(feature = "wake"))]
+    {
+        let _ = app;
+        Err("This build does not include wake-word support".to_string())
+    }
 }
 
 /// Record that the user has seen this version's "What's New" highlights, so the
@@ -437,6 +501,49 @@ pub(crate) fn set_developer_mode(state: State<'_, AppState>, enabled: bool) -> R
     Ok(())
 }
 
+/// Tray check item and settings page share this so `wake_word_enabled` has
+/// one persist path — no parallel flag.
+#[cfg(feature = "wake")]
+pub(crate) fn set_wake_word_enabled(app: tauri::AppHandle, enabled: bool) -> Result<(), String> {
+    let state = app.state::<AppState>();
+    update_settings(
+        app.clone(),
+        state,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        Some(enabled),
+        None,
+    )
+}
+
 /// Update one or more settings fields and persist to config.
 ///
 /// `rename_all = "snake_case"`: Tauri looks invoke args up by the camelCase of
@@ -478,6 +585,8 @@ pub(crate) fn update_settings(
     local_api_enabled: Option<bool>,
     context_injection_enabled: Option<bool>,
     mic_warm_start: Option<bool>,
+    wake_word_enabled: Option<bool>,
+    wake_word_sensitivity: Option<String>,
 ) -> Result<(), String> {
     let mut settings = state.settings.lock().unwrap_or_else(|e| e.into_inner());
     // Only warn about a model/language mismatch if those fields were touched.
@@ -697,6 +806,14 @@ pub(crate) fn update_settings(
     if let Some(mw) = mic_warm_start {
         settings.mic_warm_start = mw;
     }
+    let wake_touched = wake_word_enabled.is_some() || wake_word_sensitivity.is_some();
+    let wake_was_enabled = settings.wake_word_enabled;
+    if let Some(we) = wake_word_enabled {
+        settings.wake_word_enabled = we;
+    }
+    if let Some(ref ws) = wake_word_sensitivity {
+        settings.wake_word_sensitivity = parse_wake_sensitivity(ws)?;
+    }
 
     // Same gate the loader uses, so the UI can't persist a config it would reject.
     settings.clamp_collections();
@@ -724,7 +841,37 @@ pub(crate) fn update_settings(
             echo_cancellation: settings.echo_cancellation,
         });
     }
+
+    // Reconcile the armed state with the new wake settings. A sensitivity
+    // change while armed needs a disarm first so the re-arm picks up the new
+    // threshold; sync() alone would see armed == desired and do nothing.
+    if wake_touched {
+        let sensitivity_changed_while_on =
+            wake_word_sensitivity.is_some() && wake_was_enabled && settings.wake_word_enabled;
+        drop(settings);
+        crate::tray::update_menu(&app);
+        let _ = app.emit("settings-changed", serde_json::json!({}));
+        if sensitivity_changed_while_on && let Some(audio) = state.audio.get() {
+            // Disarm only. The event pump re-arms with the new threshold when
+            // the worker reports it is idle, which a timer here could not know.
+            let _ = audio.send_disarm();
+        } else {
+            crate::wake_supervisor::sync(&app);
+        }
+    }
     Ok(())
+}
+
+fn parse_wake_sensitivity(s: &str) -> Result<murmur_core::audio::wake::WakeSensitivity, String> {
+    use murmur_core::audio::wake::WakeSensitivity;
+    match s {
+        "low" => Ok(WakeSensitivity::Low),
+        "medium" => Ok(WakeSensitivity::Medium),
+        "high" => Ok(WakeSensitivity::High),
+        other => Err(format!(
+            "wake_word_sensitivity must be low, medium, or high, got '{other}'"
+        )),
+    }
 }
 
 /// Validate, register, and persist a new hotkey, restoring the old binding
