@@ -5,16 +5,19 @@ at all of them, so Low, Medium and High collapsed onto two thresholds and no
 change to the head could have moved the report. Candidate thresholds are now
 drawn from the positive scores themselves, and each named point is the most
 sensitive threshold inside its own false-accept budget.
+
+These cover selection only, which now runs on the validation half. Background
+scores arrive as one list per file, so a single continuous recording is `[scores]`.
 """
 
 from __future__ import annotations
 
 import numpy as np
 
-from wake_word_training.evaluate_lib import (
-    _candidate_thresholds,
-    _operating_points,
-    _threshold_curve,
+from wake_word_training.calibration import (
+    calibrate,
+    candidate_thresholds,
+    threshold_curve,
 )
 from wake_word_training.gates import FALSE_ACCEPT_BUDGETS, OPERATING_POINT_NAMES
 
@@ -45,16 +48,19 @@ def _background(seed: int) -> list[float]:
     return list(scores)
 
 
+def _calibrated(positives, background, hours: float = BACKGROUND_HOURS) -> dict:
+    return {c.name: c for c in calibrate(positives, [background], hours)}
+
+
 def _points(seed: int) -> dict:
-    curve = _threshold_curve(_positives(seed), _background(seed + 1), BACKGROUND_HOURS)
-    return {p.name: p for p in _operating_points(curve)}
+    return _calibrated(_positives(seed), _background(seed + 1))
 
 
 def test_candidates_reach_where_the_positives_actually_are() -> None:
     # A head calibrated into a narrow band gets two usable grid points out of
     # 19; the quantile candidates put a threshold between every pair of clips.
     positives = list(np.random.default_rng(1).uniform(0.90, 0.999, 500))
-    inside = [t for t in _candidate_thresholds(positives) if 0.90 <= t <= 0.999]
+    inside = [t for t in candidate_thresholds(positives) if 0.90 <= t <= 0.999]
     assert len(inside) > 19, f"only {len(inside)} candidates inside the score band"
 
 
@@ -67,14 +73,14 @@ def test_candidates_reach_the_thin_top_of_the_background() -> None:
         np.concatenate([rng.uniform(0.0, 0.05, 20_000), rng.uniform(0.9, 0.99, 200)])
     )
     positives = list(rng.uniform(0.995, 0.999, 500))
-    candidates = _candidate_thresholds(positives, background)
+    candidates = candidate_thresholds(positives, background)
     between = [t for t in candidates if 0.95 < t < 0.995]
     assert len(between) >= 5, f"only {len(between)} candidates in the gap"
 
 
 def test_recall_moves_across_the_sweep() -> None:
-    curve = _threshold_curve(_positives(2), _background(3), BACKGROUND_HOURS)
-    recalls = {round(recall, 3) for _t, _fa, recall in curve}
+    curve = threshold_curve(_positives(2), [_background(3)], BACKGROUND_HOURS)
+    recalls = {round(point.recall, 3) for point in curve}
     assert len(recalls) > 20, f"recall took only {len(recalls)} values"
     assert max(recalls) > 0.9 and min(recalls) < 0.1
 
@@ -102,12 +108,7 @@ def test_three_distinct_points_survive_a_thin_background_tail() -> None:
     )
     rng.shuffle(background)
     positives = list(rng.uniform(0.9835, 0.986, 500))
-    points = {
-        p.name: p
-        for p in _operating_points(
-            _threshold_curve(positives, background, BACKGROUND_HOURS)
-        )
-    }
+    points = _calibrated(positives, background)
     assert len({p.threshold for p in points.values()}) == 3
 
 
@@ -116,12 +117,7 @@ def test_a_pinned_head_is_reported_as_one_point_not_three() -> None:
     # nothing to trade, and the report must not dress that up as a curve.
     positives = [1.0] * 300 + [0.0] * 300
     background = [0.0] * 19_000 + [1.0] * 1_000
-    points = {
-        p.name: p
-        for p in _operating_points(
-            _threshold_curve(positives, background, BACKGROUND_HOURS)
-        )
-    }
+    points = _calibrated(positives, background)
     assert len({p.recall for p in points.values()}) == 1
 
 
@@ -129,12 +125,6 @@ def test_an_unaffordable_curve_still_reports_a_measured_number() -> None:
     # Background pinned at the top: no threshold can buy its way under any
     # budget, and the report must say so with a measured number.
     positives = list(np.random.default_rng(8).uniform(0.9, 1.0, 100))
-    background = [1.0] * BACKGROUND_WINDOWS
-    points = {
-        p.name: p
-        for p in _operating_points(
-            _threshold_curve(positives, background, BACKGROUND_HOURS)
-        )
-    }
+    points = _calibrated(positives, [1.0] * BACKGROUND_WINDOWS)
     assert points["Medium"].false_accepts_per_hour > FALSE_ACCEPT_BUDGETS["Medium"]
     assert np.isfinite(points["Medium"].false_accepts_per_hour)

@@ -5,7 +5,13 @@ evaluation and the Rust runtime fed natural-level audio, and false accepts
 went from 6.6/hour to 493/hour. These tests pin the properties that prevent
 a recurrence: the training view of a clip is the serve view at some level,
 the level applied is a clip-independent gain rather than a normalisation,
-and both train_lib and evaluate_lib actually call the shared functions.
+and both train_lib and the scorer actually call the shared functions.
+
+`serve_window` itself was the blind spot in that set. Every test here compares
+training against serving, so all of them pass when a transform is added *inside*
+the shared function: both sides call it, and the Rust runtime that mirrors it
+does not. `test_serve_window_*` therefore constrain the function absolutely
+rather than relatively. It may seat audio in a window and nothing else.
 """
 
 from __future__ import annotations
@@ -15,7 +21,7 @@ from types import SimpleNamespace
 
 import numpy as np
 
-from wake_word_training import evaluate_lib, windows as windows_lib
+from wake_word_training import scores as scores_lib, windows as windows_lib
 from wake_word_training.background import EVALUATION, TRAIN, background_role
 from wake_word_training.audio import (
     GAIN_DB_MAX,
@@ -28,6 +34,7 @@ from wake_word_training.audio import (
     write_wav,
 )
 from wake_word_training.features import MIN_HEAD_WINDOW_SAMPLES
+from wake_word_training.scoring import Models, score_file
 
 
 def _clip(scale: float, seed: int = 11) -> np.ndarray:
@@ -77,6 +84,34 @@ class _ConstantSession:
         return [np.full((len(batch), 1), 0.5, dtype=np.float32)]
 
 
+def test_serve_window_scales_with_its_input_instead_of_levelling_it() -> None:
+    # The one property a transform inside serve_window cannot survive. Any
+    # normalisation (fixed RMS, peak, AGC) makes the output independent of the
+    # input's gain, so the same waveform at several levels would come out at
+    # one level and this equality would break at every gain but 1.
+    clip = _clip(0.02)
+    base = serve_window(clip, MIN_HEAD_WINDOW_SAMPLES)
+    for gain in (0.1, 0.5, 2.0, 10.0):
+        scaled = serve_window(clip * np.float32(gain), MIN_HEAD_WINDOW_SAMPLES)
+        assert np.allclose(scaled, base * gain, atol=1e-6), (
+            f"serve_window is not level-preserving at {gain}x: "
+            f"RMS {_rms(scaled):.6f} against {_rms(base) * gain:.6f}"
+        )
+
+
+def test_serve_window_hands_the_backbone_the_level_it_was_given() -> None:
+    # The human-readable form of the same guard, and the shape of the run 3
+    # bug: 20 dB in must be 20 dB out. Levelling collapses the ratio to 1.
+    quiet = serve_window(_clip(0.005), MIN_HEAD_WINDOW_SAMPLES)
+    loud = serve_window(_clip(0.05), MIN_HEAD_WINDOW_SAMPLES)
+    ratio = _rms(loud) / _rms(quiet)
+    assert 9.9 < ratio < 10.1, f"serve_window re-levelled the clip: {ratio:.3f}x"
+    # And it never invents level either: a clip inside full scale keeps its peak.
+    clip = _clip(0.05)
+    seated = serve_window(clip, MIN_HEAD_WINDOW_SAMPLES)
+    assert float(np.max(np.abs(seated))) == float(np.max(np.abs(clip)))
+
+
 def test_train_window_is_serve_window_at_some_level() -> None:
     # With augmentation off, training must see exactly what evaluation sees,
     # times one scalar. Any step added to either side breaks this.
@@ -107,33 +142,41 @@ def test_gain_spread_dominates_the_class_level_gap() -> None:
     assert GAIN_DB_MAX - GAIN_DB_MIN >= 2.0 * gap_db
 
 
-def test_evaluation_feeds_the_backbone_serve_window_output(tmp_path: Path) -> None:
+def test_scoring_feeds_the_backbone_serve_window_output(tmp_path: Path) -> None:
     clip = _clip(0.05)
     write_wav(tmp_path / "clip.wav", clip)
     decoded, rate = read_audio(tmp_path / "clip.wav")
     assert rate == SAMPLE_RATE
 
     backbone = _RecordingBackbone()
-    evaluate_lib._score_dir(backbone, _ConstantSession(), tmp_path)
+    score_file(Models(backbone, _ConstantSession()), tmp_path / "clip.wav")
     expected = serve_window(decoded, MIN_HEAD_WINDOW_SAMPLES)
     assert len(backbone.audios) == 1
     assert np.array_equal(backbone.audios[0], expected)
 
 
-def test_background_scoring_feeds_the_backbone_serve_window_output(
-    tmp_path: Path,
-) -> None:
-    path = _background_clip(tmp_path / "bg", EVALUATION, _clip(0.02, seed=5))
-    decoded, _rate = read_audio(path)
-    allowlist = SimpleNamespace(
-        datasets=[SimpleNamespace(id="bg", role="background")]
+def test_positives_and_background_share_one_scorer(tmp_path: Path, monkeypatch) -> None:
+    # The test above pins `score_file` to the serve pipeline; this pins that
+    # both halves of the evaluation actually reach it, so neither can grow its
+    # own chain the way the two training classes once did.
+    calls: list[str] = []
+
+    def spy(_backbone_dir, _head, paths, **_kwargs):
+        calls.append("scored")
+        assert list(paths), "nothing handed to the scorer"
+        return []
+
+    monkeypatch.setattr(scores_lib, "score_files_parallel", spy)
+    clips = tmp_path / "clips"
+    write_wav(clips / "voice" / "speaker" / "a.wav", _clip(0.05))
+    scores_lib.score_clips(tmp_path, tmp_path / "head.onnx", clips)
+
+    _background_clip(tmp_path / "bg", EVALUATION, _clip(0.02, seed=5))
+    allowlist = SimpleNamespace(datasets=[SimpleNamespace(id="bg", role="background")])
+    scores_lib.score_background(
+        tmp_path, tmp_path / "head.onnx", allowlist, tmp_path, role=EVALUATION
     )
-
-    backbone = _RecordingBackbone()
-    evaluate_lib._score_background(backbone, _ConstantSession(), allowlist, tmp_path)
-    expected = serve_window(decoded, MIN_HEAD_WINDOW_SAMPLES)
-    assert len(backbone.audios) == 1
-    assert np.array_equal(backbone.audios[0], expected)
+    assert calls == ["scored", "scored"]
 
 
 def test_both_training_classes_go_through_train_window(

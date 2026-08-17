@@ -98,11 +98,33 @@ pub enum WakeSensitivity {
 impl WakeSensitivity {
     /// Wake-probability threshold this sensitivity maps to. Lower threshold
     /// means the detector fires more readily (High sensitivity).
+    ///
+    /// Measured, not chosen: these are the operating points `evaluate.py`
+    /// reports, each the loosest threshold inside its own false-accept budget
+    /// on the validation half, then measured once on the held-out half, where
+    /// they cost 0.043, 0.065 and 0.910 false accepts an hour. An earlier set
+    /// was picked and reported on one sample, so those numbers were the best
+    /// of ~126 tries rather than an estimate.
+    ///
+    /// Only Medium is a release gate, and only Medium's budget is demonstrated
+    /// rather than merely measured: its 3 events over 46 h give an interval
+    /// upper bound of 0.190 against a 0.5 ceiling. Low measures 0.043 but on
+    /// 2 events, so its interval reaches 0.157 and exceeds its own 0.1 budget;
+    /// validation resolves a rate only to 0.136/h, above that budget, so Low
+    /// can only ever be chosen where validation saw zero events. Treat Low's
+    /// budget as a point estimate, not a promise.
+    ///
+    /// The head's positive scores span only about 0.002, so rounding these to
+    /// two decimals collapses recall to nearly zero. Seven digits is all an f32
+    /// can hold; the report's eighth costs 2e-8, which is three orders inside
+    /// the gap between adjacent positive scores. Re-derive them from
+    /// `report.json` whenever the head is retrained or the calibration changes;
+    /// a threshold from one model says nothing about another.
     pub fn threshold(self) -> f32 {
         match self {
-            WakeSensitivity::Low => 0.70,
-            WakeSensitivity::Medium => 0.50,
-            WakeSensitivity::High => 0.35,
+            WakeSensitivity::Low => 0.9842523,
+            WakeSensitivity::Medium => 0.9838503,
+            WakeSensitivity::High => 0.9663407,
         }
     }
 }
