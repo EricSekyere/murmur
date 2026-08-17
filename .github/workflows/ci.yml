@@ -37,15 +37,17 @@ jobs:
 
   # Feature-gate regression checks: the build shapes a --workspace run never
   # exercises. Feature unification there gives murmur-core every non-GPU
-  # feature (murmur-app defaults to `full`), so two other shapes go untested:
+  # feature (murmur-app defaults to `full`), so three other shapes go untested:
   #   1. murmur-core with no features at all (the --no-default-features
-  #      invariant CLAUDE.md's test matrix requires), and
+  #      invariant CLAUDE.md's test matrix requires),
   #   2. each crate built alone with its own defaults, which is what
   #      `cargo test -p <crate>` and downstream consumers actually get. A test
   #      once passed CI only because unification supplied a backend the
-  #      crate's own features did not enable.
-  # Still cheap: nothing here builds whisper.cpp or ONNX Runtime, so the only
-  # native deps are the ALSA/X11 headers that cpal and enigo need.
+  #      crate's own features did not enable, and
+  #   3. murmur-core with `--features wake` and no `vad`, so ort is pulled by
+  #      wake alone rather than by feature unification with vad.
+  # Whisper.cpp is still excluded. The wake shape builds ONNX Runtime (ort);
+  # remaining native deps are the ALSA/X11 headers that cpal and enigo need.
   feature-gates:
     name: Feature gates (per-crate build shapes)
     runs-on: ubuntu-latest
@@ -67,6 +69,8 @@ jobs:
             libx11-dev libxtst-dev libxi-dev libxcb1-dev pkg-config
       - name: Clippy (no default features)
         run: cargo clippy -p murmur-core --no-default-features --all-targets -- -D warnings
+      - name: Clippy (wake without vad)
+        run: cargo clippy -p murmur-core --no-default-features --features wake --all-targets -- -D warnings
       - name: Test (no default features)
         run: cargo test -p murmur-core --no-default-features
       - name: Test core with its own defaults

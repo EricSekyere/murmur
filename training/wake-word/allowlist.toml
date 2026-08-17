@@ -1,0 +1,123 @@
+# Licence allowlist for Hey Murmur training inputs.
+#
+# Every Piper voice and every negative/background/RIR dataset that train.py
+# may touch must appear here with its *individual* licence string.
+# Permitted: MIT, Apache-2.0, CC0, CC-BY (no NC, no SA).
+# Piper itself being MIT is not enough — several Piper voices are NC or SA
+# and are omitted on purpose (lessac, ryan, hfc_*, l2arctic, semaine,
+# northern_english_male, southern_english_female, jenny_dioco, …).
+# ACAV100M-derived material is excluded by default (it is why upstream
+# openWakeWord heads are CC BY-NC-SA).
+#
+# Licences are taken from each voice's MODEL_CARD on
+# https://huggingface.co/rhasspy/piper-voices (v1.0.0). "public domain"
+# is recorded as written on the card; the validator treats it as the CC0 family.
+
+[[voices]]
+id = "en_US-libritts-high"
+licence = "CC-BY-4.0"
+url = "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/en/en_US/libritts/high/en_US-libritts-high.onnx"
+notes = "MODEL_CARD: trained from scratch on LibriTTS train-clean-360 (OpenSLR 60)."
+
+[[voices]]
+id = "en_US-libritts_r-medium"
+licence = "CC-BY-4.0"
+url = "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/en/en_US/libritts_r/medium/en_US-libritts_r-medium.onnx"
+notes = "MODEL_CARD: LibriTTS-R (OpenSLR 141), CC BY 4.0."
+
+[[voices]]
+id = "en_US-joe-medium"
+licence = "CC0"
+url = "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/en/en_US/joe/medium/en_US-joe-medium.onnx"
+notes = "MODEL_CARD: Nabu Casa voice-datasets, CC0."
+
+[[voices]]
+id = "en_US-ljspeech-high"
+licence = "public domain"
+url = "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/en/en_US/ljspeech/high/en_US-ljspeech-high.onnx"
+notes = "MODEL_CARD: LJ Speech dataset, public domain."
+
+[[voices]]
+id = "en_US-kristin-medium"
+licence = "public domain"
+url = "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/en/en_US/kristin/medium/en_US-kristin-medium.onnx"
+notes = "MODEL_CARD: LibriVox-derived, public domain."
+
+[[voices]]
+id = "en_US-norman-medium"
+licence = "public domain"
+url = "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/en/en_US/norman/medium/en_US-norman-medium.onnx"
+notes = "MODEL_CARD: LibriVox-derived, public domain."
+
+[[voices]]
+id = "en_US-john-medium"
+licence = "public domain"
+url = "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/en/en_US/john/medium/en_US-john-medium.onnx"
+notes = "MODEL_CARD: LibriVox-derived, public domain."
+
+[[voices]]
+id = "en_US-bryce-medium"
+licence = "public domain"
+url = "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/en/en_US/bryce/medium/en_US-bryce-medium.onnx"
+notes = "MODEL_CARD: author-released, public domain."
+
+[[voices]]
+id = "en_GB-vctk-medium"
+licence = "CC-BY-4.0"
+url = "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/en/en_GB/vctk/medium/en_GB-vctk-medium.onnx"
+notes = "MODEL_CARD: CSTR VCTK, CC BY 4.0."
+
+[[voices]]
+id = "en_GB-alba-medium"
+licence = "CC-BY-4.0"
+url = "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/en/en_GB/alba/medium/en_GB-alba-medium.onnx"
+notes = "MODEL_CARD: Alba (Edinburgh datashare), CC BY 4.0."
+
+[[voices]]
+id = "en_GB-aru-medium"
+licence = "CC-BY-4.0"
+url = "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/en/en_GB/aru/medium/en_GB-aru-medium.onnx"
+notes = "MODEL_CARD: ARU speech corpus, CC BY 4.0."
+
+[[voices]]
+id = "en_GB-cori-medium"
+licence = "public domain"
+url = "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/en/en_GB/cori/medium/en_GB-cori-medium.onnx"
+notes = "MODEL_CARD: LibriVox-derived, public domain."
+
+[[datasets]]
+id = "musan"
+role = "noise"
+licence = "CC-BY-4.0"
+url = "https://www.openslr.org/17/"
+notes = "OpenSLR SLR17. Use the noise/ and music/ subsets for augmentation."
+
+[[datasets]]
+id = "rirs_noises"
+role = "rir"
+licence = "Apache-2.0"
+url = "https://www.openslr.org/28/"
+notes = "OpenSLR SLR28 simulated + real RIRs. Do not substitute the MIT IR Survey."
+
+[[datasets]]
+id = "librispeech"
+role = "background"
+licence = "CC-BY-4.0"
+url = "https://www.openslr.org/12/"
+notes = "OpenSLR SLR12 FLAC. Stream train-other-500 / test-other as negatives; do not load the full 500 h into RAM."
+
+# Apache-2.0 openWakeWord backbone (Google speech_embedding + mel frontend).
+# Never download the pre-trained heads from the same release (alexa, hey_jarvis, …).
+[[backbone]]
+id = "melspectrogram"
+licence = "Apache-2.0"
+url = "https://github.com/dscripka/openWakeWord/releases/download/v0.5.1/melspectrogram.onnx"
+sha256 = "ba2b0e0f8b7b875369a2c89cb13360ff53bac436f2895cced9f479fa65eb176f"
+notes = "ONNX port of torchaudio MelSpectrogram; Apache-2.0."
+
+[[backbone]]
+id = "embedding_model"
+licence = "Apache-2.0"
+url = "https://github.com/dscripka/openWakeWord/releases/download/v0.5.1/embedding_model.onnx"
+sha256 = "70d164290c1d095d1d4ee149bc5e00543250a7316b59f31d056cff7bd3075c1f"
+notes = "Google speech_embedding via openWakeWord; Apache-2.0."
