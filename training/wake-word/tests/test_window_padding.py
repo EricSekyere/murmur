@@ -81,13 +81,13 @@ def test_padded_clip_yields_windows_from_the_real_backbone():
 )
 def test_evaluation_pads_short_held_out_clips(tmp_path):
     # Same bug on the eval side: an unpadded held-out clip yields no windows,
-    # so _score_dir would report 0.0 for every positive and recall would be 0
+    # so scoring would report 0.0 for every positive and recall would be 0
     # no matter how good the head is.
     from pathlib import Path
 
     from wake_word_training.audio import write_wav
-    from wake_word_training.evaluate_lib import _score_dir
     from wake_word_training.features import Backbone
+    from wake_word_training.scoring import Models, score_file
 
     class _ConstantSession:
         def get_inputs(self):
@@ -105,8 +105,8 @@ def test_evaluation_pads_short_held_out_clips(tmp_path):
     clip = np.random.default_rng(0).normal(0, 0.2, int(0.65 * SAMPLE_RATE))
     write_wav(tmp_path / "clip.wav", clip.astype(np.float32))
 
-    scores = _score_dir(backbone, _ConstantSession(), tmp_path)
-    assert scores == [pytest.approx(0.9)]
+    scored = score_file(Models(backbone, _ConstantSession()), tmp_path / "clip.wav")
+    assert scored.scores == [pytest.approx(0.9)]
 
 
 @pytest.mark.skipif(

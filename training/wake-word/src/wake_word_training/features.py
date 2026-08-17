@@ -7,6 +7,7 @@ from pathlib import Path
 import numpy as np
 
 from wake_word_training.allowlist import AllowlistError, refuse_forbidden_heads
+from wake_word_training.audio import SAMPLE_RATE
 from wake_word_training.model import EMB_DIM, HEAD_WINDOW
 
 FRAME_SAMPLES = 1280
@@ -27,20 +28,32 @@ MIN_HEAD_WINDOW_MELS = EMB_WINDOW + (HEAD_WINDOW - 1) * EMB_STEP
 MIN_HEAD_WINDOW_SAMPLES = (
     -(-MIN_HEAD_WINDOW_MELS // MEL_FRAMES_PER_FRAME) * FRAME_SAMPLES
 )
+# Audio between consecutive head windows: `windows` slides by one embedding,
+# and one embedding step is EMB_STEP mel frames. 0.128 s, not the 0.08 s of an
+# audio frame, which is why the eval refractory is not the serve frame count.
+MEL_FRAME_SAMPLES = FRAME_SAMPLES // MEL_FRAMES_PER_FRAME
+WINDOW_STRIDE_SECONDS = EMB_STEP * MEL_FRAME_SAMPLES / SAMPLE_RATE
 
 
 class Backbone:
     """melspectrogram.onnx + embedding_model.onnx via onnxruntime."""
 
-    def __init__(self, mel_path: Path, emb_path: Path) -> None:
+    def __init__(self, mel_path: Path, emb_path: Path, *, options=None) -> None:
         import onnxruntime as ort
 
         refuse_forbidden_heads(str(mel_path))
         refuse_forbidden_heads(str(emb_path))
         if "hey_murmur" in mel_path.name.lower():
             raise AllowlistError("melspectrogram path looks like a head")
-        self._mel = ort.InferenceSession(str(mel_path), providers=["CPUExecutionProvider"])
-        self._emb = ort.InferenceSession(str(emb_path), providers=["CPUExecutionProvider"])
+        # `options` exists so a worker process can hold the models to one
+        # thread; measured bit-identical embeddings at 1, 2, 4 and default
+        # intra-op threads, so it changes throughput and nothing else.
+        self._mel = ort.InferenceSession(
+            str(mel_path), options, providers=["CPUExecutionProvider"]
+        )
+        self._emb = ort.InferenceSession(
+            str(emb_path), options, providers=["CPUExecutionProvider"]
+        )
 
     def embeddings(self, audio: np.ndarray) -> np.ndarray:
         """Return [T, 96] embeddings for 16 kHz mono float audio."""

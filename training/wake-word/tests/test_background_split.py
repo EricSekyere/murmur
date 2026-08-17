@@ -14,7 +14,7 @@ from types import SimpleNamespace
 
 import numpy as np
 
-from wake_word_training import evaluate_lib
+from wake_word_training import scores as scores_lib
 from wake_word_training.audio import write_wav
 from wake_word_training.background import (
     EVALUATION,
@@ -80,22 +80,24 @@ def test_the_window_cap_sees_many_speakers_not_a_prefix(tmp_path: Path) -> None:
     assert len({background_group(p) for p in prefix}) == n_train_speakers
 
 
-def test_the_evaluator_scores_only_the_gate_half(tmp_path: Path, monkeypatch) -> None:
-    _corpus(tmp_path / "bg")
+def _scored_paths(tmp_path: Path, monkeypatch, role: str) -> list[Path]:
     allowlist = SimpleNamespace(datasets=[SimpleNamespace(id="bg", role="background")])
     seen: list[Path] = []
-    original = evaluate_lib.read_audio
 
-    class _EmptyBackbone:
-        def windows(self, audio: np.ndarray) -> np.ndarray:
-            return np.zeros((0, 16, 96), dtype=np.float32)
+    def spy(_backbone_dir, _head, paths, **_kwargs):
+        seen.extend(paths)
+        return []
 
-    def spy(path: Path):
-        seen.append(path)
-        return original(path)
+    monkeypatch.setattr(scores_lib, "score_files_parallel", spy)
+    scores_lib.score_background(
+        tmp_path, tmp_path / "head.onnx", allowlist, tmp_path, role=role
+    )
+    return seen
 
-    monkeypatch.setattr(evaluate_lib, "read_audio", spy)
-    evaluate_lib._score_background(_EmptyBackbone(), None, allowlist, tmp_path)
+
+def test_the_evaluator_scores_only_the_gate_half(tmp_path: Path, monkeypatch) -> None:
+    _corpus(tmp_path / "bg")
+    seen = _scored_paths(tmp_path, monkeypatch, EVALUATION)
 
     assert seen, "the evaluator scored nothing"
     assert {background_group(p) for p in seen} == {
@@ -104,3 +106,20 @@ def test_the_evaluator_scores_only_the_gate_half(tmp_path: Path, monkeypatch) ->
     assert {background_group(p) for p in seen}.isdisjoint(
         {background_group(p) for p in background_paths(tmp_path / "bg", role=TRAIN)}
     )
+
+
+def test_the_calibrator_scores_only_the_validation_half(tmp_path: Path, monkeypatch) -> None:
+    # Thresholds are now chosen on this half, so a speaker leaking in from the
+    # gate half would put selection and measurement back on one sample.
+    _corpus(tmp_path / "bg")
+    seen = _scored_paths(tmp_path, monkeypatch, VALIDATION)
+
+    assert seen, "the calibrator scored nothing"
+    groups = {background_group(p) for p in seen}
+    assert groups == {
+        background_group(p) for p in background_paths(tmp_path / "bg", role=VALIDATION)
+    }
+    for other in (TRAIN, EVALUATION):
+        assert groups.isdisjoint(
+            {background_group(p) for p in background_paths(tmp_path / "bg", role=other)}
+        )
