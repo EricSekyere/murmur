@@ -13,7 +13,7 @@ use std::time::Duration;
 use tauri::Manager;
 
 use crate::audio_worker::WakeEvent;
-use crate::state::{AppState, emit_hotkey_error, emit_wake_state};
+use crate::state::{AppState, emit_hotkey_error};
 
 /// Backoff schedule for automatic re-arm attempts after a failure (mic loss,
 /// scorer breakage). Expected exits (disarm, session handoff) never retry.
@@ -296,7 +296,6 @@ pub(crate) fn spawn_event_pump(app: tauri::AppHandle) -> mpsc::Sender<WakeEvent>
                     attempts = 0;
                     state.wake_arm_pending.store(false, Ordering::Release);
                     state.wake_armed.store(true, Ordering::Release);
-                    emit_wake_state(&app, true);
                     // The intent may have changed while the arm was in flight
                     // (a meeting started, the mode was turned off), so settle
                     // against it now that the worker has answered.
@@ -305,7 +304,6 @@ pub(crate) fn spawn_event_pump(app: tauri::AppHandle) -> mpsc::Sender<WakeEvent>
                 WakeEvent::Disarmed { reason, failed } => {
                     state.wake_arm_pending.store(false, Ordering::Release);
                     state.wake_armed.store(false, Ordering::Release);
-                    emit_wake_state(&app, false);
                     tracing::info!(%reason, failed, "wake armed state ended");
                     match retry_delay(failed, attempts) {
                         Some(delay) => {
@@ -348,18 +346,24 @@ fn begin_wake_session(app: &tauri::AppHandle) {
 
 /// PBT_APMRESUMEAUTOMATIC / PBT_APMSUSPEND. Numeric so tests compile without
 /// the windows crate; must stay equal to the Win32 constants.
+///
+/// The decision logic below is deliberately platform-neutral so its tests run
+/// everywhere, which leaves it unused in a non-Windows lib build.
+#[cfg_attr(not(windows), allow(dead_code))]
 const POWER_RESUME_AUTOMATIC: u32 = 0x12;
 #[cfg(test)]
 const POWER_SUSPEND: u32 = 0x04;
 
 /// What the Windows power-notify callback may do before it returns.
 /// Resume work (disarm, ONNX load, arm) must not run on the callback stack.
+#[cfg_attr(not(windows), allow(dead_code))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PowerCallbackAction {
     Ignore,
     PostResume,
 }
 
+#[cfg_attr(not(windows), allow(dead_code))]
 fn power_callback_action(event_type: u32, has_context: bool) -> PowerCallbackAction {
     if event_type == POWER_RESUME_AUTOMATIC && has_context {
         PowerCallbackAction::PostResume

@@ -1,7 +1,0 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32">
-  <!-- Solid mic. Filled capsule vs Armed's outline; no badge. Distinguishes in greyscale. -->
-  <rect x="4" y="4" width="24" height="24" rx="8" fill="#123148"/>
-  <rect x="12" y="8" width="8" height="11" rx="4" fill="#C7FFF6"/>
-  <path d="M10 16.5v1.2c0 3.4 2.7 6.2 6 6.2s6-2.8 6-6.2v-1.2" fill="none" stroke="#C7FFF6" stroke-width="1.75" stroke-linecap="round"/>
-  <path d="M16 23.7v2.5M13 26.2h6" fill="none" stroke="#C7FFF6" stroke-width="1.75" stroke-linecap="round"/>
-</svg>

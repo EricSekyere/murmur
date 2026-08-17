@@ -193,7 +193,7 @@ listen('recording-state', (event) => {
   } else if (uiState === 'processing' || uiState === 'recording') {
     stopDurationTimer();
     stopVisualization();
-    applyRestState();
+    applyState('idle');
   }
 });
 
@@ -218,7 +218,7 @@ listen('transcription-error', (event) => {
   if (uiState !== 'recording' && uiState !== 'processing') {
     applyState('error');
     setTimeout(() => {
-      if (uiState === 'error') applyRestState();
+      if (uiState === 'error') applyState('idle');
     }, 1500);
   }
 });
@@ -316,10 +316,10 @@ listen('streaming-done', () => {
     loadHistory();
     applyState('done');
     setTimeout(() => {
-      if (uiState === 'done') applyRestState();
+      if (uiState === 'done') applyState('idle');
     }, 2000);
   } else {
-    applyRestState();
+    applyState('idle');
   }
 
   if (currentSession) {
