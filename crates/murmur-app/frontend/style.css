@@ -364,6 +364,21 @@ header {
   border-color: var(--color-border);
 }
 
+/* Hollow status dot — shape-distinct from idle's filled muted disc and
+   recording's filled pulsing disc, including in greyscale. */
+.badge--armed {
+  background: var(--color-surface-raised);
+  color: var(--color-text);
+  border-color: var(--color-border-hover);
+}
+#status-badge.badge--armed::before {
+  background: transparent;
+  border: 1.5px solid currentColor;
+  box-sizing: border-box;
+  animation: none;
+  box-shadow: none;
+}
+
 .badge--recording {
   background: var(--color-record-dim);
   color: var(--color-record);
@@ -532,6 +547,17 @@ header {
   animation: none;
 }
 
+/* Armed: static outlined disc. Idle is a filled violet disc that ripples;
+   recording is a filled red disc that breathes. Hollow vs filled is the
+   greyscale tell; no pulse, no hub ripples. */
+.mic-btn--armed {
+  border-color: var(--color-accent-light);
+  background: var(--color-surface);
+  color: var(--color-accent-light);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  animation: none;
+}
+
 /* Recording */
 .mic-btn--recording {
   border-color: var(--color-record);
@@ -688,6 +714,20 @@ header {
     0 0 48px -10px var(--color-accent);
 }
 
+/* Hub armed: keep the disc hollow so it cannot collapse into idle's fill. */
+.mic-wrapper .mic-btn--armed {
+  border-color: var(--color-accent-light);
+  background: var(--color-surface-solid);
+  color: var(--color-accent-light);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.12) inset;
+  animation: none;
+}
+.mic-wrapper .mic-btn--armed:hover:not(:disabled) {
+  background: var(--color-accent-dim);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.18) inset;
+  transform: scale(1.05);
+}
+
 /* Idle ripples emanate from the mic disc (the ring element + its two pseudos). */
 #mic-ring::before, #mic-ring::after { content: ""; position: absolute; inset: 0; border-radius: 50%; }
 .mic-wrapper:has(.mic-btn--idle) #mic-ring,
@@ -698,6 +738,14 @@ header {
 }
 .mic-wrapper:has(.mic-btn--idle) #mic-ring::before { animation-delay: 1.13s; }
 .mic-wrapper:has(.mic-btn--idle) #mic-ring::after { animation-delay: 2.26s; }
+
+.mic-wrapper:has(.mic-btn--armed) #mic-ring,
+.mic-wrapper:has(.mic-btn--armed) #mic-ring::before,
+.mic-wrapper:has(.mic-btn--armed) #mic-ring::after {
+  animation: none;
+  opacity: 0;
+  border-color: transparent;
+}
 
 @keyframes hub-ripple {
   0% { transform: scale(0.62); opacity: 0.5; }

@@ -123,6 +123,8 @@ pub(crate) fn spawn(app: tauri::AppHandle) -> MeetingHandle {
             state.meeting_active.store(false, Ordering::Release);
         }
         emit_state(&app, false, false, 0.0, 0);
+        // Meeting over: re-arm the wake listener if the mode is still on.
+        crate::wake_supervisor::sync(&app);
         // Receiver dropped (shutdown timed out and moved on) is expected.
         let _ = done_tx.send(());
     });

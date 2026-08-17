@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32">
+  <!-- Hollow mic + badge. Shape (outline + dot), not hue, distinguishes Armed from Recording. -->
+  <rect x="4" y="4" width="24" height="24" rx="8" fill="#123148"/>
+  <rect x="12" y="8" width="8" height="11" rx="4" fill="none" stroke="#C7FFF6" stroke-width="1.75"/>
+  <path d="M10 16.5v1.2c0 3.4 2.7 6.2 6 6.2s6-2.8 6-6.2v-1.2" fill="none" stroke="#C7FFF6" stroke-width="1.75" stroke-linecap="round"/>
+  <path d="M16 23.7v2.5M13 26.2h6" fill="none" stroke="#C7FFF6" stroke-width="1.75" stroke-linecap="round"/>
+  <circle cx="24.2" cy="8.2" r="3.2" fill="#5EEAD4" stroke="#2AA89A" stroke-width="0.6"/>
+</svg>

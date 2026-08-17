@@ -45,12 +45,23 @@ const RESULT_TIMEOUT: Duration = Duration::from_secs(120);
 /// start at 1 (see `session::handle_toggle`), so zero is free.
 const ANY_GENERATION: u64 = 0;
 
+/// What triggered a session. Wake starts get a silent-abort deadline (a
+/// false wake trigger must not sit recording until session_timeout) and an
+/// engine wait in the streaming worker.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum StartReason {
+    /// Every explicit user start: hotkey, double-tap, UI, tray, MCP.
+    Hotkey,
+    WakeWord,
+}
+
 #[derive(Clone)]
 pub(crate) struct StartParams {
     /// Session generation this start belongs to. Every result it produces is
     /// stamped with it, so a superseded session's queued results can never be
     /// consumed by the next one.
     pub generation: u64,
+    pub start_reason: StartReason,
     pub audio_device: Option<String>,
     pub rms_threshold: f32,
     pub vad_threshold: f32,
@@ -74,10 +85,43 @@ pub(crate) struct WarmParams {
     pub echo_cancellation: bool,
 }
 
+/// Arm the always-listening wake detector.
+pub(crate) struct ArmParams {
+    pub audio_device: Option<String>,
+    /// Wake-probability threshold (from the sensitivity setting).
+    pub threshold: f32,
+    /// Worker → supervisor transitions. Dedicated channel: the result
+    /// channel is consumed per-generation by streaming workers and a
+    /// second drainer would contend for its receiver.
+    pub wake_tx: mpsc::Sender<WakeEvent>,
+    /// Scorer injected by the caller so tests script detections and the
+    /// supervisor builds the real ONNX scorer off-thread.
+    pub scorer: Box<dyn murmur_core::audio::wake::WakeScorer>,
+}
+
+/// Worker-originated armed-state transitions. These are the single source of
+/// truth for the armed indicator: the UI shows "armed" only after `Armed`
+/// arrives, and never after `Disarmed`.
+pub(crate) enum WakeEvent {
+    /// Stream open, detector fed — the moment the UI may show "armed".
+    Armed,
+    /// Wake phrase detected; the supervisor should start a session.
+    Detected { score: f32 },
+    /// Armed state ended. `failed` distinguishes a fault the supervisor may
+    /// retry (mic loss, scorer failure) from an expected exit (disarm,
+    /// session handoff), which must never trigger a retry.
+    Disarmed { reason: String, failed: bool },
+}
+
 enum Cmd {
     StartStreaming(StartParams),
     Stop,
     SetWarm(WarmParams),
+    // Only the wake-gated supervisor arms; the machinery itself is
+    // feature-independent so its tests run on every build.
+    #[cfg_attr(not(feature = "wake"), allow(dead_code))]
+    Arm(ArmParams),
+    Disarm,
 }
 
 pub(crate) enum AudioResult {
@@ -241,6 +285,22 @@ impl Handle {
             .map_err(|e| format!("Audio worker channel closed: {}", e))
     }
 
+    /// Arm the wake detector. Non-blocking; the worker answers with
+    /// `WakeEvent::Armed` (or `Disarmed`) on the params' wake channel.
+    #[cfg_attr(not(feature = "wake"), allow(dead_code))]
+    pub fn send_arm(&self, params: ArmParams) -> Result<(), String> {
+        self.cmd_tx
+            .send(Cmd::Arm(params))
+            .map_err(|e| format!("Audio worker channel closed: {}", e))
+    }
+
+    /// Leave the armed state. Non-blocking; a no-op when not armed.
+    pub fn send_disarm(&self) -> Result<(), String> {
+        self.cmd_tx
+            .send(Cmd::Disarm)
+            .map_err(|e| format!("Audio worker channel closed: {}", e))
+    }
+
     /// Blocking receive for the next streaming result of `generation`. Results
     /// stamped with another generation are discarded, never delivered: an
     /// orphaned session's buffered phrases must never be typed into the window
@@ -317,7 +377,281 @@ fn run_worker(cmd_rx: &mpsc::Receiver<Cmd>, result_tx: &mpsc::Sender<Tagged>) {
                 tracing::debug!("Stop received outside monitoring loop, ignoring");
             }
             Cmd::SetWarm(params) => apply_warm(&mut capture, &params),
+            Cmd::Arm(params) => {
+                let wake_tx = params.wake_tx.clone();
+                // Same per-session panic containment as StartStreaming: a
+                // scorer or driver bug ends the armed period, not the worker.
+                let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    run_armed(&mut capture, params, cmd_rx)
+                }));
+                match outcome {
+                    Ok(ArmedExit::ToIdle) => {}
+                    Ok(ArmedExit::StartSession {
+                        params: start_params,
+                        ambient_floor,
+                        detected_at,
+                    }) => {
+                        let sender = ResultSender {
+                            tx: result_tx.clone(),
+                            generation: start_params.generation,
+                        };
+                        let outcome =
+                            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                run_session_prearmed(
+                                    &mut capture,
+                                    &start_params,
+                                    cmd_rx,
+                                    &sender,
+                                    ambient_floor,
+                                    detected_at,
+                                );
+                            }));
+                        if let Err(panic_info) = outcome {
+                            let msg = panic_message(panic_info, "panic in wake session");
+                            tracing::error!("Wake session panicked, recovering: {}", msg);
+                            capture.set_warm_start(false);
+                            stop_capture(&mut capture, "wake session panic recovery");
+                            sender.send(AudioResult::StreamingDone);
+                        }
+                    }
+                    Err(panic_info) => {
+                        let msg = panic_message(panic_info, "panic in armed wake loop");
+                        tracing::error!("Armed wake loop panicked, recovering: {}", msg);
+                        stop_capture(&mut capture, "armed panic recovery");
+                        let _ = wake_tx.send(WakeEvent::Disarmed {
+                            reason: msg,
+                            failed: true,
+                        });
+                    }
+                }
+            }
+            Cmd::Disarm => {
+                tracing::debug!("Disarm received while not armed, ignoring");
+            }
         }
+    }
+}
+
+/// Ticks (80 ms each) the armed loop tolerates without new samples before
+/// treating the device as gone (~5 s).
+const ARMED_STALL_TICKS: u32 = 60;
+/// Armed loop cadence: one wake frame (80 ms at 16 kHz).
+const WAKE_TICK: Duration = Duration::from_millis(80);
+/// Ambient-floor window while armed: ~5 s of 80 ms ticks.
+const ARMED_FLOOR_TICKS: usize = 63;
+/// Consecutive scorer failures tolerated before the armed loop gives up.
+const ARMED_MAX_SCORER_FAILURES: u32 = 10;
+
+/// Whether the armed loop should treat a sample gap as device loss.
+fn armed_should_give_up(consecutive_empty_ticks: u32) -> bool {
+    consecutive_empty_ticks >= ARMED_STALL_TICKS
+}
+
+/// A wake session that hears no speech gives up after this window instead of
+/// idling until `session_timeout` — the cost cap on every false trigger.
+const WAKE_SILENT_ABORT: Duration = Duration::from_secs(4);
+
+/// Rewind from detection time into the retained live audio: the head's score
+/// peaks this long after the wake phrase ends, and without the rewind a
+/// no-pause command loses its first syllables. Initial value; finalized by
+/// the measurement task against real recordings.
+const WAKE_LAG_COMPENSATION_MS: u64 = 240;
+
+/// Whether a wake session's silent-abort deadline has expired.
+fn wake_abort_due(deadline: Option<Instant>, speech_started: bool) -> bool {
+    !speech_started && deadline.is_some_and(|d| Instant::now() >= d)
+}
+
+/// How much trailing audio a wake session keeps at start: the lag
+/// compensation anchored at detection time, so the supervisor's handoff
+/// latency never eats the command onset. Capped at the ~1 s the armed
+/// live buffer retains.
+fn wake_keep_duration(elapsed_since_detection: Duration) -> Duration {
+    (elapsed_since_detection + Duration::from_millis(WAKE_LAG_COMPENSATION_MS))
+        .min(Duration::from_secs(1))
+}
+
+/// Trailing sample count for [`wake_keep_duration`], channel-aligned so
+/// interleaved frames stay in step for downmix.
+fn wake_keep_samples(keep: Duration, native_rate: u32, native_channels: u16) -> usize {
+    let ch = native_channels.max(1) as usize;
+    let frames = (native_rate as f64 * keep.as_secs_f64()) as usize;
+    frames * ch
+}
+
+enum ArmedExit {
+    ToIdle,
+    /// A StartStreaming arrived while armed: run it on the open stream.
+    /// `ambient_floor` is the armed loop's rolling noise estimate (replacing
+    /// startup calibration) and `detected_at` anchors the lag rewind.
+    StartSession {
+        params: StartParams,
+        ambient_floor: f32,
+        detected_at: Option<Instant>,
+    },
+}
+
+/// The always-listening loop: score mic audio in memory, discard it, and
+/// report detections. Holds at most `WAKE_RING_SECS` of raw audio (for the
+/// detection-lag rewind) plus the scorer's internal feature buffers —
+/// nothing is written anywhere.
+fn run_armed(
+    capture: &mut AudioCapture,
+    params: ArmParams,
+    cmd_rx: &mpsc::Receiver<Cmd>,
+) -> ArmedExit {
+    let ArmParams {
+        audio_device,
+        threshold,
+        wake_tx,
+        scorer,
+    } = params;
+
+    if let Err(msg) = start_passive_capture(capture, audio_device.as_deref()) {
+        let _ = wake_tx.send(WakeEvent::Disarmed {
+            reason: msg,
+            failed: true,
+        });
+        return ArmedExit::ToIdle;
+    }
+    let live_buf = capture.live_buffer();
+    if !probe_initial_samples(&live_buf) {
+        stop_capture(capture, "armed startup sample probe failure");
+        let _ = wake_tx.send(WakeEvent::Disarmed {
+            reason: "Microphone opened but produced no audio samples.".to_string(),
+            failed: true,
+        });
+        return ArmedExit::ToIdle;
+    }
+    let native_rate = capture.native_rate();
+    let native_channels = capture.native_channels();
+    tracing::info!(native_rate, native_channels, "wake armed: stream open");
+    let _ = wake_tx.send(WakeEvent::Armed);
+
+    let mut detector = murmur_core::audio::wake::WakeWordDetector::new(scorer, threshold);
+    let mut floor_window: VecDeque<f32> = VecDeque::with_capacity(ARMED_FLOOR_TICKS);
+    let mut analyzed_up_to = 0usize;
+    let mut empty_ticks = 0u32;
+    let mut scorer_failures = 0u32;
+    let mut last_detection: Option<Instant> = None;
+
+    loop {
+        match cmd_rx.try_recv() {
+            Ok(Cmd::Disarm) => {
+                stop_capture(capture, "wake disarm");
+                let _ = wake_tx.send(WakeEvent::Disarmed {
+                    reason: "disarm".to_string(),
+                    failed: false,
+                });
+                return ArmedExit::ToIdle;
+            }
+            Ok(Cmd::StartStreaming(start_params)) => {
+                let ambient_floor = floor_window.iter().copied().fold(f32::INFINITY, f32::min);
+                let ambient_floor = if ambient_floor.is_finite() {
+                    ambient_floor
+                } else {
+                    0.0
+                };
+                // The armed period ends here; the session takes the stream.
+                // Not a failure: the supervisor re-arms at session end.
+                let _ = wake_tx.send(WakeEvent::Disarmed {
+                    reason: "session start".to_string(),
+                    failed: false,
+                });
+                return ArmedExit::StartSession {
+                    params: start_params,
+                    ambient_floor,
+                    detected_at: last_detection,
+                };
+            }
+            Ok(Cmd::Arm(other)) => {
+                // Answer the second arm's own channel so its supervisor
+                // isn't left waiting; this armed period continues.
+                let _ = other.wake_tx.send(WakeEvent::Disarmed {
+                    reason: "already armed".to_string(),
+                    failed: false,
+                });
+            }
+            Ok(Cmd::SetWarm(p)) => capture.set_warm_start(p.enabled),
+            Ok(Cmd::Stop) => {
+                tracing::debug!("Stop received while armed (no session), ignoring");
+            }
+            Err(mpsc::TryRecvError::Empty) => {}
+            Err(mpsc::TryRecvError::Disconnected) => {
+                stop_capture(capture, "wake channel close");
+                let _ = wake_tx.send(WakeEvent::Disarmed {
+                    reason: "command channel closed".to_string(),
+                    failed: false,
+                });
+                return ArmedExit::ToIdle;
+            }
+        }
+
+        // Snapshot new samples under the lock, then release before any
+        // inference — the realtime CPAL callback must never wait on us.
+        let raw = {
+            let mut buf = live_buf.lock().unwrap_or_else(|e| e.into_inner());
+            if buf.len() <= analyzed_up_to {
+                None
+            } else {
+                let snapshot = buf[analyzed_up_to..].to_vec();
+                analyzed_up_to = buf.len();
+                let dropped = trim_buffer_to_preroll(&mut buf, native_rate, native_channels);
+                analyzed_up_to = analyzed_up_to.saturating_sub(dropped);
+                Some(snapshot)
+            }
+        };
+
+        match raw {
+            None => {
+                empty_ticks += 1;
+                if armed_should_give_up(empty_ticks) {
+                    stop_capture(capture, "armed no samples");
+                    let _ = wake_tx.send(WakeEvent::Disarmed {
+                        reason: "Microphone stopped delivering audio while armed.".to_string(),
+                        failed: true,
+                    });
+                    return ArmedExit::ToIdle;
+                }
+            }
+            Some(raw) => {
+                empty_ticks = 0;
+                let mono16k =
+                    murmur_core::audio::AudioBuffer::from_raw(&raw, native_rate, native_channels)
+                        .samples;
+                let rms = compute_rms(&mono16k);
+                if rms > 0.0 {
+                    if floor_window.len() >= ARMED_FLOOR_TICKS {
+                        let _ = floor_window.pop_front();
+                    }
+                    floor_window.push_back(rms);
+                }
+                match detector.feed(&mono16k) {
+                    Ok(Some(detection)) => {
+                        scorer_failures = 0;
+                        last_detection = Some(Instant::now());
+                        tracing::info!(score = detection.score, "wake word detected");
+                        let _ = wake_tx.send(WakeEvent::Detected {
+                            score: detection.score,
+                        });
+                    }
+                    Ok(None) => scorer_failures = 0,
+                    Err(e) => {
+                        scorer_failures += 1;
+                        tracing::warn!(failures = scorer_failures, "wake scorer error: {}", e);
+                        if scorer_failures >= ARMED_MAX_SCORER_FAILURES {
+                            stop_capture(capture, "wake scorer failing");
+                            let _ = wake_tx.send(WakeEvent::Disarmed {
+                                reason: "Wake detector kept failing.".to_string(),
+                                failed: true,
+                            });
+                            return ArmedExit::ToIdle;
+                        }
+                    }
+                }
+            }
+        }
+        std::thread::sleep(WAKE_TICK);
     }
 }
 
@@ -421,6 +755,87 @@ fn run_session(
         startup_deadline: Instant::now() + Duration::from_millis(1200),
         silence_deadline: Instant::now() + Duration::from_secs(3),
         live_preview: params.live_preview,
+        wake_abort_deadline: None,
+    }
+    .run();
+}
+
+/// A session started from the armed wake state: the stream is already open
+/// and verified live, ambient was measured while armed (no calibration
+/// pause), the live buffer is rewound to just past the wake phrase, and a
+/// silent-abort deadline caps the cost of a false trigger.
+fn run_session_prearmed(
+    capture: &mut AudioCapture,
+    params: &StartParams,
+    cmd_rx: &mpsc::Receiver<Cmd>,
+    result_tx: &ResultSender,
+    ambient_floor: f32,
+    detected_at: Option<Instant>,
+) {
+    capture.set_warm_start(params.mic_warm_start);
+    let live_buf = capture.live_buffer();
+    let native_rate = capture.native_rate();
+    let native_channels = capture.native_channels();
+    let echo_cancellation = capture.echo_cancellation_active();
+
+    // Rewind: keep only audio from (detection - lag compensation) onward.
+    // Everything earlier — the wake phrase itself — is dropped here, which
+    // is what keeps "Hey Murmur" out of the delivered text. An explicit
+    // (hotkey) start that lands while armed keeps the ordinary ~1 s preroll
+    // instead and gets no silent-abort deadline: the user asked for it.
+    let wake_start = params.start_reason == StartReason::WakeWord;
+    let keep = if wake_start {
+        wake_keep_duration(detected_at.map(|t| t.elapsed()).unwrap_or(Duration::ZERO))
+    } else {
+        Duration::from_secs(1)
+    };
+    let keep_samples = wake_keep_samples(keep, native_rate, native_channels);
+    {
+        let mut buf = live_buf.lock().unwrap_or_else(|e| e.into_inner());
+        if buf.len() > keep_samples {
+            let mut drop_count = buf.len() - keep_samples;
+            drop_count -= drop_count % native_channels.max(1) as usize;
+            buf.drain(..drop_count);
+        }
+    }
+    tracing::info!(
+        keep_ms = keep.as_millis() as u64,
+        native_rate,
+        native_channels,
+        "wake session starting on the armed stream"
+    );
+    result_tx.send(AudioResult::Started);
+
+    let calibration =
+        crate::calibration::from_ambient(ambient_floor, params.rms_threshold, echo_cancellation);
+    let session = build_session(params, &calibration, native_rate, echo_cancellation);
+    result_tx.send(AudioResult::SpeechThreshold(
+        calibration.threshold.min(SIGNAL_FLOOR_RMS),
+    ));
+
+    Monitor {
+        cmd_rx,
+        result_tx,
+        capture,
+        live_buf,
+        session,
+        native_rate,
+        native_channels,
+        analyzed_up_to: 0,
+        mic_gain: calibration.mic_gain,
+        effective_ambient: calibration.effective_ambient,
+        auto_threshold: params.rms_threshold <= 0.0,
+        current_threshold: calibration.threshold,
+        floor_window: VecDeque::with_capacity(FLOOR_WINDOW_TICKS),
+        level_tick: 0,
+        saw_signal: false,
+        had_phrase: false,
+        consecutive_no_sample_ticks: 0,
+        consecutive_silent_ticks: 0,
+        startup_deadline: Instant::now() + Duration::from_millis(1200),
+        silence_deadline: Instant::now() + Duration::from_secs(3),
+        live_preview: params.live_preview,
+        wake_abort_deadline: wake_start.then(|| Instant::now() + WAKE_SILENT_ABORT),
     }
     .run();
 }
@@ -440,6 +855,24 @@ fn start_capture(
         Err(panic_info) => {
             let msg = panic_message(panic_info, "native audio panic");
             tracing::error!("Audio capture panicked on start: {}", msg);
+            Err(msg)
+        }
+    }
+}
+
+/// Passive (wake) variant of [`start_capture`]: raw mic only, AEC health
+/// untouched. See `AudioCapture::start_passive` for why arming must not reach
+/// the voice-capture path.
+fn start_passive_capture(capture: &mut AudioCapture, device: Option<&str>) -> Result<(), String> {
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        capture.start_passive(device)
+    }));
+    match result {
+        Ok(Ok(())) => Ok(()),
+        Ok(Err(e)) => Err(e.to_string()),
+        Err(panic_info) => {
+            let msg = panic_message(panic_info, "native audio panic");
+            tracing::error!("Passive audio capture panicked on start: {}", msg);
             Err(msg)
         }
     }
@@ -493,6 +926,9 @@ struct Monitor<'a> {
     startup_deadline: Instant,
     silence_deadline: Instant,
     live_preview: bool,
+    /// Wake sessions only: give up if no speech starts before this. Cleared
+    /// on the first sign of speech; a false trigger self-cancels here.
+    wake_abort_deadline: Option<Instant>,
 }
 
 enum Flow {
@@ -580,6 +1016,22 @@ impl Monitor<'_> {
                 self.capture.set_warm_start(params.enabled);
                 Flow::Continue
             }
+            Ok(Cmd::Arm(params)) => {
+                // A session owns the mic; the supervisor re-arms (via its
+                // session-end sync) once this session finishes.
+                tracing::debug!("Arm received while a session is active; rejecting");
+                let _ = params.wake_tx.send(WakeEvent::Disarmed {
+                    reason: "A recording session is already active".to_string(),
+                    failed: false,
+                });
+                Flow::Continue
+            }
+            Ok(Cmd::Disarm) => {
+                // Nothing armed during a session; the mode flag the
+                // supervisor consults at session end governs re-arming.
+                tracing::debug!("Disarm received while a session is active, ignoring");
+                Flow::Continue
+            }
         }
     }
 
@@ -660,6 +1112,19 @@ impl Monitor<'_> {
     /// digital silence (permissions, muted device) and end the session
     /// with an actionable message instead of listening forever.
     fn check_watchdogs(&mut self, saw_new_samples: bool, chunk_rms: f32) -> Flow {
+        // Wake silent abort: a false trigger means an open mic with nobody
+        // talking — end quietly (no error; the stop cue is the feedback).
+        if self.wake_abort_deadline.is_some() {
+            let speech_started = self.saw_signal && self.session.is_mid_phrase() || self.had_phrase;
+            if speech_started {
+                self.wake_abort_deadline = None;
+            } else if wake_abort_due(self.wake_abort_deadline, speech_started) {
+                tracing::info!("Wake session heard no speech; aborting");
+                self.flush_remaining();
+                return self.finish_session("wake silent abort");
+            }
+        }
+
         if !self.saw_signal
             && Instant::now() >= self.startup_deadline
             && self.consecutive_no_sample_ticks >= 20
@@ -920,6 +1385,53 @@ mod tests {
             MID_SESSION_STALL_TICKS
         ));
         assert!(!should_fail_on_digital_silence(false, true, u32::MAX));
+    }
+
+    #[test]
+    fn armed_watchdog_tolerates_brief_gaps_only() {
+        assert!(!armed_should_give_up(0));
+        assert!(!armed_should_give_up(ARMED_STALL_TICKS - 1));
+        assert!(armed_should_give_up(ARMED_STALL_TICKS));
+    }
+
+    #[test]
+    fn wake_abort_only_before_speech_and_after_deadline() {
+        let past = Some(Instant::now() - Duration::from_millis(1));
+        let future = Some(Instant::now() + Duration::from_secs(60));
+        assert!(wake_abort_due(past, false));
+        assert!(!wake_abort_due(past, true)); // speech started — never abort
+        assert!(!wake_abort_due(future, false)); // window still open
+        assert!(!wake_abort_due(None, false)); // hotkey session — no deadline
+    }
+
+    #[test]
+    fn wake_rewind_window_covers_lag_plus_handoff_and_is_capped() {
+        let lag = Duration::from_millis(WAKE_LAG_COMPENSATION_MS);
+        // Instant handoff: keep exactly the lag compensation.
+        assert_eq!(wake_keep_duration(Duration::ZERO), lag);
+        // 100 ms supervisor round trip: the anchor stays at detection-lag.
+        assert_eq!(
+            wake_keep_duration(Duration::from_millis(100)),
+            lag + Duration::from_millis(100)
+        );
+        // Never ask for more than the ~1 s the live buffer retains.
+        assert_eq!(
+            wake_keep_duration(Duration::from_secs(30)),
+            Duration::from_secs(1)
+        );
+    }
+
+    #[test]
+    fn wake_rewind_sample_count_is_channel_aligned() {
+        // 48 kHz stereo, 240 ms → 48000 * 0.24 = 11520 frames * 2 channels.
+        let keep = wake_keep_samples(Duration::from_millis(240), 48_000, 2);
+        assert_eq!(keep, 23_040);
+        assert_eq!(keep % 2, 0);
+        // Mono stays frame-exact.
+        assert_eq!(
+            wake_keep_samples(Duration::from_millis(240), 16_000, 1),
+            3_840
+        );
     }
 
     #[test]

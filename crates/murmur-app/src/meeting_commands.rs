@@ -44,6 +44,9 @@ pub(crate) fn start_meeting(
     state.meeting_active.store(true, Ordering::Release);
     drop(recording);
 
+    // A meeting owns the mic: leave the armed wake state for its duration.
+    crate::wake_supervisor::sync(&app);
+
     let handle = meeting_worker::spawn(app);
     *state.meeting.lock().unwrap_or_else(|e| e.into_inner()) = Some(handle);
     Ok(())

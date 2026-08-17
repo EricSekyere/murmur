@@ -44,6 +44,15 @@ const STATE_CONFIG = {
     ariaPressed: 'false',
     disabled: false,
   },
+  armed: {
+    badgeClass: 'badge--armed',
+    badgeText:  'Armed',
+    micClass:   'mic-btn--armed',
+    wrapperClass: '',
+    ariaLabel:  'Start recording',
+    ariaPressed: 'false',
+    disabled: false,
+  },
   recording: {
     badgeClass: 'badge--recording',
     badgeText:  'Recording',
@@ -107,6 +116,39 @@ function applyState(newState) {
   if (newState !== 'recording') stopDurationTimer();
 }
 
+// Worker-confirmed armed flag. Recording/processing/done/error keep their
+// own visuals; when those end, rest here (recording > armed > idle).
+let wakeArmed = false;
+
+function applyRestState() {
+  applyState(wakeArmed ? 'armed' : 'idle');
+}
+
+function syncArmedIndicator() {
+  if (uiState === 'recording' || uiState === 'processing') return;
+  if (uiState === 'done' || uiState === 'error') return;
+  applyRestState();
+}
+
+const unlistenWakeState = listen('wake-state', (event) => {
+  wakeArmed = !!event.payload?.armed;
+  syncArmedIndicator();
+});
+
+invoke('get_status')
+  .then((status) => {
+    wakeArmed = !!status?.wake_armed;
+    if (status?.recording) return;
+    syncArmedIndicator();
+  })
+  .catch(() => {
+    // Backend not ready yet; wake-state / recording-state will correct us.
+  });
+
+window.addEventListener('beforeunload', () => {
+  unlistenWakeState.then((off) => off()).catch(() => {});
+});
+
 function updateModelBanner(status) {
   modelReady = !!status.model_ready;
   modelName  = status.model || 'Parakeet TDT 0.6B v2';
@@ -127,10 +169,10 @@ function showError(msg) {
 
 function clearError() {
   errorBanner.hidden = true;
-  // Only the error state resolves to idle; clearing the banner while
-  // recording/processing must not fake an idle UI (it would defeat the
+  // Only the error state resolves to idle/armed; clearing the banner while
+  // recording/processing must not fake a rest UI (it would defeat the
   // double-click guard and desync from the backend's recording-state).
-  if (uiState === 'error') applyState('idle');
+  if (uiState === 'error') applyRestState();
 }
 
 dismissError.addEventListener('click', clearError);

@@ -33,6 +33,7 @@ mod state;
 mod transcribe;
 mod tray;
 mod updater;
+mod wake_supervisor;
 mod watcher;
 
 use std::sync::{Arc, Mutex};
@@ -203,6 +204,9 @@ pub fn run() -> anyhow::Result<()> {
             help: Arc::new(Mutex::new(None)),
             #[cfg(feature = "llm")]
             llm: Arc::new(Mutex::new(None)),
+            wake_armed: std::sync::atomic::AtomicBool::new(false),
+            wake_arm_pending: std::sync::atomic::AtomicBool::new(false),
+            wake_tx: std::sync::OnceLock::new(),
         })
         .on_window_event(|window, event| {
             // Hide the main window on close so the tray can re-show it.
@@ -226,6 +230,7 @@ pub fn run() -> anyhow::Result<()> {
             commands::retranscribe_entry,
             commands::get_config,
             commands::download_model,
+            commands::download_wake_models,
             commands::list_models,
             commands::change_model,
             commands::get_developer_mode,
@@ -272,9 +277,17 @@ pub fn run() -> anyhow::Result<()> {
         .context("error while building Murmur")?
         .run(|app, event| {
             // Every exit route (tray Quit, window close, updater restart) ends
-            // here, so this is the one place a live meeting can be finished.
-            if let tauri::RunEvent::Exit = event {
-                shutdown_meeting(app);
+            // here, so this is the one place a live meeting can be finished and
+            // an armed wake stream closed before the audio worker is dropped.
+            match event {
+                tauri::RunEvent::Exit => {
+                    wake_supervisor::on_exit(app);
+                    shutdown_meeting(app);
+                }
+                tauri::RunEvent::Resumed => {
+                    wake_supervisor::on_resume(app);
+                }
+                _ => {}
             }
         });
 
@@ -377,6 +390,14 @@ fn setup_app(
     let handle = audio_worker::Handle::spawn(app.handle().clone());
     let _ = state.audio.set(handle);
 
+    // Wake supervisor: pump worker events, then reconcile the armed state
+    // with the saved setting (arms at startup when always-listening is on).
+    let wake_tx = wake_supervisor::spawn_event_pump(app.handle().clone());
+    let _ = state.wake_tx.set(wake_tx);
+    wake_supervisor::sync(app.handle());
+    #[cfg(windows)]
+    wake_supervisor::register_windows_resume_listener(app.handle().clone());
+
     // PRIVACY-CRITICAL startup cleanup: a crash mid-meeting can leave the
     // raw-audio diarization spool (`<meetings dir>/*.audio.tmp`) on disk.
     // Delete any leftovers before anything else can record.
@@ -405,6 +426,12 @@ fn setup_app(
 
     #[cfg(windows)]
     focus::spawn_foreground_tracker(app.handle().clone());
+
+    if about::is_dev_build(app.handle())
+        && let Some(window) = app.get_webview_window("main")
+    {
+        let _ = window.set_title(about::display_name(app.handle()));
+    }
 
     tray::build(app)?;
     menu::build(app)?;
