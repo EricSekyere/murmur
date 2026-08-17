@@ -19,6 +19,14 @@ from wake_word_training.allowlist import licence_is_permissive
 FALSE_ACCEPT_MAX_PER_HOUR = 0.5
 RECALL_MIN = 0.9
 OPERATING_POINT_NAMES = ("Low", "Medium", "High")
+# Each named point is the most sensitive threshold that stays inside a
+# false-accept budget, so the three are what a user actually chooses between.
+# Medium is the gate; Low is the quiet setting and High the eager one.
+FALSE_ACCEPT_BUDGETS = {
+    "Low": 0.1,
+    "Medium": FALSE_ACCEPT_MAX_PER_HOUR,
+    "High": 2.0,
+}
 
 
 class GateFailure(Exception):
@@ -40,6 +48,10 @@ class EvalReport:
     manifest: list[dict] = field(default_factory=list)
     operating_points: list[OperatingPoint] = field(default_factory=list)
     phrase: str = "Hey Murmur"
+    # Score spread, the recall/false-accept curve and the per-voice recall
+    # breakdown. Not gated, but a head whose scores pin to 0 and 1 passes or
+    # fails for reasons no single Medium number shows.
+    diagnostics: dict = field(default_factory=dict)
 
     def medium(self) -> OperatingPoint | None:
         for point in self.operating_points:
@@ -85,6 +97,7 @@ def load_report(path: Path) -> EvalReport:
         manifest=list(data.get("manifest") or []),
         operating_points=points,
         phrase=str(data.get("phrase") or "Hey Murmur"),
+        diagnostics=dict(data.get("diagnostics") or {}),
     )
 
 
@@ -167,6 +180,7 @@ def _report_to_dict(report: EvalReport) -> dict:
             "all_passed": not failures,
         },
         "operating_points": points,
+        "diagnostics": report.diagnostics,
         "manifest": report.manifest,
         "release_gates": [
             f"false-accept ≤ {FALSE_ACCEPT_MAX_PER_HOUR}/hour at Medium",

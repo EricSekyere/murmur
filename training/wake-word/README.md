@@ -60,11 +60,38 @@ uv run --extra train python train.py --output-dir ./output --data-dir ./data
 ```
 
 Background audio is streamed with a cap (`--max-background-hours`, default
-20; `--max-negative-windows`, default 50000). The pipeline will not load
-`train-other-500` (~500 h) into RAM.
+20; `--max-negative-windows`, default 200000). The pipeline will not load
+`train-other-500` (~500 h) into RAM, and the augmentation pools are sampled
+rather than read whole (loading them cost 36 GB of float32).
 
 This generates "Hey Murmur" with allowlisted Piper voices, augments with
 allowlisted noise/RIR, trains the head, and writes `output/hey_murmur.onnx`.
+
+## Two splits hold the gates up
+
+**Speakers.** The allowlist carries 1937 speaker slots over 1033 distinct
+people, so training holds out *people*, not voices. `en_US-libritts-high` and
+`en_US-libritts_r-medium` render the same 904 LibriTTS people under different
+labels and, for 185 of them, under different `speaker_id` slots, so
+`speakers.py` normalises identities before splitting and refuses a split where
+one person reaches two parts. Clips land in
+`output/clips/<split>/<voice>/<speaker>/`, and a corpus left over from an
+earlier split is refused rather than scored.
+
+**Background.** LibriSpeech speakers are split too (`background.py`): training
+draws negatives from one half, the false-accept gate counts them on the other,
+and the training order interleaves speakers so the window cap yields a broad
+sample instead of the first few speaker directories.
+
+The head trains with dropout, decoupled weight decay and softened targets, and
+stops on a validation split of held-back speakers, keeping the
+best-validation weights. Without that it converged to exactly 1.0000 and
+0.0000 and no threshold could trade recall against false accepts.
+
+A second pass then trains against **hard negatives**: training-half background
+the first pass scored like the phrase, fed back through the same augmentation
+as every other negative. Separating the classes was not enough on its own,
+because a thin tail of background outranked the whole positive band.
 
 ## Evaluate
 
@@ -74,10 +101,19 @@ uv run --extra train python evaluate.py --output-dir ./output --data-dir ./data
 
 Writes `output/report.json` with:
 
-1. false-accepts/hour on allowlisted background
-2. recall on held-out synthetic voices
+1. false-accepts/hour on the gate half of the allowlisted background
+2. recall on held-out synthetic **speakers**
 3. the full input manifest with licences
 4. Low / Medium / High operating points
+5. `diagnostics`: the score quantiles for both classes, the full
+   recall/false-accept curve, recall per voice, and the spread of recall over
+   individual speakers
+
+Each named operating point is the most sensitive threshold that stays inside
+a false-accept budget (Low 0.1/h, Medium 0.5/h, High 2.0/h), and candidate
+thresholds are drawn from the measured positive scores as well as a fixed
+grid. A fixed [0.05, 0.95] grid collapsed Low and Medium onto one threshold
+whenever the head's scores sat outside it.
 
 Re-check a report without scoring audio:
 

@@ -6,6 +6,7 @@ import argparse
 import json
 import sys
 from pathlib import Path
+from typing import NamedTuple
 
 from wake_word_training.allowlist import (
     Allowlist,
@@ -17,18 +18,33 @@ from wake_word_training.allowlist import (
 from wake_word_training.audio import (
     DEFAULT_MAX_BACKGROUND_HOURS,
     DEFAULT_MAX_NEGATIVE_WINDOWS,
+    DEFAULT_MAX_VALIDATION_WINDOWS,
     PHRASE,
-    SAMPLE_RATE,
-    augment_clip,
-    iter_audio_files,
-    iter_clips_capped,
-    pad_for_window,
-    read_audio,
-    resample_16k,
-    synthesis_variation,
-    synthesize_with_piper,
 )
+from wake_word_training.background import background_paths
+from wake_word_training.corpus import assert_no_stale_clips, synthesize_split
 from wake_word_training.download import fetch_entry
+from wake_word_training.hard_negatives import (
+    DEFAULT_MAX_HOURS as DEFAULT_HARD_NEGATIVE_HOURS,
+)
+from wake_word_training.hard_negatives import (
+    DEFAULT_MIN_SCORE as DEFAULT_HARD_NEGATIVE_MIN_SCORE,
+)
+from wake_word_training.speakers import (
+    DEFAULT_HELD_OUT_FRACTION,
+    DEFAULT_SPLIT_SEED,
+    DEFAULT_VALIDATION_FRACTION,
+    SpeakerSplit,
+    build_inventory,
+    split_speakers,
+)
+from wake_word_training.windows import (
+    assert_classes_are_not_separable_by_level,
+    augmentation_pools,
+    sample_background_windows,
+    windows_from_clips,
+    windows_from_dir,
+)
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -65,7 +81,9 @@ def _parse(argv: list[str] | None) -> argparse.Namespace:
     parser.add_argument("--data-dir", type=Path, default=ROOT / "data")
     parser.add_argument("--validate-only", action="store_true")
     parser.add_argument("--phrase", default=PHRASE)
-    parser.add_argument("--n-samples", type=int, default=4000)
+    parser.add_argument("--n-samples", type=int, default=8000)
+    parser.add_argument("--n-validation", type=int, default=1200)
+    parser.add_argument("--n-held-out", type=int, default=2000)
     parser.add_argument("--steps", type=int, default=10_000)
     parser.add_argument(
         "--voices",
@@ -79,7 +97,19 @@ def _parse(argv: list[str] | None) -> argparse.Namespace:
         default=None,
         help="Optional checkpoint. Upstream CC BY-NC-SA heads are rejected.",
     )
-    parser.add_argument("--held-out-fraction", type=float, default=0.2)
+    parser.add_argument(
+        "--held-out-fraction",
+        type=float,
+        default=DEFAULT_HELD_OUT_FRACTION,
+        help="Fraction of speakers (not voices) reserved for the recall gate.",
+    )
+    parser.add_argument(
+        "--validation-fraction",
+        type=float,
+        default=DEFAULT_VALIDATION_FRACTION,
+        help="Fraction of speakers reserved for early stopping.",
+    )
+    parser.add_argument("--split-seed", default=DEFAULT_SPLIT_SEED)
     parser.add_argument(
         "--max-background-hours",
         type=float,
@@ -91,6 +121,24 @@ def _parse(argv: list[str] | None) -> argparse.Namespace:
         type=int,
         default=DEFAULT_MAX_NEGATIVE_WINDOWS,
         help="Cap on embedding windows taken from background audio.",
+    )
+    parser.add_argument(
+        "--max-validation-windows",
+        type=int,
+        default=DEFAULT_MAX_VALIDATION_WINDOWS,
+        help="Cap on background windows held back for early stopping.",
+    )
+    parser.add_argument(
+        "--hard-negative-hours",
+        type=float,
+        default=DEFAULT_HARD_NEGATIVE_HOURS,
+        help="Training-half background searched for false accepts; 0 disables the pass.",
+    )
+    parser.add_argument(
+        "--hard-negative-min-score",
+        type=float,
+        default=DEFAULT_HARD_NEGATIVE_MIN_SCORE,
+        help="Score at which a background clip counts as a hard negative.",
     )
     return parser.parse_args(argv)
 
@@ -108,50 +156,167 @@ def _selected_voices(allowlist: Allowlist, requested: list[str] | None) -> list[
     return ids
 
 
+class _Windows(NamedTuple):
+    positives: object
+    negatives: object
+    validation_positives: object
+    validation_negatives: object
+
+
 def _train(allowlist: Allowlist, voice_ids: list[str], args: argparse.Namespace) -> None:
     from wake_word_training.features import Backbone
-    from wake_word_training.model import export_onnx, train_head
+    from wake_word_training.model import export_onnx, train_head_with_trace
 
     out = args.output_dir
-    data = args.data_dir
-    _require_dataset_dirs(allowlist, data)
-    backbone_dir = data / "backbone"
-    voice_dir = data / "voices"
-    backbone_paths = _fetch_backbone(allowlist, backbone_dir)
-    voice_paths = _fetch_voices(allowlist, voice_ids, voice_dir)
-    n_hold = max(1, int(round(len(voice_ids) * args.held_out_fraction)))
-    held_out = voice_ids[-n_hold:]
-    train_voices = voice_ids[:-n_hold] or voice_ids[:1]
-    pos_dir = out / "clips" / "positives"
-    hold_dir = out / "clips" / "held_out"
-    _synthesize(voice_paths, train_voices, args.phrase, pos_dir, args.n_samples)
-    _synthesize(
-        voice_paths,
-        held_out,
-        args.phrase,
-        hold_dir,
-        max(20, args.n_samples // 10),
+    _require_dataset_dirs(allowlist, args.data_dir)
+    backbone_paths = _fetch_backbone(allowlist, args.data_dir / "backbone")
+    voice_paths = _fetch_voices(allowlist, voice_ids, args.data_dir / "voices")
+    split = split_speakers(
+        build_inventory(voice_paths),
+        held_out_fraction=args.held_out_fraction,
+        validation_fraction=args.validation_fraction,
+        seed=args.split_seed,
     )
-    noise = _load_pool(data, allowlist, role="noise")
-    rir = _load_pool(data, allowlist, role="rir")
+    _report_split(split)
+    _synthesize_corpus(voice_paths, split, args)
     backbone = Backbone(backbone_paths["melspectrogram"], backbone_paths["embedding_model"])
-    positives = _windows_from_dir(backbone, pos_dir, noise=noise, rir=rir)
-    negatives = _sample_background_windows(
-        backbone,
-        data,
-        allowlist,
-        max_hours=args.max_background_hours,
-        max_windows=args.max_negative_windows,
+    windows = _collect_windows(backbone, allowlist, args)
+    assert_classes_are_not_separable_by_level(windows.positives, windows.negatives)
+    print(
+        f"windows: train {len(windows.positives)}+/{len(windows.negatives)}-, "
+        f"validation {len(windows.validation_positives)}+/"
+        f"{len(windows.validation_negatives)}-"
     )
+    validation = (windows.validation_positives, windows.validation_negatives)
+    model, trace = train_head_with_trace(
+        windows.positives, windows.negatives, validation=validation, steps=args.steps
+    )
+    _report_trace("first pass", trace)
+    hard = _mine_hard_negatives(backbone, model, allowlist, args, windows)
+    if len(hard):
+        model, trace = train_head_with_trace(
+            windows.positives,
+            windows.negatives,
+            hard_negatives=hard,
+            validation=validation,
+            steps=args.steps,
+        )
+        _report_trace("hard-negative pass", trace)
+    dest = out / "hey_murmur.onnx"
+    export_onnx(model, dest)
+    _write_run_manifest(out, allowlist, split, trace, dest)
+    print(f"wrote {dest}")
+
+
+def _synthesize_corpus(
+    voice_paths: dict[str, Path], split: SpeakerSplit, args: argparse.Namespace
+) -> None:
+    clips = args.output_dir / "clips"
+    assert_no_stale_clips(clips, split)
+    for name, count in (
+        ("train", args.n_samples),
+        ("validation", args.n_validation),
+        ("held_out", args.n_held_out),
+    ):
+        synthesize_split(
+            voice_paths, split, name, phrase=args.phrase, clips_root=clips, n_clips=count
+        )
+
+
+def _collect_windows(backbone, allowlist: Allowlist, args: argparse.Namespace) -> _Windows:
+    data = args.data_dir
+    clips = args.output_dir / "clips"
+    noise, rir = augmentation_pools(data, allowlist)
+
+    def background(role: str, max_windows: int):
+        return sample_background_windows(
+            backbone,
+            data,
+            allowlist,
+            role=role,
+            max_hours=args.max_background_hours,
+            max_windows=max_windows,
+            noise=noise,
+            rir=rir,
+        )
+
+    negatives = background("train", args.max_negative_windows)
     if negatives is None or len(negatives) == 0:
         raise AllowlistError(
             "no background windows; place allowlisted background audio under data/<id>/"
         )
-    model = train_head(positives, negatives, steps=args.steps)
-    dest = out / "hey_murmur.onnx"
-    export_onnx(model, dest)
-    _write_run_manifest(out, allowlist, train_voices, held_out, dest)
-    print(f"wrote {dest}")
+    return _Windows(
+        positives=windows_from_dir(backbone, clips / "train", noise=noise, rir=rir),
+        negatives=negatives,
+        validation_positives=windows_from_dir(
+            backbone, clips / "validation", noise=noise, rir=rir
+        ),
+        validation_negatives=background("validation", args.max_validation_windows),
+    )
+
+
+def _mine_hard_negatives(backbone, model, allowlist: Allowlist, args, windows: _Windows):
+    """Background clips the first pass scores like the phrase, as extra negatives.
+
+    Fed back through the same augmentation as every other negative, so the
+    head cannot separate them on level or cleanliness, and mined only from the
+    training half of the background split so the false-accept gate stays a
+    measurement rather than a recital.
+    """
+    import numpy as np
+
+    from wake_word_training.hard_negatives import (
+        DEFAULT_MAX_HARD_WINDOWS,
+        mine_hard_clips,
+    )
+    from wake_word_training.model import score_windows
+
+    if args.hard_negative_hours <= 0:
+        return np.zeros((0, 16, 96), dtype=np.float32)
+    clips = mine_hard_clips(
+        backbone,
+        lambda w: score_windows(model, w),
+        _background_paths_for(allowlist, args.data_dir, role="train"),
+        max_hours=args.hard_negative_hours,
+        min_score=args.hard_negative_min_score,
+    )
+    noise, rir = augmentation_pools(args.data_dir, allowlist)
+    hard = windows_from_clips(
+        backbone, clips, noise=noise, rir=rir, max_windows=DEFAULT_MAX_HARD_WINDOWS
+    )
+    print(f"mined {len(clips)} hard background clips -> {len(hard)} windows")
+    if len(hard):
+        assert_classes_are_not_separable_by_level(
+            windows.positives, np.concatenate([windows.negatives, hard], axis=0)
+        )
+    return hard
+
+
+def _background_paths_for(allowlist: Allowlist, data_root: Path, *, role: str) -> list[Path]:
+    paths: list[Path] = []
+    for dataset in allowlist.datasets:
+        if dataset.role == "background":
+            paths.extend(background_paths(data_root / dataset.id, role=role))
+    return paths
+
+
+def _report_trace(label: str, trace) -> None:
+    print(
+        f"{label}: stopped at step {trace.steps_run} (best {trace.best_step}), "
+        f"validation loss {trace.best_validation_loss:.5f} "
+        f"(positives {trace.positive_validation_loss:.5f}, "
+        f"negatives {trace.negative_validation_loss:.5f}), "
+        f"hard negatives {trace.hard_negatives}"
+    )
+
+
+def _report_split(split: SpeakerSplit) -> None:
+    for name in ("train", "validation", "held_out"):
+        print(
+            f"{name:11s} {len(split.identities(name)):5d} speakers "
+            f"over {len(split.voices(name)):2d} voices "
+            f"({len(split.part(name))} voice/speaker slots)"
+        )
 
 
 def _require_dataset_dirs(allowlist: Allowlist, data_root: Path) -> None:
@@ -194,139 +359,34 @@ def _fetch_voices(
     return paths
 
 
-def _synthesize(
-    voice_paths: dict[str, Path],
-    voice_ids: list[str],
-    phrase: str,
-    dest_dir: Path,
-    n_samples: int,
-) -> None:
-    if not voice_ids:
-        raise AllowlistError("no voices to synthesize")
-    per_voice = max(1, n_samples // len(voice_ids))
-    for vid in voice_ids:
-        speakers = _num_speakers(voice_paths[vid])
-        for i in range(per_voice):
-            dest = dest_dir / vid / f"{i:05d}.wav"
-            if dest.is_file():
-                continue
-            synthesize_with_piper(
-                voice_paths[vid],
-                phrase,
-                dest,
-                variation=synthesis_variation(i, speakers),
-            )
-
-
-def _num_speakers(voice_onnx: Path) -> int:
-    """Speakers in a Piper voice, from the config that ships beside it.
-
-    libritts and vctk carry hundreds; using only speaker 0 threw that away.
-    """
-    config = voice_onnx.with_suffix(voice_onnx.suffix + ".json")
-    if not config.is_file():
-        return 1
-    try:
-        return max(1, int(json.loads(config.read_text(encoding="utf-8"))["num_speakers"]))
-    except (ValueError, KeyError, OSError):
-        return 1
-
-
-def _load_pool(data_root: Path, allowlist: Allowlist, *, role: str) -> list[tuple]:
-    pool: list[tuple] = []
-    for dataset in allowlist.datasets:
-        if dataset.role != role:
-            continue
-        root = data_root / dataset.id
-        for path in iter_audio_files(root):
-            samples, rate = read_audio(path)
-            pool.append((resample_16k(samples, rate), dataset.id, dataset.licence))
-    return pool
-
-
-def _windows_from_dir(backbone, clips_dir: Path, *, noise, rir):
-    import numpy as np
-
-    from wake_word_training.features import MIN_HEAD_WINDOW_SAMPLES
-
-    windows = []
-    wavs = list(iter_audio_files(clips_dir))
-    for i, wav in enumerate(wavs):
-        samples, rate = read_audio(wav)
-        audio = resample_16k(samples, rate)
-        n = noise[i % len(noise)][0] if noise else None
-        r = rir[i % len(rir)][0] if rir else None
-        snr = 5.0 + (i % 16)
-        # Pad before augmenting so reverb and noise cover the whole window.
-        padded = pad_for_window(audio, MIN_HEAD_WINDOW_SAMPLES, filler=n)
-        augmented = augment_clip(padded, noise=n, rir=r, snr_db=snr)
-        windows.append(backbone.windows(augmented))
-    if not windows:
-        raise AllowlistError(f"no clips under {clips_dir}")
-    stacked = [w for w in windows if len(w)]
-    if not stacked:
-        # read_audio returns clips at their native rate (Piper writes 22050 Hz).
-        shortest = min(
-            len(samples) / rate for samples, rate in (read_audio(w) for w in wavs)
-        )
-        raise AllowlistError(
-            "clips produced no embedding windows: a head window needs "
-            f"{MIN_HEAD_WINDOW_SAMPLES / SAMPLE_RATE:.2f}s of audio and the "
-            f"shortest clip under {clips_dir} is {shortest:.2f}s"
-        )
-    return np.concatenate(stacked, axis=0)
-
-
-def _sample_background_windows(
-    backbone,
-    data_root: Path,
-    allowlist: Allowlist,
-    *,
-    max_hours: float,
-    max_windows: int,
-):
-    """Stream background clips until hour or window caps; never load the full tree."""
-    import numpy as np
-
-    collected: list = []
-    hours_left = max_hours
-    n_windows = 0
-    for dataset in allowlist.datasets:
-        if dataset.role != "background":
-            continue
-        if hours_left <= 0 or n_windows >= max_windows:
-            break
-        for audio, _path in iter_clips_capped(
-            data_root / dataset.id, max_hours=hours_left
-        ):
-            hours_left -= len(audio) / SAMPLE_RATE / 3600.0
-            windows = backbone.windows(audio)
-            if len(windows) == 0:
-                continue
-            collected.append(windows)
-            n_windows += len(windows)
-            if hours_left <= 0 or n_windows >= max_windows:
-                break
-    if not collected:
-        return np.zeros((0, 16, 96), dtype=np.float32)
-    stacked = np.concatenate(collected, axis=0)
-    if len(stacked) > max_windows:
-        stacked = stacked[:max_windows]
-    return stacked
 
 
 def _write_run_manifest(
     out: Path,
     allowlist: Allowlist,
-    train_voices: list[str],
-    held_out: list[str],
+    split: SpeakerSplit,
+    trace,
     model_path: Path,
 ) -> None:
     payload = {
         "phrase": PHRASE,
         "model": str(model_path),
-        "train_voices": train_voices,
-        "held_out_voices": held_out,
+        "speaker_split": {
+            name: {
+                "voices": split.voices(name),
+                "speakers": len(split.identities(name)),
+            }
+            for name in ("train", "validation", "held_out")
+        },
+        "training": {
+            "steps_run": trace.steps_run,
+            "best_step": trace.best_step,
+            "best_validation_loss": trace.best_validation_loss,
+            "positive_validation_loss": trace.positive_validation_loss,
+            "negative_validation_loss": trace.negative_validation_loss,
+            "hard_negative_windows": trace.hard_negatives,
+            "stopped_early": trace.stopped_early,
+        },
         "manifest": [
             {
                 "id": e.id,
