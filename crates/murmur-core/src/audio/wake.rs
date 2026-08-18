@@ -186,25 +186,24 @@ pub fn resolved_model_paths() -> Result<WakeModelPaths> {
 // hashes can never drift under us. The melspectrogram + embedding backbone is
 // openWakeWord's Apache-2.0 feature extractor (Google speech_embedding); the
 // head is Murmur's own trained artifact (see training/wake-word/).
-// Pins hold a fail-closed non-hex sentinel until the `wake-models-v1` release
-// assets exist; `ensure_pinned` rejects the sentinel, so the feature cannot
-// fetch unpinned files (filled in by the training/release task).
+// `ensure_pinned` rejects anything that is not a 64-character lowercase hex
+// digest, so a missing or malformed pin fails closed before any network work.
 
 #[cfg(feature = "wake")]
 const RELEASE_BASE: &str = "https://github.com/EricSekyere/murmur/releases/download/wake-models-v1";
 
 #[cfg(feature = "wake")]
-const MELSPECTROGRAM_SHA256: &str = "pending-release-upload";
+const MELSPECTROGRAM_SHA256: &str =
+    "ba2b0e0f8b7b875369a2c89cb13360ff53bac436f2895cced9f479fa65eb176f";
 #[cfg(feature = "wake")]
-const EMBEDDING_SHA256: &str = "pending-release-upload";
+const EMBEDDING_SHA256: &str = "70d164290c1d095d1d4ee149bc5e00543250a7316b59f31d056cff7bd3075c1f";
 #[cfg(feature = "wake")]
-const HEY_MURMUR_SHA256: &str = "pending-release-upload";
+const HEY_MURMUR_SHA256: &str = "dfa7361cfb8d92a2b9a697eb579a853234cc45b6c5fb3f1183e0de0ded6d3bd2";
 
 /// Combined size of the three model files, shown to the user before the
-/// first-enable download. Zero until the release assets exist (the download
-/// itself is blocked by the pin sentinel until then).
+/// first-enable download.
 #[cfg(feature = "wake")]
-pub const TOTAL_DOWNLOAD_BYTES: u64 = 0;
+pub const TOTAL_DOWNLOAD_BYTES: u64 = 3_271_592;
 
 /// Download all three wake model files into the cache, verifying each
 /// against its pinned SHA256. Idempotent per file; progress is reported as
@@ -248,6 +247,24 @@ pub async fn download(progress: impl Fn(&str, u64, Option<u64>)) -> Result<WakeM
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // The feature shipped inert once because the pins were placeholders and
+    // nothing failed until a user enabled it, so assert them at build time.
+    #[cfg(feature = "wake")]
+    #[test]
+    fn model_pins_are_real_digests() {
+        for (sha, label) in [
+            (MELSPECTROGRAM_SHA256, "melspectrogram"),
+            (EMBEDDING_SHA256, "embedding"),
+            (HEY_MURMUR_SHA256, "head"),
+        ] {
+            assert!(
+                crate::integrity::ensure_pinned(sha, label).is_ok(),
+                "{label} pin is not a usable SHA256: {sha}"
+            );
+        }
+        const { assert!(TOTAL_DOWNLOAD_BYTES > 0) };
+    }
 
     #[test]
     fn sensitivity_maps_to_descending_thresholds() {
