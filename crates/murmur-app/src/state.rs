@@ -122,6 +122,18 @@ pub(crate) struct AppState {
     /// only locked inside spawn_blocking, held across an inference.
     #[cfg(feature = "llm")]
     pub llm: Arc<Mutex<Option<murmur_core::llm::LlmEngine>>>,
+    /// True while the audio worker holds the armed wake stream, per the
+    /// worker's own events (see `wake_supervisor`). The UI renders from the
+    /// same event stream — never from a parallel flag.
+    pub wake_armed: AtomicBool,
+    /// True between queueing an arm and the worker answering with `Armed` or
+    /// `Disarmed`. `wake_armed` only turns true once the worker confirms, so
+    /// reconciliation that consults it alone treats an in-flight arm as "not
+    /// armed" and skips the disarm a meeting start needs.
+    pub wake_arm_pending: AtomicBool,
+    /// Sender for worker wake events, cloned into every arm request; set
+    /// once the supervisor's event pump starts.
+    pub wake_tx: OnceLock<std::sync::mpsc::Sender<audio_worker::WakeEvent>>,
 }
 
 #[derive(serde::Serialize, Clone)]

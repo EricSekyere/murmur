@@ -19,7 +19,8 @@ until you actually start dictating.
 
 > **Note:** It is off by default because your system's mic-in-use
 > indicator stays lit while the stream is warm. Turn it on in Settings if
-> you dictate often and want the fastest possible start.
+> you dictate often and want the fastest possible start. Always listening
+> is a separate opt-in mode; see the Always listening article.
 
 ## Mic sensitivity
 

@@ -85,6 +85,12 @@ Downloaded models live in your app data folder under murmur/models. If a
 download is interrupted, the part already fetched is kept, and the next
 attempt resumes where it left off instead of starting over.
 
+> **Tip:** In scripts, pass `--no-download` to `murmur transcribe` or
+> `murmur listen` (or set `MURMUR_NO_DOWNLOAD=1`) to make a missing model a
+> clean error instead of a several-hundred-megabyte fetch. The error names
+> the model, its size, and the exact `murmur models --download` command to
+> run.
+
 > **Privacy:** Every file is checked against a pinned SHA256 checksum
 > before use, so a corrupted, incomplete, or tampered download is rejected
 > and refetched rather than loaded. A file without a pinned checksum is

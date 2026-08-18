@@ -20,6 +20,7 @@ full = [
     "treesitter",
     "help",
     "diarization",
+    "wake",
 ]
 # Audio capture via CPAL
 audio = ["dep:cpal"]
@@ -39,6 +40,10 @@ vulkan = ["stt", "whisper-rs/vulkan"]
 # Voice activity detection via ONNX Runtime. Requires `audio` for the
 # in-tree resampler used to feed Silero v5 at its required 16 kHz.
 vad = ["audio", "dep:ort", "dep:zip", "dep:flate2", "dep:tar"]
+# Wake-word detection ("Hey Murmur", openWakeWord architecture) via ONNX
+# Runtime. Shares the ort runtime with `vad`; `audio` provides the resampler
+# feeding the detector at its required 16 kHz.
+wake = ["audio", "dep:ort", "dep:zip", "dep:flate2", "dep:tar"]
 # Parakeet STT backend via ONNX Runtime (also needs ort directly for init_from)
 parakeet = ["dep:parakeet-rs", "dep:ort", "dep:zip", "dep:flate2", "dep:tar"]
 # Local speaker diarization via NVIDIA Sortformer v2. Runs

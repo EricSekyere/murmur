@@ -296,6 +296,18 @@ pub struct Settings {
     #[serde(default)]
     pub mic_warm_start: bool,
 
+    /// Always-listening mode: while armed, a local wake-word detector scores
+    /// mic audio in memory and "Hey Murmur" starts a dictation session.
+    /// Strictly opt-in; requires a build with the `wake` feature and the
+    /// wake model download.
+    #[serde(default)]
+    pub wake_word_enabled: bool,
+
+    /// Wake detector sensitivity. Higher fires more readily in noise; lower
+    /// means fewer false triggers. Mapped to a model threshold internally.
+    #[serde(default)]
+    pub wake_word_sensitivity: crate::audio::wake::WakeSensitivity,
+
     /// Codebase-derived vocabulary settings (off by default).
     #[serde(default)]
     pub indexer: IndexerSettings,
@@ -551,6 +563,8 @@ impl Default for Settings {
             context_injection_enabled: false,
             echo_cancellation: true,
             mic_warm_start: false,
+            wake_word_enabled: false,
+            wake_word_sensitivity: crate::audio::wake::WakeSensitivity::default(),
             indexer: IndexerSettings::default(),
             path_aliases: Vec::new(),
             cloud: None,
@@ -723,6 +737,15 @@ impl Settings {
             );
             Self::default()
         })
+    }
+
+    /// Parse and validate an existing config file with no fallback and no
+    /// disk writes: a missing, unreadable, or invalid file is an error.
+    ///
+    /// For read paths that must report a broken file to the user instead of
+    /// silently substituting defaults (e.g. `murmur config --show`).
+    pub fn load_strict(path: &PathBuf) -> Result<Self> {
+        Self::read_and_validate(path)
     }
 
     fn read_and_validate(path: &PathBuf) -> Result<Self> {
@@ -1464,6 +1487,35 @@ mod tests {
         let text = toml::to_string_pretty(&settings).unwrap();
         let reloaded: Settings = toml::from_str(&text).unwrap();
         assert!(reloaded.mic_warm_start);
+    }
+
+    #[test]
+    fn old_config_without_wake_fields_loads_disabled_medium() {
+        let old = r#"hotkey = "ctrl+shift+space""#;
+        let settings: Settings = toml::from_str(old).unwrap();
+        assert!(!settings.wake_word_enabled);
+        assert_eq!(
+            settings.wake_word_sensitivity,
+            crate::audio::wake::WakeSensitivity::Medium
+        );
+        // An always-listening mode is strictly opt-in on a fresh config.
+        assert!(!Settings::default().wake_word_enabled);
+    }
+
+    #[test]
+    fn wake_settings_round_trip_through_toml() {
+        let settings = Settings {
+            wake_word_enabled: true,
+            wake_word_sensitivity: crate::audio::wake::WakeSensitivity::High,
+            ..Settings::default()
+        };
+        let text = toml::to_string_pretty(&settings).unwrap();
+        let reloaded: Settings = toml::from_str(&text).unwrap();
+        assert!(reloaded.wake_word_enabled);
+        assert_eq!(
+            reloaded.wake_word_sensitivity,
+            crate::audio::wake::WakeSensitivity::High
+        );
     }
 
     #[test]

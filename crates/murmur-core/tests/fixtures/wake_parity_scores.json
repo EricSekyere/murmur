@@ -1,0 +1,28 @@
+{
+  "generated_by": "training/wake-word/tools/make_parity_fixture.py",
+  "audio": "wake_parity.wav",
+  "sample_rate": 16000,
+  "samples": 76800,
+  "frame_samples": 1280,
+  "window_stride_seconds": 0.128,
+  "onnxruntime": "1.21.1",
+  "head_sha256": "dfa7361cfb8d92a2b9a697eb579a853234cc45b6c5fb3f1183e0de0ded6d3bd2",
+  "melspectrogram_sha256": "ba2b0e0f8b7b875369a2c89cb13360ff53bac436f2895cced9f479fa65eb176f",
+  "embedding_sha256": "70d164290c1d095d1d4ee149bc5e00543250a7316b59f31d056cff7bd3075c1f",
+  "scores": [
+    0.016721278,
+    0.016826481,
+    0.017114371,
+    0.018182695,
+    0.019655764,
+    0.023351312,
+    0.028067231,
+    0.024658829,
+    0.023862571,
+    0.023530751,
+    0.059853882,
+    0.83484602,
+    0.981735408,
+    0.985228121
+  ]
+}

@@ -9,7 +9,7 @@ use murmur_core::voice_commands::{self, VoiceCommand};
 use tauri::{Emitter, Manager};
 use unicode_segmentation::UnicodeSegmentation;
 
-use crate::audio_worker::{AudioResult, StartParams, panic_message};
+use crate::audio_worker::{AudioResult, StartParams, StartReason, panic_message};
 use crate::state::{
     AppState, emit_hotkey_error, emit_recording_state, emit_transcription_diagnostic,
 };
@@ -45,13 +45,24 @@ pub(crate) fn handle_toggle(app: &tauri::AppHandle) {
             .fetch_add(1, std::sync::atomic::Ordering::AcqRel)
             + 1;
         drop(recording);
-        start_session(app, &state, generation);
+        start_session(app, &state, generation, StartReason::Hotkey);
     }
 }
 
 /// Push-to-talk: start recording if idle. Idempotent — a held key that
 /// auto-repeats won't restart an active session.
 pub(crate) fn begin_recording(app: &tauri::AppHandle) {
+    begin_recording_for(app, StartReason::Hotkey);
+}
+
+/// Wake detection: start a session on the already-armed stream. Same claim
+/// discipline as push-to-talk; the reason routes the worker to its prearmed
+/// start (rewind, no calibration pause, silent abort).
+pub(crate) fn begin_wake_recording(app: &tauri::AppHandle) {
+    begin_recording_for(app, StartReason::WakeWord);
+}
+
+fn begin_recording_for(app: &tauri::AppHandle, reason: StartReason) {
     let state = app.state::<AppState>();
     let generation = {
         let mut recording = state.recording.lock().unwrap_or_else(|e| e.into_inner());
@@ -65,7 +76,7 @@ pub(crate) fn begin_recording(app: &tauri::AppHandle) {
             .fetch_add(1, std::sync::atomic::Ordering::AcqRel)
             + 1
     };
-    start_session(app, &state, generation);
+    start_session(app, &state, generation, reason);
 }
 
 /// Push-to-talk: stop recording if active. Idempotent.
@@ -96,7 +107,7 @@ fn stop_session(app: &tauri::AppHandle, state: &AppState) {
     }
 }
 
-fn start_session(app: &tauri::AppHandle, state: &AppState, generation: u64) {
+fn start_session(app: &tauri::AppHandle, state: &AppState, generation: u64, reason: StartReason) {
     // The caller has already claimed the recording flag; release it on any
     // path that does not actually start a session.
     //
@@ -137,9 +148,15 @@ fn start_session(app: &tauri::AppHandle, state: &AppState, generation: u64) {
                 model,
             );
         }
-        release_if_current(app, state, generation);
-        emit_hotkey_error(app, "Model still loading, please wait");
-        return;
+        // A wake start proceeds through the load: the user already spoke,
+        // and phrases buffer in the result channel while the streaming
+        // worker waits for the engine — the audio is never lost to the load.
+        if reason != StartReason::WakeWord {
+            release_if_current(app, state, generation);
+            emit_hotkey_error(app, "Model still loading, please wait");
+            return;
+        }
+        tracing::info!("Wake session proceeding while the engine loads");
     }
 
     #[cfg(windows)]
@@ -154,6 +171,7 @@ fn start_session(app: &tauri::AppHandle, state: &AppState, generation: u64) {
         let settings = state.settings.lock().unwrap_or_else(|e| e.into_inner());
         StartParams {
             generation,
+            start_reason: reason,
             audio_device: settings.audio_device.clone(),
             rms_threshold: settings.silence_rms_threshold,
             vad_threshold: settings.vad_threshold,
@@ -176,7 +194,7 @@ fn start_session(app: &tauri::AppHandle, state: &AppState, generation: u64) {
     }
 
     emit_recording_state(app, true, false);
-    spawn_streaming_worker(app.clone(), state, generation);
+    spawn_streaming_worker(app.clone(), state, generation, reason);
 }
 
 /// Clear the recording flag and emit the idle state, but only if `generation`
@@ -200,7 +218,12 @@ fn release_if_current(app: &tauri::AppHandle, state: &AppState, generation: u64)
     true
 }
 
-fn spawn_streaming_worker(app: tauri::AppHandle, state: &AppState, generation: u64) {
+fn spawn_streaming_worker(
+    app: tauri::AppHandle,
+    state: &AppState,
+    generation: u64,
+    reason: StartReason,
+) {
     // Serialize behind any still-finishing prior worker: two workers draining
     // the one audio result channel would split or drop phrases. The new worker
     // joins its immediate predecessor on its own thread, so the input thread
@@ -216,7 +239,7 @@ fn spawn_streaming_worker(app: tauri::AppHandle, state: &AppState, generation: u
             let _ = prev.join();
         }
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            streaming_worker(&app, generation);
+            streaming_worker(&app, generation, reason);
         }));
         if let Err(panic_info) = outcome {
             let msg = panic_message(panic_info, "unknown panic in streaming worker");
@@ -289,7 +312,7 @@ struct LastDelivery {
 
 /// Background thread: receive phrases from the audio worker, transcribe
 /// each, and deliver the text to the focused application.
-fn streaming_worker(app: &tauri::AppHandle, generation: u64) {
+fn streaming_worker(app: &tauri::AppHandle, generation: u64, reason: StartReason) {
     let state = app.state::<AppState>();
     // Resolve any per-app profile for the foreground app up front, so its
     // overrides apply for the whole session.
@@ -383,6 +406,37 @@ fn streaming_worker(app: &tauri::AppHandle, generation: u64) {
 
     if sound_feedback {
         crate::sound::play_start();
+    }
+
+    // A wake session may start before the (idle-unloaded) engine finishes
+    // reloading. Wait here rather than failing: phrases queue in the
+    // unbounded result channel meanwhile, so no audio is lost to the load.
+    if reason == StartReason::WakeWord
+        && !state
+            .engine_loaded
+            .load(std::sync::atomic::Ordering::Acquire)
+    {
+        const ENGINE_WAIT: Duration = Duration::from_secs(30);
+        let deadline = Instant::now() + ENGINE_WAIT;
+        while !state
+            .engine_loaded
+            .load(std::sync::atomic::Ordering::Acquire)
+            && Instant::now() < deadline
+        {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        if !state
+            .engine_loaded
+            .load(std::sync::atomic::Ordering::Acquire)
+        {
+            tracing::error!("Engine did not load within the wake session wait; stopping");
+            emit_hotkey_error(app, "Model failed to load for the wake session");
+            if let Err(e) = audio.request_stop() {
+                tracing::error!("Failed to stop the wake session: {}", e);
+            }
+            // Fall through: drain results until StreamingDone so cleanup
+            // (release, chime, re-arm sync) runs on the normal path.
+        }
     }
 
     // When the caption should roam to the active window, capture that window
@@ -1008,6 +1062,10 @@ fn finish_streaming(
         crate::caption::hide(app);
     }
     let _ = app.emit("streaming-done", serde_json::json!({}));
+
+    // Re-arm follows the *mode*, not the session: sync consults the current
+    // setting, so a mode disabled mid-session ends idle, not armed.
+    crate::wake_supervisor::sync(app);
 }
 
 /// Fire the profile-configured submit keystroke once at session end, gated by

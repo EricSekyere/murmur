@@ -139,6 +139,27 @@ impl AudioCapture {
         self.start_cpal(preferred_device, echo_cancellation)
     }
 
+    /// Open the raw microphone for passive listening, never the OS
+    /// voice-capture path, and without touching AEC health.
+    ///
+    /// The probe budget in [`AecHealth`] assumes a start happens when the user
+    /// is about to speak, which is true of a hotkey press. Always-listening
+    /// arms in silence and re-arms after every session and meeting, so routing
+    /// it through [`start`](Self::start) would spend that budget on moments
+    /// nobody was speaking and demote echo cancellation for the whole run,
+    /// including later hotkey dictation. A session that begins from a wake
+    /// word therefore continues on this raw stream and has no echo
+    /// cancellation, which is the documented cost of not reopening the device
+    /// at the moment the user starts talking.
+    pub fn start_passive(&mut self, preferred_device: Option<&str>) -> Result<()> {
+        self.session.start_session();
+        #[cfg(any(windows, target_os = "linux"))]
+        {
+            self.voice = None;
+        }
+        self.start_cpal(preferred_device, false)
+    }
+
     /// Enable or disable warm-start (keep the mic stream open between
     /// sessions). Disabling releases an idle-open stream immediately; a live
     /// session keeps recording and `stop()` honours the new flag.

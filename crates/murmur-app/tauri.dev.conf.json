@@ -1,0 +1,6 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Murmur Dev",
+  "version": "0.99.0",
+  "identifier": "com.murmur.dev"
+}

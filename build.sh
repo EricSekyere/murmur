@@ -35,6 +35,22 @@ cleanup_whisper_artifacts() {
     fi
 }
 
+# A local build carries a dev identity by default. The single-instance mutex is
+# named from the app identifier, so a local build sharing production's
+# identifier does not run alongside an installed Murmur: it hands off to it and
+# exits, which reads as "the installed app is broken" rather than as a clash.
+DEV_IDENTITY=1
+for arg in "$@"; do
+    case "$arg" in
+        --production) DEV_IDENTITY=0 ;;
+        --help|-h)
+            echo "usage: build.sh [--production]"
+            echo "  --production  build with the shipping identifier and version"
+            exit 0
+            ;;
+    esac
+done
+
 # Prerequisite checks
 FAIL=0
 
@@ -221,6 +237,12 @@ if [[ "$OSTYPE" == msys* || "$OSTYPE" == cygwin* || "$OSTYPE" == win* ]]; then
         TAURI_ARGS+=(--no-bundle)
         DID_BUNDLE=0
     fi
+fi
+
+if [[ "$DEV_IDENTITY" -eq 1 ]]; then
+    TAURI_ARGS+=(--config "$ROOT/crates/murmur-app/tauri.dev.conf.json")
+    yellow "Dev identity: com.murmur.dev, version 0.99.0 (updater stays quiet)"
+    yellow "Runs alongside an installed Murmur. Use --production for the shipping identity."
 fi
 
 cargo tauri build "${TAURI_ARGS[@]}" "${CARGO_FEATURE_ARGS[@]}"

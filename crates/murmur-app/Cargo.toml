@@ -9,8 +9,10 @@ description = "Tauri v2 desktop app for Murmur voice-to-text tool"
 
 [features]
 default = ["full"]
-full = ["murmur-core/full", "vad", "diarization"]
+full = ["murmur-core/full", "vad", "diarization", "wake"]
 vad = ["murmur-core/vad"]
+# Wake-word detection ("Hey Murmur") — always-listening mode.
+wake = ["murmur-core/wake"]
 # Speaker labels for meeting mode (Sortformer over the ORT CPU runtime).
 # In `full`: no GPU SDK involved, so CI's full build covers it.
 diarization = ["murmur-core/diarization"]
@@ -35,7 +37,7 @@ murmur-core = { workspace = true, features = ["indexer"] }
 # MCP server + client setup, shared with the CLI. Lets `murmur-app mcp` act as
 # a stdio MCP server and the Settings button wire up Cursor / Claude.
 murmur-mcp.workspace = true
-tauri = { version = "2", features = ["tray-icon"] }
+tauri = { version = "2", features = ["tray-icon", "image-png"] }
 serde.workspace = true
 serde_json = "1"
 tokio.workspace = true
@@ -76,6 +78,7 @@ futures-util = { version = "0.3", default-features = false, features = ["sink", 
 windows = { version = "0.58", features = [
     "Win32_Foundation",
     "Win32_System_Com",
+    "Win32_System_Power",
     "Win32_UI_Accessibility",
     "Win32_UI_Shell",
     "Win32_UI_WindowsAndMessaging",
