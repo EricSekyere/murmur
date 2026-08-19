@@ -62,6 +62,16 @@ pub(crate) fn calibrate(
     from_ambient(ambient_rms, configured_threshold, echo_cancellation)
 }
 
+/// Boost applied when the raw-mic path has no usable ambient measurement
+/// (the floor window read digital zero because the driver gates idle audio).
+/// Field logs on such a driver put raw speech near rms 0.03, below what the
+/// engine decodes reliably, and wake sessions at unity gain missed speech
+/// outright. 3x is provisional, not blind: [`crate::gain::GainStage`] caps
+/// every chunk's peak at its headroom ceiling, so an overestimate is pulled
+/// down by the first loud chunk instead of clipping the way the old hard
+/// clamp did.
+const PROVISIONAL_GAIN: f32 = 3.0;
+
 /// Derive gain and speech threshold from a measured ambient floor. Shared by
 /// startup calibration and the wake path's prearmed start, which measured
 /// its ambient during the armed loop instead of pausing to calibrate.
@@ -76,12 +86,15 @@ pub(crate) fn from_ambient(
     // AGC-leveled by the OS, so a boost there would re-amplify the AGC's
     // silence-noise into that same territory; leave it at unity. At or
     // below 0.0001 the window held no usable samples (empty window, driver
-    // gating idle audio to zero), not a silent room; that is no measurement
-    // at all, and amplifying on no evidence overdrives real speech.
+    // gating idle audio to zero), not a silent room; that is no measurement,
+    // so fall back to the provisional boost and let the gain stage's
+    // running-peak ceiling correct it against real speech.
     let mic_gain = if echo_cancellation {
         1.0
     } else if ambient_rms > 0.0001 && ambient_rms < 0.02 {
         (0.02 / ambient_rms).min(5.0)
+    } else if ambient_rms <= 0.0001 {
+        PROVISIONAL_GAIN
     } else {
         1.0
     };
@@ -226,11 +239,13 @@ mod tests {
 
     /// Zero (or sub-measurable) ambient means the floor window held no
     /// usable samples: a gated driver or an empty window, not a silent room.
-    /// A fixed boost on no evidence overdrives real speech.
+    /// On such hardware raw speech is too quiet for reliable decoding, so
+    /// the absence of a measurement gets the provisional boost; the gain
+    /// stage's peak ceiling, not a hard clamp, bounds it against real speech.
     #[test]
-    fn absent_ambient_measurement_gets_unity_gain() {
-        assert_eq!(from_ambient(0.0, 0.0, false).mic_gain, 1.0);
-        assert_eq!(from_ambient(0.00005, 0.0, false).mic_gain, 1.0);
+    fn absent_ambient_measurement_gets_the_provisional_boost() {
+        assert_eq!(from_ambient(0.0, 0.0, false).mic_gain, PROVISIONAL_GAIN);
+        assert_eq!(from_ambient(0.00005, 0.0, false).mic_gain, PROVISIONAL_GAIN);
     }
 
     #[test]
