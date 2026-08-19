@@ -17,6 +17,7 @@ use std::time::{Duration, Instant};
 use crate::calibration::{
     build_session, calibrate, keep_calibration_preroll, trim_buffer_to_preroll,
 };
+use crate::gain::GainStage;
 use crate::state::emit_hotkey_error;
 
 /// Rolling window for the in-session noise-floor estimate: ~5s of 50ms ticks.
@@ -397,20 +398,35 @@ fn run_worker(cmd_rx: &mpsc::Receiver<Cmd>, result_tx: &mpsc::Sender<Tagged>) {
                         };
                         let outcome =
                             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                                run_session_prearmed(
-                                    &mut capture,
-                                    &start_params,
-                                    cmd_rx,
-                                    &sender,
-                                    ambient_floor,
-                                    detected_at,
-                                );
+                                match armed_start_route(start_params.start_reason) {
+                                    ArmedStartRoute::ReusePassiveStream => run_session_prearmed(
+                                        &mut capture,
+                                        &start_params,
+                                        cmd_rx,
+                                        &sender,
+                                        ambient_floor,
+                                        detected_at,
+                                    ),
+                                    ArmedStartRoute::ReopenDevice => {
+                                        // Close the passive stream, and with it
+                                        // any pre-press audio; run_session then
+                                        // starts over with the session's echo
+                                        // cancellation setting, exactly as if
+                                        // the app had been idle.
+                                        stop_capture(&mut capture, "armed explicit-start handoff");
+                                        run_session(&mut capture, &start_params, cmd_rx, &sender);
+                                    }
+                                }
                             }));
                         if let Err(panic_info) = outcome {
-                            let msg = panic_message(panic_info, "panic in wake session");
-                            tracing::error!("Wake session panicked, recovering: {}", msg);
+                            let msg =
+                                panic_message(panic_info, "panic in session started while armed");
+                            tracing::error!(
+                                "Session started while armed panicked, recovering: {}",
+                                msg
+                            );
                             capture.set_warm_start(false);
-                            stop_capture(&mut capture, "wake session panic recovery");
+                            stop_capture(&mut capture, "armed-start session panic recovery");
                             sender.send(AudioResult::StreamingDone);
                         }
                     }
@@ -477,6 +493,25 @@ fn wake_keep_samples(keep: Duration, native_rate: u32, native_channels: u16) -> 
     let ch = native_channels.max(1) as usize;
     let frames = (native_rate as f64 * keep.as_secs_f64()) as usize;
     frames * ch
+}
+
+/// How a start that lands while armed acquires its stream. A wake start must
+/// stay on the open passive stream: the phrase was already spoken, so the
+/// buffered audio is the only copy of the command onset. An explicit
+/// (hotkey/UI) start reopens the device instead: the passive stream is raw
+/// CPAL by design, and inheriting it silently dropped the echo-cancelled
+/// voice path that hotkey dictation gets when not armed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ArmedStartRoute {
+    ReusePassiveStream,
+    ReopenDevice,
+}
+
+fn armed_start_route(reason: StartReason) -> ArmedStartRoute {
+    match reason {
+        StartReason::WakeWord => ArmedStartRoute::ReusePassiveStream,
+        StartReason::Hotkey => ArmedStartRoute::ReopenDevice,
+    }
 }
 
 enum ArmedExit {
@@ -742,7 +777,7 @@ fn run_session(
         native_rate,
         native_channels,
         analyzed_up_to,
-        mic_gain: calibration.mic_gain,
+        gain: GainStage::new(calibration.mic_gain),
         effective_ambient: calibration.effective_ambient,
         auto_threshold: params.rms_threshold <= 0.0,
         current_threshold: calibration.threshold,
@@ -760,10 +795,13 @@ fn run_session(
     .run();
 }
 
-/// A session started from the armed wake state: the stream is already open
-/// and verified live, ambient was measured while armed (no calibration
-/// pause), the live buffer is rewound to just past the wake phrase, and a
-/// silent-abort deadline caps the cost of a false trigger.
+/// A wake-word session on the already-open armed stream: it is verified
+/// live, ambient was measured while armed (no calibration pause), the live
+/// buffer is rewound to just past the wake phrase, and a silent-abort
+/// deadline caps the cost of a false trigger. Only wake starts route here
+/// (see [`armed_start_route`]); an explicit start that lands while armed
+/// reopens the device through [`run_session`] so it keeps the
+/// echo-cancelled path it would have had when idle.
 fn run_session_prearmed(
     capture: &mut AudioCapture,
     params: &StartParams,
@@ -780,15 +818,8 @@ fn run_session_prearmed(
 
     // Rewind: keep only audio from (detection - lag compensation) onward.
     // Everything earlier — the wake phrase itself — is dropped here, which
-    // is what keeps "Hey Murmur" out of the delivered text. An explicit
-    // (hotkey) start that lands while armed keeps the ordinary ~1 s preroll
-    // instead and gets no silent-abort deadline: the user asked for it.
-    let wake_start = params.start_reason == StartReason::WakeWord;
-    let keep = if wake_start {
-        wake_keep_duration(detected_at.map(|t| t.elapsed()).unwrap_or(Duration::ZERO))
-    } else {
-        Duration::from_secs(1)
-    };
+    // is what keeps "Hey Murmur" out of the delivered text.
+    let keep = wake_keep_duration(detected_at.map(|t| t.elapsed()).unwrap_or(Duration::ZERO));
     let keep_samples = wake_keep_samples(keep, native_rate, native_channels);
     {
         let mut buf = live_buf.lock().unwrap_or_else(|e| e.into_inner());
@@ -822,7 +853,7 @@ fn run_session_prearmed(
         native_rate,
         native_channels,
         analyzed_up_to: 0,
-        mic_gain: calibration.mic_gain,
+        gain: GainStage::new(calibration.mic_gain),
         effective_ambient: calibration.effective_ambient,
         auto_threshold: params.rms_threshold <= 0.0,
         current_threshold: calibration.threshold,
@@ -835,7 +866,7 @@ fn run_session_prearmed(
         startup_deadline: Instant::now() + Duration::from_millis(1200),
         silence_deadline: Instant::now() + Duration::from_secs(3),
         live_preview: params.live_preview,
-        wake_abort_deadline: wake_start.then(|| Instant::now() + WAKE_SILENT_ABORT),
+        wake_abort_deadline: Some(Instant::now() + WAKE_SILENT_ABORT),
     }
     .run();
 }
@@ -911,7 +942,7 @@ struct Monitor<'a> {
     native_rate: u32,
     native_channels: u16,
     analyzed_up_to: usize,
-    mic_gain: f32,
+    gain: GainStage,
     effective_ambient: f32,
     auto_threshold: bool,
     current_threshold: f32,
@@ -1043,10 +1074,10 @@ impl Monitor<'_> {
             let mono = (buf.len() > self.analyzed_up_to)
                 .then(|| downmix_to_mono(&buf[self.analyzed_up_to..], self.native_channels));
             buf.clear();
-            mono.map(|m| self.apply_gain(m))
+            mono
         };
 
-        if let Some(mono) = remaining {
+        if let Some(mono) = remaining.map(|m| self.gain.apply(m)) {
             for event in self.session.ingest(&mono) {
                 if let DictationEvent::PhraseReady(audio) = event
                     && !audio.samples.is_empty()
@@ -1084,16 +1115,7 @@ impl Monitor<'_> {
             snapshot
         };
         let mono = downmix_to_mono(&raw, self.native_channels);
-        Some(self.apply_gain(mono))
-    }
-
-    fn apply_gain(&self, mono: Vec<f32>) -> Vec<f32> {
-        if self.mic_gain <= 1.0 {
-            return mono;
-        }
-        mono.iter()
-            .map(|s| (s * self.mic_gain).clamp(-1.0, 1.0))
-            .collect()
+        Some(self.gain.apply(mono))
     }
 
     fn track_signal(&mut self, saw_new_samples: bool, chunk_rms: f32) {
@@ -1431,6 +1453,25 @@ mod tests {
         assert_eq!(
             wake_keep_samples(Duration::from_millis(240), 16_000, 1),
             3_840
+        );
+    }
+
+    /// The armed-capture regression: hotkey sessions inherited the passive
+    /// (raw CPAL) stream and lost echo cancellation. Explicit starts must
+    /// reopen the device; only wake starts may reuse the stream.
+    #[test]
+    fn hotkey_start_while_armed_reopens_the_device() {
+        assert_eq!(
+            armed_start_route(StartReason::Hotkey),
+            ArmedStartRoute::ReopenDevice
+        );
+    }
+
+    #[test]
+    fn wake_start_while_armed_keeps_the_passive_stream_for_preroll() {
+        assert_eq!(
+            armed_start_route(StartReason::WakeWord),
+            ArmedStartRoute::ReusePassiveStream
         );
     }
 
