@@ -401,6 +401,10 @@ fn streaming_worker(app: &tauri::AppHandle, generation: u64, reason: StartReason
         if release_if_current(app, &state, generation) {
             emit_hotkey_error(app, &format!("Failed to start recording: {}", e));
         }
+        // A hotkey start intercepted while armed has already torn the armed
+        // stream down; without a sync here a failed device reopen would
+        // leave always-listening off until the next session ends.
+        crate::wake_supervisor::sync(app);
         return;
     }
 
