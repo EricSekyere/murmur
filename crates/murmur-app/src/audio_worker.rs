@@ -514,6 +514,18 @@ fn armed_start_route(reason: StartReason) -> ArmedStartRoute {
     }
 }
 
+/// Answer to an `Arm` that lands while the armed loop is already running.
+///
+/// It must read as armed: the stream IS open and detection IS running.
+/// Answering with `Disarmed` (as this code once did) made the supervisor
+/// record the stream as closed while the worker kept it open; its next
+/// reconcile queued another arm, which was rejected the same way, looping
+/// forever. Field logs show 14938 rejected arms in two hours, each attempt
+/// rebuilding the ONNX scorer.
+pub(crate) fn duplicate_arm_answer() -> WakeEvent {
+    WakeEvent::Armed
+}
+
 enum ArmedExit {
     ToIdle,
     /// A StartStreaming arrived while armed: run it on the open stream.
@@ -600,12 +612,8 @@ fn run_armed(
                 };
             }
             Ok(Cmd::Arm(other)) => {
-                // Answer the second arm's own channel so its supervisor
-                // isn't left waiting; this armed period continues.
-                let _ = other.wake_tx.send(WakeEvent::Disarmed {
-                    reason: "already armed".to_string(),
-                    failed: false,
-                });
+                tracing::debug!("Arm received while already armed; confirming the armed state");
+                let _ = other.wake_tx.send(duplicate_arm_answer());
             }
             Ok(Cmd::SetWarm(p)) => capture.set_warm_start(p.enabled),
             Ok(Cmd::Stop) => {
