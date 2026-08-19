@@ -282,6 +282,66 @@ fn build_scorer_at(
     Ok(Box::new(scorer))
 }
 
+/// What the pump must do after mirroring a worker event into state.
+#[derive(Debug, PartialEq)]
+enum PumpFollowUp {
+    /// Reconcile now against the current intent.
+    Settle,
+    /// Schedule a reconcile after the backoff delay.
+    RetryAfter(Duration),
+    /// Retries exhausted: surface the failure to the user.
+    ReportFailure,
+    /// A wake phrase was detected: start a session.
+    StartSession,
+}
+
+/// Pure part of the event pump, split out so the arm/disarm protocol is
+/// testable without a worker or a Tauri handle. `armed: None` leaves the
+/// recorded state untouched (a detection says nothing about the stream).
+struct PumpOutcome {
+    armed: Option<bool>,
+    attempts: u32,
+    follow_up: PumpFollowUp,
+}
+
+fn pump_transition(event: &WakeEvent, attempts: u32) -> PumpOutcome {
+    match event {
+        // The worker also answers a duplicate arm with `Armed` (see
+        // `audio_worker::duplicate_arm_answer`): both mean the stream is
+        // open, so both settle reconciliation instead of feeding it.
+        WakeEvent::Armed => PumpOutcome {
+            armed: Some(true),
+            attempts: 0,
+            follow_up: PumpFollowUp::Settle,
+        },
+        WakeEvent::Disarmed { failed, .. } => match retry_delay(*failed, attempts) {
+            Some(delay) => PumpOutcome {
+                armed: Some(false),
+                attempts: attempts + 1,
+                follow_up: PumpFollowUp::RetryAfter(delay),
+            },
+            None if *failed => PumpOutcome {
+                armed: Some(false),
+                attempts,
+                follow_up: PumpFollowUp::ReportFailure,
+            },
+            // Expected exit: reconcile now rather than on a timer, so a
+            // disarm taken to reload settings re-arms as soon as the worker
+            // is actually idle.
+            None => PumpOutcome {
+                armed: Some(false),
+                attempts,
+                follow_up: PumpFollowUp::Settle,
+            },
+        },
+        WakeEvent::Detected { .. } => PumpOutcome {
+            armed: None,
+            attempts,
+            follow_up: PumpFollowUp::StartSession,
+        },
+    }
+}
+
 /// Start the long-lived thread translating worker wake events into UI state,
 /// session starts, and bounded re-arm retries. Returns the sender cloned
 /// into every `ArmParams`.
@@ -291,43 +351,38 @@ pub(crate) fn spawn_event_pump(app: tauri::AppHandle) -> mpsc::Sender<WakeEvent>
         let mut attempts: u32 = 0;
         while let Ok(event) = rx.recv() {
             let state = app.state::<AppState>();
-            match event {
-                WakeEvent::Armed => {
-                    attempts = 0;
-                    state.wake_arm_pending.store(false, Ordering::Release);
-                    state.wake_armed.store(true, Ordering::Release);
-                    // The intent may have changed while the arm was in flight
-                    // (a meeting started, the mode was turned off), so settle
-                    // against it now that the worker has answered.
-                    sync(&app);
+            if let WakeEvent::Disarmed { reason, failed } = &event {
+                tracing::info!(%reason, failed, "wake armed state ended");
+            }
+
+            let outcome = pump_transition(&event, attempts);
+            attempts = outcome.attempts;
+            if let Some(armed) = outcome.armed {
+                // An answered arm is no longer pending, whichever way it went.
+                state.wake_arm_pending.store(false, Ordering::Release);
+                state.wake_armed.store(armed, Ordering::Release);
+            }
+            match outcome.follow_up {
+                // The intent may have changed while the worker's answer was
+                // in flight (a meeting started, the mode was turned off), so
+                // settle against it now.
+                PumpFollowUp::Settle => sync(&app),
+                PumpFollowUp::RetryAfter(delay) => {
+                    let app = app.clone();
+                    std::thread::spawn(move || {
+                        std::thread::sleep(delay);
+                        sync(&app);
+                    });
                 }
-                WakeEvent::Disarmed { reason, failed } => {
-                    state.wake_arm_pending.store(false, Ordering::Release);
-                    state.wake_armed.store(false, Ordering::Release);
-                    tracing::info!(%reason, failed, "wake armed state ended");
-                    match retry_delay(failed, attempts) {
-                        Some(delay) => {
-                            attempts += 1;
-                            let app = app.clone();
-                            std::thread::spawn(move || {
-                                std::thread::sleep(delay);
-                                sync(&app);
-                            });
-                        }
-                        None if failed => {
-                            emit_hotkey_error(
-                                &app,
-                                &format!("Always listening stopped: {}", reason),
-                            );
-                        }
-                        // Expected exit: reconcile here rather than on a timer,
-                        // so a disarm taken to reload settings re-arms as soon
-                        // as the worker is actually idle.
-                        None => sync(&app),
+                PumpFollowUp::ReportFailure => {
+                    if let WakeEvent::Disarmed { reason, .. } = &event {
+                        emit_hotkey_error(&app, &format!("Always listening stopped: {}", reason));
                     }
                 }
-                WakeEvent::Detected { score } => {
-                    tracing::info!(score, "wake detection; starting session");
+                PumpFollowUp::StartSession => {
+                    if let WakeEvent::Detected { score } = &event {
+                        tracing::info!(score, "wake detection; starting session");
+                    }
                     begin_wake_session(&app);
                 }
             }
@@ -556,6 +611,83 @@ mod tests {
             Err(e) => e,
         };
         assert!(err.to_string().contains("not downloaded"), "got: {err}");
+    }
+
+    /// The re-arm storm: reconcile queued an arm while the worker was
+    /// already armed (an OS resume can seed this), and the worker rejected
+    /// it with `Disarmed`. The pump then recorded the stream as closed while
+    /// the worker kept it open, so the next reconcile queued another arm,
+    /// rejected the same way: an unbounded loop (field logs: 14938 arms in
+    /// two hours, each rebuilding the ONNX scorer). The worker's answer must
+    /// read as armed so reconciliation settles.
+    #[test]
+    fn a_duplicate_arm_answer_settles_instead_of_looping() {
+        let answer = crate::audio_worker::duplicate_arm_answer();
+        let outcome = pump_transition(&answer, 0);
+        assert_eq!(
+            outcome.armed,
+            Some(true),
+            "duplicate-arm answer must confirm the open stream"
+        );
+        let worker = WorkerWakeState {
+            armed: outcome.armed.unwrap_or(false),
+            arm_pending: false,
+        };
+        assert_eq!(
+            sync_action(true, worker),
+            SyncAction::Nothing,
+            "reconcile must settle, not queue another arm"
+        );
+    }
+
+    #[test]
+    fn an_armed_answer_resets_the_retry_budget() {
+        let outcome = pump_transition(&WakeEvent::Armed, 2);
+        assert_eq!(outcome.armed, Some(true));
+        assert_eq!(outcome.attempts, 0);
+        assert_eq!(outcome.follow_up, PumpFollowUp::Settle);
+    }
+
+    #[test]
+    fn failed_disarms_retry_with_backoff_then_report() {
+        let first = pump_transition(
+            &WakeEvent::Disarmed {
+                reason: "mic lost".into(),
+                failed: true,
+            },
+            0,
+        );
+        assert_eq!(first.armed, Some(false));
+        assert_eq!(first.attempts, 1);
+        assert_eq!(first.follow_up, PumpFollowUp::RetryAfter(REARM_BACKOFF[0]));
+
+        let exhausted = pump_transition(
+            &WakeEvent::Disarmed {
+                reason: "mic lost".into(),
+                failed: true,
+            },
+            REARM_BACKOFF.len() as u32,
+        );
+        assert_eq!(exhausted.follow_up, PumpFollowUp::ReportFailure);
+    }
+
+    #[test]
+    fn expected_disarms_settle_and_detections_leave_state_alone() {
+        let expected = pump_transition(
+            &WakeEvent::Disarmed {
+                reason: "session start".into(),
+                failed: false,
+            },
+            1,
+        );
+        assert_eq!(expected.armed, Some(false));
+        assert_eq!(expected.attempts, 1);
+        assert_eq!(expected.follow_up, PumpFollowUp::Settle);
+
+        let detected = pump_transition(&WakeEvent::Detected { score: 0.98 }, 1);
+        assert_eq!(detected.armed, None);
+        assert_eq!(detected.attempts, 1);
+        assert_eq!(detected.follow_up, PumpFollowUp::StartSession);
     }
 
     #[test]

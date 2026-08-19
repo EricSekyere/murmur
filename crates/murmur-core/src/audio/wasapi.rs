@@ -28,7 +28,22 @@ use windows::core::PCWSTR;
 
 const WAVE_FORMAT_IEEE_FLOAT: u16 = 0x0003;
 const WAVE_FORMAT_EXTENSIBLE: u16 = 0xFFFE;
+const AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY: u32 = 0x1;
 const AUDCLNT_BUFFERFLAGS_SILENT: u32 = 0x2;
+
+/// Whether a finished capture session delivered materially less audio than
+/// wall time: the signature of the OS/driver starving the stream mid-session.
+/// A field case delivered 40s of frames across an 84s session; the phrases
+/// assembled from it were chopped fragments the engine decoded as noise.
+/// Short sessions are exempt, since startup latency dominates their ratio.
+fn delivery_starved(frames: u64, rate: u32, elapsed_secs: f64) -> bool {
+    const MIN_ELAPSED_SECS: f64 = 2.0;
+    const MIN_DELIVERY_RATIO: f64 = 0.9;
+    if elapsed_secs < MIN_ELAPSED_SECS || rate == 0 {
+        return false;
+    }
+    (frames as f64 / rate as f64) < elapsed_secs * MIN_DELIVERY_RATIO
+}
 
 /// Handle to a running voice-capture session. Dropping it stops the capture
 /// thread and waits for it to finish.
@@ -183,11 +198,15 @@ fn capture_loop(
         };
 
         let ch = channels.max(1) as usize;
-        // Diagnostics: how much audio the AEC pipeline actually delivered, and how
-        // much of it the engine flagged as silence. Reveals on a real repro whether
-        // the comms/AEC path is the source of the digital-silence sessions.
+        // Diagnostics: how much audio the AEC pipeline actually delivered, how
+        // much of it the engine flagged as silence, and whether any of it was
+        // lost (engine-side discontinuities, or our own cap). Reveals on a real
+        // repro whether the comms/AEC path starved or silenced a session.
+        let started_at = std::time::Instant::now();
         let mut captured_frames: u64 = 0;
         let mut silent_frames: u64 = 0;
+        let mut discontinuities: u64 = 0;
+        let mut dropped_at_cap: u64 = 0;
         while !stop.load(Ordering::Acquire) {
             // Keep the AEC reference fed with silence so it never underruns.
             if let Some((rclient, rrender, bufsize)) = render.as_ref()
@@ -220,15 +239,21 @@ fn capture_loop(
                 if silent {
                     silent_frames += frames as u64;
                 }
+                if flags & AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY != 0 {
+                    discontinuities += 1;
+                }
                 let total = frames as usize * ch;
                 if total > 0
                     && let Ok(mut buf) = buffer.lock()
-                    && buf.len() < max_samples
                 {
-                    if silent {
-                        buf.extend(std::iter::repeat_n(0.0, total));
+                    if buf.len() < max_samples {
+                        if silent {
+                            buf.extend(std::iter::repeat_n(0.0, total));
+                        } else {
+                            push_samples(&mut buf, data, total, bits, is_float);
+                        }
                     } else {
-                        push_samples(&mut buf, data, total, bits, is_float);
+                        dropped_at_cap += frames as u64;
                     }
                 }
                 let _ = capture.ReleaseBuffer(frames);
@@ -240,9 +265,21 @@ fn capture_loop(
         } else {
             0
         };
+        let elapsed_secs = started_at.elapsed().as_secs_f64();
         tracing::info!(
+            wall_secs = elapsed_secs,
+            discontinuities,
+            dropped_at_cap,
             "Voice capture ended: {captured_frames} frames ({silent_pct}% flagged silent by the AEC)"
         );
+        if delivery_starved(captured_frames, rate, elapsed_secs) {
+            tracing::warn!(
+                delivered_secs = captured_frames as f64 / rate as f64,
+                wall_secs = elapsed_secs,
+                discontinuities,
+                "Voice capture under-delivered; phrases from this session were likely chopped"
+            );
+        }
 
         if let Some((rclient, _, _)) = render.as_ref() {
             let _ = rclient.Stop();
@@ -322,6 +359,18 @@ unsafe fn push_samples(
 mod tests {
     use super::*;
     use std::time::Duration;
+
+    /// The field case: 1918176 frames at 48kHz across an 84s session is 40s
+    /// of audio; the phrases assembled from it decoded as noise. That must be
+    /// reported, while healthy sessions (99%+) and short ones stay quiet.
+    #[test]
+    fn under_delivery_is_flagged_and_healthy_sessions_are_not() {
+        assert!(delivery_starved(1_918_176, 48_000, 84.0));
+        assert!(!delivery_starved(48_000 * 60, 48_000, 60.2));
+        // Startup latency dominates short sessions; never flag them.
+        assert!(!delivery_starved(8_000, 48_000, 0.8));
+        assert!(!delivery_starved(0, 0, 30.0));
+    }
 
     /// Manual smoke test: needs a real mic + a default communications endpoint,
     /// so it's ignored in CI. Run locally with:
