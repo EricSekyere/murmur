@@ -74,13 +74,14 @@ pub(crate) fn from_ambient(
     // usable levels. Capped at 5x: more amplifies the noise floor into
     // whisper-hallucination territory. The echo-cancelled path is already
     // AGC-leveled by the OS, so a boost there would re-amplify the AGC's
-    // silence-noise into that same territory — leave it at unity.
+    // silence-noise into that same territory; leave it at unity. At or
+    // below 0.0001 the window held no usable samples (empty window, driver
+    // gating idle audio to zero), not a silent room; that is no measurement
+    // at all, and amplifying on no evidence overdrives real speech.
     let mic_gain = if echo_cancellation {
         1.0
     } else if ambient_rms > 0.0001 && ambient_rms < 0.02 {
         (0.02 / ambient_rms).min(5.0)
-    } else if ambient_rms <= 0.0001 {
-        3.0
     } else {
         1.0
     };
@@ -216,5 +217,34 @@ fn load_vad(
             );
             None
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Zero (or sub-measurable) ambient means the floor window held no
+    /// usable samples: a gated driver or an empty window, not a silent room.
+    /// A fixed boost on no evidence overdrives real speech.
+    #[test]
+    fn absent_ambient_measurement_gets_unity_gain() {
+        assert_eq!(from_ambient(0.0, 0.0, false).mic_gain, 1.0);
+        assert_eq!(from_ambient(0.00005, 0.0, false).mic_gain, 1.0);
+    }
+
+    #[test]
+    fn quiet_room_is_still_boosted_within_the_cap() {
+        let cal = from_ambient(0.004804, 0.0, false);
+        assert!(cal.mic_gain > 1.0);
+        assert!(cal.mic_gain <= 5.0);
+        assert_eq!(from_ambient(0.002, 0.0, false).mic_gain, 5.0);
+    }
+
+    #[test]
+    fn echo_cancelled_and_loud_paths_stay_at_unity() {
+        assert_eq!(from_ambient(0.0, 0.0, true).mic_gain, 1.0);
+        assert_eq!(from_ambient(0.004, 0.0, true).mic_gain, 1.0);
+        assert_eq!(from_ambient(0.05, 0.0, false).mic_gain, 1.0);
     }
 }

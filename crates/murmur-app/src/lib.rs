@@ -15,6 +15,7 @@ mod command_mode;
 mod commands;
 mod dictation_trigger;
 mod focus;
+mod gain;
 mod idle_unload;
 mod input;
 mod local_api;
