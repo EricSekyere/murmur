@@ -23,6 +23,7 @@ permissions:
 jobs:
   prepare:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     outputs:
       version: ${{ steps.calc.outputs.version }}
       release: ${{ steps.calc.outputs.release }}
@@ -61,6 +62,7 @@ jobs:
     needs: prepare
     if: needs.prepare.outputs.release == 'true'
     runs-on: windows-2022
+    timeout-minutes: 90
     env:
       LIBCLANG_PATH: C:\Program Files\LLVM\bin
       # whisper.cpp must compile optimized. Setting CMAKE_GENERATOR to any
@@ -198,10 +200,12 @@ jobs:
     needs: [prepare, release-windows]
     if: needs.prepare.outputs.release == 'true'
     runs-on: ubuntu-22.04
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
 
       - name: Install system dependencies
+        timeout-minutes: 15
         run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -258,6 +262,7 @@ jobs:
     needs: [prepare, release-windows]
     if: needs.prepare.outputs.release == 'true'
     runs-on: macos-14
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
 

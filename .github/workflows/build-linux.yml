@@ -29,6 +29,7 @@ jobs:
   build-linux:
     name: Build Linux bundles (deb + AppImage)
     runs-on: ubuntu-22.04
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
 
@@ -36,6 +37,7 @@ jobs:
       # ALSA (cpal), X11/xdo (enigo, arboard, global-hotkey, rdev), and
       # cmake/clang to build whisper.cpp.
       - name: Install system dependencies
+        timeout-minutes: 15
         run: |
           sudo apt-get update
           sudo apt-get install -y \
