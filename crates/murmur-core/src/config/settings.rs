@@ -214,6 +214,18 @@ pub struct Settings {
     #[serde(default = "default_clipboard_placeholders")]
     pub clipboard_placeholders: Vec<String>,
 
+    /// Names of MCP servers command mode is allowed to connect to.
+    ///
+    /// Default-deny: empty means no server is trusted, which is what the
+    /// backend was hardcoded to before this became configurable. A name here
+    /// grants nothing by itself, it only lifts the connection refusal; every
+    /// tool the server offers still goes through the permission store, and a
+    /// tool the server reports as destructive still requires physical
+    /// confirmation. Note that the risk tier comes from the server's own
+    /// annotations, so allowlisting one is a statement of trust in it.
+    #[serde(default)]
+    pub mcp_allowed_servers: Vec<String>,
+
     /// Spoken language: "auto" to detect, or a code like "en"/"es"/"fr".
     /// Only honored by multilingual models (the `.en` models are English-only).
     #[serde(default = "default_language")]
@@ -429,6 +441,9 @@ pub const MAX_SNIPPETS: usize = 100;
 pub const MAX_APP_PROFILES: usize = 50;
 pub const MAX_CLIPBOARD_PLACEHOLDERS: usize = 16;
 pub const MAX_PATH_ALIASES: usize = 100;
+/// Bounds how many MCP servers command mode may be told to trust. Each one
+/// is a child process the app will spawn, so the list stays short.
+pub const MAX_MCP_ALLOWED_SERVERS: usize = 32;
 const MAX_VOCAB_ENTRY_CHARS: usize = 100;
 const MAX_SNIPPET_TRIGGER_CHARS: usize = 100;
 // Shared with the post-substitution clamp on parameterized snippet output.
@@ -438,6 +453,7 @@ const MAX_REWRITE_PROMPT_CHARS: usize = 500;
 const MAX_CLIPBOARD_PLACEHOLDER_CHARS: usize = 100;
 const MAX_PATH_ALIAS_SPOKEN_CHARS: usize = 100;
 const MAX_PATH_ALIAS_PATH_CHARS: usize = 260;
+const MAX_MCP_SERVER_NAME_CHARS: usize = 100;
 
 /// Truncate a string to at most `max` characters, on a UTF-8 boundary.
 fn truncate_chars(s: &mut String, max: usize) {
@@ -549,6 +565,7 @@ impl Default for Settings {
             live_preview: true,
             snippets: Vec::new(),
             clipboard_placeholders: default_clipboard_placeholders(),
+            mcp_allowed_servers: Vec::new(),
             language: default_language(),
             translate_to_english: false,
             show_translated_caption: false,
@@ -799,6 +816,22 @@ impl Settings {
         }
         placeholders.truncate(MAX_CLIPBOARD_PLACEHOLDERS);
         self.clipboard_placeholders = placeholders;
+        // A '/' is the server/tool namespace separator, so a name containing
+        // one could never match a real server and is dropped rather than
+        // silently failing to connect later.
+        let mut servers: Vec<String> = Vec::new();
+        for entry in std::mem::take(&mut self.mcp_allowed_servers) {
+            let mut name = entry.trim().to_string();
+            if name.contains('/') {
+                continue;
+            }
+            truncate_chars(&mut name, MAX_MCP_SERVER_NAME_CHARS);
+            if !name.is_empty() && !servers.contains(&name) {
+                servers.push(name);
+            }
+        }
+        servers.truncate(MAX_MCP_ALLOWED_SERVERS);
+        self.mcp_allowed_servers = servers;
         self.indexer.max_symbols = self.indexer.max_symbols.clamp(1, MAX_INDEX_SYMBOLS);
         self.indexer.extensions.truncate(MAX_INDEX_EXTENSIONS);
         self.indexer.project_roots.truncate(MAX_INDEX_ROOTS);
@@ -1174,6 +1207,114 @@ mod tests {
         let text = toml::to_string_pretty(&settings).unwrap();
         let reloaded: Settings = toml::from_str(&text).unwrap();
         assert!(reloaded.show_translated_caption);
+    }
+
+    #[test]
+    fn mcp_allowlist_defaults_to_empty_which_is_deny_all() {
+        // The backend was hardcoded to an empty allowlist before this became
+        // configurable; a config that never mentions MCP must not change.
+        assert!(Settings::default().mcp_allowed_servers.is_empty());
+    }
+
+    #[test]
+    fn old_config_without_the_mcp_allowlist_still_loads() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("config.toml");
+        std::fs::write(
+            &path,
+            "model = \"whisper-small-en\"
+",
+        )
+        .expect("write");
+        let settings = Settings::load(&path).expect("load");
+        assert!(settings.mcp_allowed_servers.is_empty());
+    }
+
+    #[test]
+    fn mcp_allowlist_round_trips_through_toml() {
+        let settings = Settings {
+            mcp_allowed_servers: vec!["git".into(), "filesystem".into()],
+            ..Default::default()
+        };
+        let text = toml::to_string_pretty(&settings).expect("serialize");
+        let reloaded: Settings = toml::from_str(&text).expect("deserialize");
+        assert_eq!(reloaded.mcp_allowed_servers, vec!["git", "filesystem"]);
+    }
+
+    #[test]
+    fn mcp_allowlist_drops_entries_that_could_never_match() {
+        // '/' is the server/tool namespace separator, so such a name can
+        // never name a server; blanks and duplicates are equally useless.
+        let mut settings = Settings {
+            mcp_allowed_servers: vec![
+                "  git  ".into(),
+                String::new(),
+                "git".into(),
+                "bad/name".into(),
+                "filesystem".into(),
+            ],
+            ..Default::default()
+        };
+        settings.clamp_collections();
+        assert_eq!(settings.mcp_allowed_servers, vec!["git", "filesystem"]);
+    }
+
+    #[test]
+    fn a_slash_beyond_the_length_cap_still_rejects_the_name() {
+        // The '/' check must run before truncation. Truncating first strips
+        // the slash and leaves an acceptable-looking prefix, silently
+        // admitting a name that can never match a server.
+        let mut settings = Settings {
+            mcp_allowed_servers: vec![format!(
+                "{}/tool",
+                "b".repeat(MAX_MCP_SERVER_NAME_CHARS + 50)
+            )],
+            ..Default::default()
+        };
+        settings.clamp_collections();
+        assert!(
+            settings.mcp_allowed_servers.is_empty(),
+            "name with a slash past the cap survived as {:?}",
+            settings.mcp_allowed_servers
+        );
+    }
+
+    #[test]
+    fn mcp_allowlist_caps_each_name_length() {
+        let mut settings = Settings {
+            mcp_allowed_servers: vec!["a".repeat(MAX_MCP_SERVER_NAME_CHARS + 50)],
+            ..Default::default()
+        };
+        settings.clamp_collections();
+        assert_eq!(
+            settings.mcp_allowed_servers[0].chars().count(),
+            MAX_MCP_SERVER_NAME_CHARS
+        );
+    }
+
+    #[test]
+    fn mcp_allowlist_preserves_case_because_matching_is_exact() {
+        // Server names are matched by exact HashSet lookup against the keys
+        // in the user's MCP config, so lowercasing here would break a server
+        // legitimately named with capitals.
+        let mut settings = Settings {
+            mcp_allowed_servers: vec!["GitHub".into()],
+            ..Default::default()
+        };
+        settings.clamp_collections();
+        assert_eq!(settings.mcp_allowed_servers, vec!["GitHub"]);
+    }
+
+    #[test]
+    fn mcp_allowlist_is_capped() {
+        let mut settings = Settings {
+            mcp_allowed_servers: (0..MAX_MCP_ALLOWED_SERVERS + 20)
+                .map(|i| format!("server{i}"))
+                .collect(),
+            ..Default::default()
+        };
+        settings.clamp_collections();
+        assert_eq!(settings.mcp_allowed_servers.len(), MAX_MCP_ALLOWED_SERVERS);
     }
 
     #[test]
