@@ -123,8 +123,11 @@ pub fn run() -> anyhow::Result<()> {
     let engine: Arc<Mutex<Option<SttEngine>>> = Arc::new(Mutex::new(None));
     let engine_for_setup = Arc::clone(&engine);
 
-    let command_state =
-        command_mode::CommandState::new().context("initializing command mode context")?;
+    let command_state = command_mode::CommandState::new(
+        settings.mcp_allowed_servers.clone(),
+        murmur_core::command::PermissionStore::load(),
+    )
+    .context("initializing command mode context")?;
     let command_shortcut = command_mode::hotkey_shortcut();
 
     tauri::Builder::default()
