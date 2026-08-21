@@ -1,3 +1,5 @@
+#[cfg(feature = "parakeet")]
+mod chunk;
 pub mod engine;
 pub mod models;
 pub mod postprocess;
