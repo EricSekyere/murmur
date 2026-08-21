@@ -120,14 +120,29 @@ pub(crate) struct CommandState {
 }
 
 impl CommandState {
-    /// The Phase 0 context: the starter grammar over native actions, the
-    /// saved permission policy, and an MCP backend with an empty allowlist
-    /// (no servers connect until the Phase 2 wiring lands).
-    pub(crate) fn new() -> anyhow::Result<Self> {
+    /// The starter grammar over native actions, the saved permission policy,
+    /// and an MCP backend trusting exactly the servers the user allowlisted.
+    ///
+    /// `allowed_servers` is normally `Settings::mcp_allowed_servers`, which
+    /// defaults to empty. Empty is deny-all, so a config that never mentions
+    /// MCP behaves as it did when the allowlist was hardcoded empty.
+    ///
+    /// The permission store is injected rather than loaded here so tests can
+    /// supply their own; `PermissionStore::load` reads the real config dir.
+    pub(crate) fn new(
+        allowed_servers: Vec<String>,
+        permissions: PermissionStore,
+    ) -> anyhow::Result<Self> {
+        if !allowed_servers.is_empty() {
+            tracing::info!(
+                servers = ?allowed_servers,
+                "command mode: MCP servers allowlisted"
+            );
+        }
         Ok(Self {
             grammar: starter_grammar().context("building the starter command grammar")?,
-            executor: Executor::new(SystemActions, PermissionStore::load()),
-            backend: ActionBackend::new(std::iter::empty::<String>()),
+            executor: Executor::new(SystemActions, permissions),
+            backend: ActionBackend::new(allowed_servers),
             pending: PendingGate::default(),
             choice: Gate::default(),
         })
@@ -527,9 +542,33 @@ pub(crate) fn toggle_mode(app: &tauri::AppHandle) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
     use murmur_core::command::{Permission, RiskTier, Tool};
     use serde_json::json;
     use std::sync::{Arc, Mutex};
+
+    /// The gate the allowlist exists to control: with nothing configured the
+    /// backend refuses every server, which is the behaviour that shipped when
+    /// the list was hardcoded empty.
+    #[test]
+    fn an_empty_allowlist_trusts_no_server() {
+        let state =
+            CommandState::new(Vec::new(), PermissionStore::default()).expect("command state");
+        assert!(!state.backend.is_allowed("git"));
+        assert!(!state.backend.is_allowed("filesystem"));
+    }
+
+    #[test]
+    fn configured_servers_reach_the_backend_and_others_still_do_not() {
+        let state = CommandState::new(
+            vec!["git".to_string(), "filesystem".to_string()],
+            PermissionStore::default(),
+        )
+        .expect("state");
+        assert!(state.backend.is_allowed("git"));
+        assert!(state.backend.is_allowed("filesystem"));
+        assert!(!state.backend.is_allowed("something-else"));
+    }
 
     #[derive(Clone, Default)]
     struct RecordingActions {

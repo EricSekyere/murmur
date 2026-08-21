@@ -618,19 +618,80 @@ impl SttEngine {
         })
     }
 
+    /// Transcribe with Parakeet, windowing input the model cannot take whole.
+    ///
+    /// Its encoder positional encoding ends at 5000 frames, so a single call
+    /// past roughly 400 s fails with a broadcast error, and accuracy falls
+    /// apart long before that. Short input, which is every dictation phrase,
+    /// still takes exactly one inference and is unchanged.
     #[cfg(feature = "parakeet")]
     fn transcribe_parakeet(
         engine: &mut parakeet_rs::ParakeetTDT,
         samples: &[f32],
         start: Instant,
     ) -> Result<TranscriptionResult> {
-        use parakeet_rs::Transcriber;
+        let ranges = super::chunk::windows(samples, super::chunk::PARAKEET_MAX_CHUNK_SAMPLES);
 
+        let secs = samples.len() as f32 / 16000.0;
         tracing::info!(
-            "Parakeet: transcribing {} samples ({:.2}s)...",
+            "Parakeet: transcribing {} samples ({:.2}s) in {} window(s)...",
             samples.len(),
-            samples.len() as f32 / 16000.0
+            secs,
+            ranges.len()
         );
+        // Silence here would be the worst outcome: the transcript still looks
+        // like a transcript, it is simply missing much of what was said.
+        if samples.len() > super::chunk::PARAKEET_RELIABLE_SAMPLES {
+            tracing::warn!(
+                audio_secs = secs,
+                "Parakeet loses accuracy on audio this long and may drop much                  of the speech; the Whisper backend segments long recordings                  internally and is the better choice for them"
+            );
+        }
+
+        let mut text = String::new();
+        for (index, range) in ranges.iter().enumerate() {
+            // Windows after the first begin mid-utterance, so each needs the
+            // same leading silence the caller prepended to the whole buffer.
+            let padded: Vec<f32>;
+            let input: &[f32] = if index == 0 {
+                &samples[range.clone()]
+            } else {
+                padded = std::iter::repeat_n(0.0_f32, PARAKEET_LEAD_MS * SAMPLES_PER_MS)
+                    .chain(samples[range.clone()].iter().copied())
+                    .collect();
+                &padded
+            };
+            let part = Self::parakeet_window(engine, input)?;
+            let part = part.trim();
+            if part.is_empty() {
+                continue;
+            }
+            if !text.is_empty() {
+                text.push(' ');
+            }
+            text.push_str(part);
+        }
+
+        let elapsed = start.elapsed();
+        tracing::info!(
+            "Parakeet transcribed {} samples in {}ms -> {} chars",
+            samples.len(),
+            elapsed.as_millis(),
+            text.trim().chars().count()
+        );
+        tracing::trace!("Parakeet text: {:?}", text.trim());
+
+        Ok(TranscriptionResult {
+            text: text.trim().to_string(),
+            processing_time_ms: elapsed.as_millis() as u64,
+            segments: Vec::new(),
+        })
+    }
+
+    /// One Parakeet inference over a single window.
+    #[cfg(feature = "parakeet")]
+    fn parakeet_window(engine: &mut parakeet_rs::ParakeetTDT, input: &[f32]) -> Result<String> {
+        use parakeet_rs::Transcriber;
 
         // Wrap parakeet inference in catch_unwind for the same reason we wrap
         // whisper.full(): the underlying ONNX Runtime / DirectML stack can
@@ -638,18 +699,17 @@ impl SttEngine {
         // GPU code crashes the entire app instead of falling through to the
         // user-facing error path.
         let inference = std::panic::catch_unwind(AssertUnwindSafe(|| {
-            engine.transcribe_samples(samples.to_vec(), 16000, 1, None)
+            engine.transcribe_samples(input.to_vec(), 16000, 1, None)
         }));
 
-        let result = match inference {
-            Ok(Ok(r)) => r,
+        match inference {
+            Ok(Ok(r)) => Ok(r.text),
             Ok(Err(e)) => {
                 tracing::error!("Parakeet transcription call failed: {}", e);
-                return Err(anyhow::anyhow!(
-                    "Parakeet transcription failed: {}. \
-                     This may indicate a DirectML/GPU issue.",
+                Err(anyhow::anyhow!(
+                    "Parakeet transcription failed: {}.                      This may indicate a DirectML/GPU issue.",
                     e
-                ));
+                ))
             }
             Err(panic_info) => {
                 let msg = if let Some(s) = panic_info.downcast_ref::<String>() {
@@ -662,28 +722,13 @@ impl SttEngine {
                 tracing::error!("Parakeet inference panicked: {}", msg);
                 // Typed marker (see the whisper path): the ORT/DirectML state
                 // may be corrupt; the caller should reload the engine.
-                return Err(anyhow::Error::new(InferencePanic {
+                Err(anyhow::Error::new(InferencePanic {
                     backend: "Parakeet",
                     message: msg,
                 })
-                .context("This is usually a GPU/DirectML driver issue."));
+                .context("This is usually a GPU/DirectML driver issue."))
             }
-        };
-
-        let elapsed = start.elapsed();
-        tracing::info!(
-            "Parakeet transcribed {} samples in {}ms -> {} chars",
-            samples.len(),
-            elapsed.as_millis(),
-            result.text.trim().chars().count()
-        );
-        tracing::trace!("Parakeet text: {:?}", result.text.trim());
-
-        Ok(TranscriptionResult {
-            text: result.text.trim().to_string(),
-            processing_time_ms: elapsed.as_millis() as u64,
-            segments: Vec::new(),
-        })
+        }
     }
 
     /// Get the path to the loaded model.
