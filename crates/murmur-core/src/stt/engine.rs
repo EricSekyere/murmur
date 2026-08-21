@@ -632,12 +632,21 @@ impl SttEngine {
     ) -> Result<TranscriptionResult> {
         let ranges = super::chunk::windows(samples, super::chunk::PARAKEET_MAX_CHUNK_SAMPLES);
 
+        let secs = samples.len() as f32 / 16000.0;
         tracing::info!(
             "Parakeet: transcribing {} samples ({:.2}s) in {} window(s)...",
             samples.len(),
-            samples.len() as f32 / 16000.0,
+            secs,
             ranges.len()
         );
+        // Silence here would be the worst outcome: the transcript still looks
+        // like a transcript, it is simply missing much of what was said.
+        if samples.len() > super::chunk::PARAKEET_RELIABLE_SAMPLES {
+            tracing::warn!(
+                audio_secs = secs,
+                "Parakeet loses accuracy on audio this long and may drop much                  of the speech; the Whisper backend segments long recordings                  internally and is the better choice for them"
+            );
+        }
 
         let mut text = String::new();
         for (index, range) in ranges.iter().enumerate() {

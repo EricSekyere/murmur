@@ -26,6 +26,14 @@ const RATE: usize = 16_000;
 /// internally and scored 99.8% coverage on the same 490 s audio.
 pub(crate) const PARAKEET_MAX_CHUNK_SAMPLES: usize = 240 * RATE;
 
+/// Longest audio Parakeet transcribes reliably, measured.
+///
+/// Word coverage against known references held at 100% for 17 s and 96% for
+/// 33 s, then collapsed to 7.5% at 63 s. The cliff sits between those, so
+/// this marks the point past which a transcript should not be trusted
+/// silently. Meeting mode's 30 s chunk cap stays below it.
+pub(crate) const PARAKEET_RELIABLE_SAMPLES: usize = 35 * RATE;
+
 /// Energy at or below this fraction of the search region's loudest probe
 /// counts as silence.
 ///
