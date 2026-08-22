@@ -712,6 +712,40 @@ mod tests {
     }
 
     #[test]
+    fn the_real_servers_tool_shapes_register_as_expected() {
+        // Modelled on what murmur's own MCP server actually exposes, since
+        // every other test here uses invented names. schemars puts a field in
+        // `required` only when it is not Option, so search_transcripts, whose
+        // query is mandatory, is the one that must stay unspeakable: no fixed
+        // phrase can supply a search term.
+        let tools = vec![
+            tool("murmur/get_recent_transcripts", &[]),
+            tool("murmur/search_transcripts", &["query"]),
+            tool("murmur/wait_for_next_dictation", &[]),
+            tool("murmur/request_dictation", &[]),
+        ];
+        let mut g = starter_grammar().expect("starter grammar");
+        let added = register_tool_phrases(&mut g, &tools);
+        assert_eq!(added, 3, "expected the three argument-free tools");
+
+        assert!(matches!(
+            route_transcript(&g, "murmur get recent transcripts"),
+            RouteOutcome::ToolCall { ref tool, .. } if tool == "murmur/get_recent_transcripts"
+        ));
+        assert!(matches!(
+            route_transcript(&g, "murmur request dictation"),
+            RouteOutcome::ToolCall { .. }
+        ));
+        assert!(
+            matches!(
+                route_transcript(&g, "murmur search transcripts"),
+                RouteOutcome::NoMatch
+            ),
+            "a tool needing an argument became speakable"
+        );
+    }
+
+    #[test]
     fn only_tools_without_required_arguments_become_speakable() {
         // A fixed phrase cannot supply arguments, and guessing them for a call
         // the permission store may auto-run is not acceptable.
