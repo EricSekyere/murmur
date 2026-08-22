@@ -47,7 +47,13 @@ impl ClientKind {
         }
     }
 
-    fn config_path(self) -> Option<PathBuf> {
+    /// Every client kind this build knows how to read or write.
+    pub fn all() -> &'static [ClientKind] {
+        ALL
+    }
+
+    /// Where this client keeps its MCP server list, if the platform has one.
+    pub fn config_path(self) -> Option<PathBuf> {
         // Resolved via murmur-core's seam so MURMUR_HOME_DIR and
         // MURMUR_CONFIG_DIR redirect these writes too (the config base is
         // %APPDATA% on Windows, ~/Library/Application Support on macOS, and

@@ -10,7 +10,7 @@
 use std::sync::atomic::Ordering;
 
 use anyhow::Context;
-use murmur_core::command::{Grammar, Match, PermissionStore, RouteOutcome, SlotValue};
+use murmur_core::command::{Grammar, Match, PermissionStore, RouteOutcome, SlotValue, Tool};
 use murmur_core::indexer::{FileMatch, Resolution};
 use murmur_core::output::OutputMode;
 use murmur_mcp::ActionBackend;
@@ -201,10 +201,123 @@ fn split_outcome(outcome: ExecOutcome) -> (ExecOutcomeDto, Option<PendingAction>
 /// model, and the app ships neither yet, so a miss stops here rather than
 /// guessing (design Section 4).
 fn route_transcript(grammar: &Grammar, transcript: &str) -> RouteOutcome {
-    grammar
-        .match_phrase(transcript)
-        .map(RouteOutcome::Command)
-        .unwrap_or(RouteOutcome::NoMatch)
+    let Some(matched) = grammar.match_phrase(transcript) else {
+        return RouteOutcome::NoMatch;
+    };
+    // A pattern registered for an MCP tool carries the namespaced tool name as
+    // its id, which is what tells the two apart. Native commands never contain
+    // the separator, so the check cannot collide with one.
+    match matched.command_id.contains(TOOL_ID_SEPARATOR) {
+        true => RouteOutcome::ToolCall {
+            tool: matched.command_id,
+            arguments: serde_json::Value::Object(Default::default()),
+        },
+        false => RouteOutcome::Command(matched),
+    }
+}
+
+impl CommandState {
+    /// Connect every allowlisted server that is actually configured, then
+    /// register what they offer.
+    ///
+    /// Best effort throughout. A server that is allowlisted but absent from
+    /// the user's MCP client configs, refuses to start, or fails its handshake
+    /// is logged and skipped; command mode keeps working with native commands
+    /// either way, which is why this never returns an error.
+    pub(crate) async fn connect_servers(&mut self, servers: Vec<murmur_mcp::ServerConfig>) {
+        let wanted: Vec<_> = servers
+            .into_iter()
+            .filter(|s| self.backend.is_allowed(&s.name))
+            .collect();
+        if wanted.is_empty() {
+            return;
+        }
+        let mut connected = 0;
+        for server in &wanted {
+            match self.backend.connect(server).await {
+                Ok(()) => connected += 1,
+                Err(e) => {
+                    tracing::warn!(server = %server.name, error = %e, "MCP server did not connect");
+                }
+            }
+        }
+        if connected == 0 {
+            return;
+        }
+        let tools = match self.backend.list_tools().await {
+            Ok(t) => t,
+            Err(e) => {
+                tracing::warn!(error = %e, "could not list MCP tools");
+                return;
+            }
+        };
+        let spoken = register_tool_phrases(&mut self.grammar, &tools);
+        let total = tools.len();
+        self.executor.set_tools(tools);
+        tracing::info!(
+            servers = connected,
+            tools = total,
+            speakable = spoken,
+            "MCP tools registered for command mode"
+        );
+    }
+}
+
+/// Separator between an MCP server and its tool, as `namespaced_tool_name`
+/// builds it. Native command ids never contain one.
+const TOOL_ID_SEPARATOR: char = '/';
+
+/// The phrase that invokes a namespaced MCP tool.
+///
+/// `git/status` becomes "git status": the separator and any underscores or
+/// dashes inside the tool name become spaces, which is how the name would be
+/// read aloud anyway. Returns None when nothing speakable is left.
+fn spoken_phrase_for_tool(tool_name: &str) -> Option<String> {
+    let spoken: String = tool_name
+        .chars()
+        .map(|c| match c {
+            TOOL_ID_SEPARATOR | '_' | '-' | '.' => ' ',
+            other => other.to_ascii_lowercase(),
+        })
+        .collect();
+    let spoken = spoken.split_whitespace().collect::<Vec<_>>().join(" ");
+    (!spoken.is_empty()).then_some(spoken)
+}
+
+/// Register a spoken phrase for each tool that takes no required arguments.
+///
+/// Only those, deliberately. A tool needing arguments cannot be driven from a
+/// fixed phrase, and guessing them from free speech is exactly the kind of
+/// thing that should not happen to a call the permission store may auto-run.
+/// Those tools stay listed and callable by other means, just not by voice.
+///
+/// Registration order matters: `Grammar::match_phrase` takes the first hit, so
+/// tools go in after the native starter commands and can never shadow one.
+fn register_tool_phrases(grammar: &mut Grammar, tools: &[Tool]) -> usize {
+    let mut added = 0;
+    for tool in tools {
+        if tool_requires_arguments(tool) {
+            continue;
+        }
+        let Some(phrase) = spoken_phrase_for_tool(&tool.name) else {
+            continue;
+        };
+        match grammar.add(tool.name.clone(), phrase.clone()) {
+            Ok(()) => added += 1,
+            Err(e) => {
+                tracing::warn!(tool = %tool.name, %phrase, error = %e, "tool phrase rejected");
+            }
+        }
+    }
+    added
+}
+
+/// Whether a tool's JSON Schema declares any required argument.
+fn tool_requires_arguments(tool: &Tool) -> bool {
+    tool.input_schema
+        .get("required")
+        .and_then(|r| r.as_array())
+        .is_some_and(|r| !r.is_empty())
 }
 
 /// Run a routed outcome through the guarded executor. Returns the DTO plus
@@ -546,6 +659,86 @@ mod tests {
     use murmur_core::command::{Permission, RiskTier, Tool};
     use serde_json::json;
     use std::sync::{Arc, Mutex};
+
+    fn tool(name: &str, required: &[&str]) -> Tool {
+        Tool {
+            name: name.to_string(),
+            description: String::new(),
+            input_schema: serde_json::json!({ "required": required }),
+            risk: murmur_core::command::RiskTier::ReadOnly,
+        }
+    }
+
+    #[test]
+    fn a_tool_id_routes_as_a_tool_call_and_a_command_does_not() {
+        // The whole bridge: a grammar hit whose id names a tool must become a
+        // ToolCall, while a native command must stay a Command.
+        let mut g = Grammar::new();
+        g.add("open_file", "open file").expect("native");
+        g.add("git/status", "git status").expect("tool");
+        assert!(matches!(
+            route_transcript(&g, "git status"),
+            RouteOutcome::ToolCall { ref tool, .. } if tool == "git/status"
+        ));
+        assert!(matches!(
+            route_transcript(&g, "open file"),
+            RouteOutcome::Command(_)
+        ));
+        assert!(matches!(
+            route_transcript(&g, "nonsense"),
+            RouteOutcome::NoMatch
+        ));
+    }
+
+    #[test]
+    fn a_tool_phrase_never_shadows_a_native_command() {
+        // Registration order is priority order, so a server offering a tool
+        // named after a built-in must not capture the phrase.
+        let mut g = Grammar::new();
+        g.add("undo_that", "undo that").expect("native");
+        register_tool_phrases(&mut g, &[tool("evil/undo_that", &[])]);
+        assert!(matches!(
+            route_transcript(&g, "undo that"),
+            RouteOutcome::Command(_)
+        ));
+    }
+
+    #[test]
+    fn only_tools_without_required_arguments_become_speakable() {
+        // A fixed phrase cannot supply arguments, and guessing them for a call
+        // the permission store may auto-run is not acceptable.
+        let mut g = Grammar::new();
+        let added = register_tool_phrases(
+            &mut g,
+            &[tool("git/status", &[]), tool("fs/delete", &["path"])],
+        );
+        assert_eq!(added, 1);
+        assert!(matches!(
+            route_transcript(&g, "git status"),
+            RouteOutcome::ToolCall { .. }
+        ));
+        assert!(matches!(
+            route_transcript(&g, "fs delete"),
+            RouteOutcome::NoMatch
+        ));
+    }
+
+    #[test]
+    fn tool_names_become_speakable_phrases() {
+        assert_eq!(
+            spoken_phrase_for_tool("git/status").as_deref(),
+            Some("git status")
+        );
+        assert_eq!(
+            spoken_phrase_for_tool("fs/list_directory").as_deref(),
+            Some("fs list directory")
+        );
+        assert_eq!(
+            spoken_phrase_for_tool("A/B-c.d").as_deref(),
+            Some("a b c d")
+        );
+        assert_eq!(spoken_phrase_for_tool("//").as_deref(), None);
+    }
 
     /// The gate the allowlist exists to control: with nothing configured the
     /// backend refuses every server, which is the behaviour that shipped when
