@@ -182,11 +182,16 @@ fn transcribe_with(
         )
     };
     let vocabulary = {
-        let on_screen = state
-            .editor_context
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let on_screen: Vec<String> = on_screen.fresh().to_vec();
+        // Copied out and the guard released before the next lock is taken.
+        // Shadowing the guard would not drop it, leaving editor_context held
+        // across the project_vocab acquisition for no reason.
+        let on_screen: Vec<String> = {
+            let guard = state
+                .editor_context
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            guard.fresh().to_vec()
+        };
         let project = state
             .project_vocab
             .lock()

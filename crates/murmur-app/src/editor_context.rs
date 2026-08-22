@@ -13,6 +13,7 @@
 //! Contents are identifiers out of the user's own source, held in memory only.
 //! They are never written to disk and never logged above `trace`.
 
+use std::collections::HashSet;
 use std::time::{Duration, Instant};
 
 /// How many symbols one editor update may contribute.
@@ -21,6 +22,13 @@ use std::time::{Duration, Instant};
 /// merged first, so this is a bound on memory and work rather than a tuning
 /// knob; anything past the budget is dropped downstream anyway.
 pub(crate) const MAX_SYMBOLS: usize = 200;
+
+/// Most candidates examined in one update.
+///
+/// The symbol cap bounds what is stored, not how much is inspected: an array
+/// of duplicates advances nothing while still costing a fold each. Generous
+/// against any real editor and far below what a client could send.
+const MAX_CANDIDATES: usize = 10_000;
 
 /// Longest symbol accepted. Real identifiers are far shorter, and a very long
 /// one would only crowd out others.
@@ -60,17 +68,30 @@ impl EditorContext {
     /// Injected clock so expiry is testable without sleeping.
     fn replace_at(&mut self, symbols: Vec<String>, now: Instant) -> usize {
         let mut kept: Vec<String> = Vec::new();
-        for symbol in symbols {
+        // Folded forms of what was kept. A set rather than rescanning `kept`,
+        // because the cap bounds what is stored, not how many candidates
+        // arrive: a payload of near-duplicates never advances `kept` and would
+        // otherwise refold every stored symbol on every one of them.
+        let mut seen: HashSet<String> = HashSet::new();
+        // Bound the work as well as the result, since this runs on the async
+        // reactor while holding the lock transcription reads through.
+        for symbol in symbols.into_iter().take(MAX_CANDIDATES) {
             let trimmed = symbol.trim();
             if trimmed.is_empty() || trimmed.chars().count() > MAX_SYMBOL_CHARS {
+                continue;
+            }
+            // A NUL reaches whisper's prompt as a CString and panics there by
+            // design, taking every later transcription with it until this
+            // context expires. Other control characters have no business in an
+            // identifier either, so the whole class goes.
+            if trimmed.chars().any(char::is_control) {
                 continue;
             }
             // Unicode lowercase, matching the glossary merge exactly. An
             // ASCII-only comparison disagreed with it on non-ASCII identifiers,
             // so a pair differing only in accent case counted as two here and
             // one there, over-reporting what was accepted.
-            let folded = trimmed.to_lowercase();
-            if kept.iter().any(|k| k.to_lowercase() == folded) {
+            if !seen.insert(trimmed.to_lowercase()) {
                 continue;
             }
             kept.push(trimmed.to_string());
@@ -146,6 +167,36 @@ mod tests {
 
         let c = ctx(&["Straße", "STRASSE", "Straße"]);
         assert_eq!(c.fresh().len(), 2, "got {:?}", c.fresh());
+    }
+
+    #[test]
+    fn control_characters_are_refused() {
+        // whisper builds its prompt as a CString and panics on an interior
+        // NUL, so one such symbol would break every later transcription until
+        // this context expired. One authenticated frame is enough to send it.
+        let c = ctx(&[
+            "good",
+            "bad\u{0}sym",
+            "tab\there",
+            "line\nbreak",
+            "alsoGood",
+        ]);
+        assert_eq!(c.fresh(), ["good", "alsoGood"]);
+    }
+
+    #[test]
+    fn a_flood_of_duplicates_cannot_run_away() {
+        // The symbol cap bounds what is stored, not what is inspected: these
+        // never advance `kept`, so nothing stops the loop except the candidate
+        // bound. It runs on the reactor holding the lock transcription reads.
+        let flood: Vec<String> = std::iter::repeat_n("same".to_string(), MAX_CANDIDATES * 3)
+            .chain(std::iter::once("unique".to_string()))
+            .collect();
+        let mut c = EditorContext::default();
+        let kept = c.replace(flood);
+        // Only the first fits inside the candidate bound; the tail is not read.
+        assert_eq!(kept, 1);
+        assert_eq!(c.fresh(), ["same"]);
     }
 
     #[test]
