@@ -63,6 +63,15 @@ fn merge_vocabulary(mut user_vocab: Vec<String>, project: &[String]) -> Vec<Stri
     user_vocab
 }
 
+/// The symbols an editor reported as on screen. A distinct type, not a bare
+/// slice: [`assemble_vocabulary`] takes two symbol lists whose order decides
+/// what survives the prompt budget, and with both as `&[String]` a transposed
+/// call site would compile silently.
+struct OnScreenSymbols<'a>(&'a [String]);
+
+/// The project-wide index. See [`OnScreenSymbols`] for why this is a type.
+struct ProjectIndex<'a>(&'a [String]);
+
 /// Build the decoder glossary in priority order, most specific first.
 ///
 /// The prompt budget is small and `cap_glossary` keeps the head, so position
@@ -74,10 +83,10 @@ fn merge_vocabulary(mut user_vocab: Vec<String>, project: &[String]) -> Vec<Stri
 /// than three statements inline.
 fn assemble_vocabulary(
     user_vocab: Vec<String>,
-    on_screen: &[String],
-    project: &[String],
+    on_screen: OnScreenSymbols<'_>,
+    project: ProjectIndex<'_>,
 ) -> Vec<String> {
-    merge_vocabulary(merge_vocabulary(user_vocab, on_screen), project)
+    merge_vocabulary(merge_vocabulary(user_vocab, on_screen.0), project.0)
 }
 
 /// Per-profile rejection thresholds.
@@ -196,7 +205,11 @@ fn transcribe_with(
             .project_vocab
             .lock()
             .unwrap_or_else(|e| e.into_inner());
-        assemble_vocabulary(user_vocab, &on_screen, project.as_slice())
+        assemble_vocabulary(
+            user_vocab,
+            OnScreenSymbols(&on_screen),
+            ProjectIndex(project.as_slice()),
+        )
     };
     let limits = ProfileLimits::for_profile(profile);
     // English-tuned gates over-reject accented non-English speech, so relax them
@@ -772,7 +785,7 @@ mod tests {
         let on_screen = ["initializeServer".to_string(), "serverOptions".to_string()];
         let project: Vec<String> = (0..50).map(|i| format!("projectSym{i}")).collect();
 
-        let merged = assemble_vocabulary(user, &on_screen, &project);
+        let merged = assemble_vocabulary(user, OnScreenSymbols(&on_screen), ProjectIndex(&project));
 
         assert_eq!(merged[0], "MyTerm", "user glossary must stay first");
         assert_eq!(
@@ -790,7 +803,11 @@ mod tests {
         let on_screen: Vec<String> = (0..20).map(|i| format!("onScreenSymbol{i}")).collect();
         let project: Vec<String> = (0..500).map(|i| format!("projectSymbol{i}")).collect();
 
-        let merged = assemble_vocabulary(vec!["MyTerm".into()], &on_screen, &project);
+        let merged = assemble_vocabulary(
+            vec!["MyTerm".into()],
+            OnScreenSymbols(&on_screen),
+            ProjectIndex(&project),
+        );
         let joined = merged.join(", ");
         let kept = &joined[..joined.len().min(400)];
 
@@ -816,9 +833,10 @@ mod tests {
 
     #[test]
     fn a_symbol_in_both_the_editor_and_the_index_appears_once() {
-        let merged = merge_vocabulary(
-            merge_vocabulary(Vec::new(), &["Shared".to_string()]),
-            &["shared".to_string(), "Other".to_string()],
+        let merged = assemble_vocabulary(
+            Vec::new(),
+            OnScreenSymbols(&["Shared".to_string()]),
+            ProjectIndex(&["shared".to_string(), "Other".to_string()]),
         );
         assert_eq!(merged, vec!["Shared", "Other"]);
     }
