@@ -9,6 +9,7 @@ mod about;
 mod audio_worker;
 mod calibration;
 mod caption;
+mod editor_context;
 // Public: the command-mode executor is exercised by the UI layer.
 pub mod command_exec;
 mod command_mode;
@@ -198,6 +199,7 @@ pub fn run() -> anyhow::Result<()> {
             startup_notice: Mutex::new(None),
             suppress_output: std::sync::atomic::AtomicBool::new(false),
             project_vocab: Mutex::new(Vec::new()),
+            editor_context: Mutex::new(Default::default()),
             project_files: Mutex::new(Vec::new()),
             codebase_watcher: Mutex::new(None),
             indexing: std::sync::atomic::AtomicBool::new(false),

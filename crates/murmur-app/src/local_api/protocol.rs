@@ -30,13 +30,24 @@ pub(crate) trait ApiBackend: Send + Sync {
     /// Signal the running meeting to stop. Returns as soon as shutdown is
     /// underway; the final chunk transcribes and saves in the background.
     fn stop_meeting(&self) -> Result<(), String>;
+    /// Replace the symbols the editor reports as currently in view, which bias
+    /// the decoder toward what the user is actually looking at. `Err` carries
+    /// the refusal reason.
+    fn set_editor_context(&self, symbols: Vec<String>) -> Result<usize, String>;
 }
 
 /// A parsed client frame.
 #[derive(Debug, PartialEq)]
 pub(crate) enum ClientMsg {
-    Auth { token: String },
-    Request { id: Value, method: String },
+    Auth {
+        token: String,
+    },
+    Request {
+        id: Value,
+        method: String,
+        /// Method arguments, or null when the client sent none.
+        params: Value,
+    },
     Malformed(String),
 }
 
@@ -57,6 +68,9 @@ pub(crate) fn parse_client_message(text: &str) -> ClientMsg {
                 // The id is opaque to the server: any JSON, echoed back verbatim.
                 id: value.get("id").cloned().unwrap_or(Value::Null),
                 method: method.to_string(),
+                // Absent params read as null, so a method that wants none is
+                // unaffected by a client that sends none.
+                params: value.get("params").cloned().unwrap_or(Value::Null),
             },
             None => ClientMsg::Malformed("request missing string method".to_string()),
         },
@@ -101,8 +115,15 @@ fn protocol_error(error: &str) -> String {
 
 /// Route one request. Unknown methods answer an error response instead of
 /// closing, so a newer plugin degrades gracefully against an older app.
-fn handle_request(backend: &dyn ApiBackend, id: &Value, method: &str) -> String {
+fn handle_request(backend: &dyn ApiBackend, id: &Value, method: &str, params: &Value) -> String {
     match method {
+        "set_editor_context" => match editor_symbols(params) {
+            Ok(symbols) => match backend.set_editor_context(symbols) {
+                Ok(accepted) => response_ok(id, json!({ "accepted": accepted })),
+                Err(reason) => response_error(id, &reason),
+            },
+            Err(reason) => response_error(id, &reason),
+        },
         "toggle_recording" => {
             backend.toggle_recording();
             response_ok(id, json!({ "ok": true }))
@@ -120,10 +141,29 @@ fn handle_request(backend: &dyn ApiBackend, id: &Value, method: &str) -> String 
     }
 }
 
+/// Pull the symbol list out of a `set_editor_context` request.
+///
+/// Non-string entries are dropped rather than rejecting the whole batch: an
+/// editor extension should not have a dictation-biasing request fail wholesale
+/// because one element came through wrong.
+fn editor_symbols(params: &Value) -> Result<Vec<String>, String> {
+    let Some(list) = params.get("symbols") else {
+        return Err("set_editor_context requires a symbols array".to_string());
+    };
+    let Some(list) = list.as_array() else {
+        return Err("symbols must be an array".to_string());
+    };
+    Ok(list
+        .iter()
+        .filter_map(Value::as_str)
+        .map(str::to_string)
+        .collect())
+}
+
 /// Reply to one text frame from an already-authenticated client.
 pub(crate) fn handle_client_text(backend: &dyn ApiBackend, text: &str) -> String {
     match parse_client_message(text) {
-        ClientMsg::Request { id, method } => handle_request(backend, &id, &method),
+        ClientMsg::Request { id, method, params } => handle_request(backend, &id, &method, &params),
         ClientMsg::Auth { .. } => protocol_error("already authenticated"),
         ClientMsg::Malformed(error) => protocol_error(&error),
     }
@@ -147,6 +187,10 @@ mod tests {
     }
 
     impl ApiBackend for MockBackend {
+        fn set_editor_context(&self, symbols: Vec<String>) -> Result<usize, String> {
+            Ok(symbols.len())
+        }
+
         fn toggle_recording(&self) {
             self.toggles.fetch_add(1, Ordering::SeqCst);
         }
@@ -169,6 +213,64 @@ mod tests {
     }
 
     #[test]
+    fn set_editor_context_accepts_symbols_and_reports_the_count() {
+        let backend = MockBackend::new();
+        let reply = handle_client_text(
+            &backend,
+            r#"{"type":"request","id":1,"method":"set_editor_context",
+                "params":{"symbols":["initializeServer","serverOptions"]}}"#,
+        );
+        assert!(
+            reply.contains("\"accepted\":2"),
+            "unexpected reply: {reply}"
+        );
+    }
+
+    #[test]
+    fn set_editor_context_rejects_a_request_without_a_symbols_array() {
+        let backend = MockBackend::new();
+        for body in [
+            r#"{"type":"request","id":1,"method":"set_editor_context"}"#,
+            r#"{"type":"request","id":1,"method":"set_editor_context","params":{}}"#,
+            r#"{"type":"request","id":1,"method":"set_editor_context","params":{"symbols":"nope"}}"#,
+        ] {
+            let reply = handle_client_text(&backend, body);
+            assert!(reply.contains("error"), "should have errored: {reply}");
+        }
+    }
+
+    #[test]
+    fn a_symbols_array_with_junk_entries_keeps_the_usable_ones() {
+        // One bad element should not fail a request whose only job is to make
+        // dictation more accurate.
+        let backend = MockBackend::new();
+        let reply = handle_client_text(
+            &backend,
+            r#"{"type":"request","id":1,"method":"set_editor_context",
+                "params":{"symbols":["good",42,null,{"a":1},"alsoGood"]}}"#,
+        );
+        assert!(
+            reply.contains("\"accepted\":2"),
+            "unexpected reply: {reply}"
+        );
+    }
+
+    #[test]
+    fn params_stay_optional_for_methods_that_take_none() {
+        // Every pre-existing method predates params, so a client that sends
+        // none must keep working exactly as before.
+        let backend = MockBackend::new();
+        let reply = handle_client_text(
+            &backend,
+            r#"{"type":"request","id":1,"method":"get_status"}"#,
+        );
+        assert!(
+            !reply.contains("error"),
+            "params should be optional: {reply}"
+        );
+    }
+
+    #[test]
     fn parses_auth_and_request_frames() {
         assert_eq!(
             parse_client_message(r#"{"type":"auth","token":"abc"}"#),
@@ -180,7 +282,8 @@ mod tests {
             parse_client_message(r#"{"type":"request","id":7,"method":"get_status"}"#),
             ClientMsg::Request {
                 id: json!(7),
-                method: "get_status".to_string()
+                method: "get_status".to_string(),
+                params: Value::Null,
             }
         );
         // The id is any JSON, and a missing id defaults to null.
@@ -188,14 +291,16 @@ mod tests {
             parse_client_message(r#"{"type":"request","id":{"seq":1},"method":"m"}"#),
             ClientMsg::Request {
                 id: json!({ "seq": 1 }),
-                method: "m".to_string()
+                method: "m".to_string(),
+                params: Value::Null,
             }
         );
         assert_eq!(
             parse_client_message(r#"{"type":"request","method":"m"}"#),
             ClientMsg::Request {
                 id: Value::Null,
-                method: "m".to_string()
+                method: "m".to_string(),
+                params: Value::Null,
             }
         );
     }
