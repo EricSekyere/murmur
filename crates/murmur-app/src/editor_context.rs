@@ -32,6 +32,12 @@ const MAX_SYMBOL_CHARS: usize = 80;
 /// stops sending, and biasing the decoder toward a file the user left ten
 /// minutes ago is worse than not biasing it at all. Expiry means the worst a
 /// dead client can do is stop helping.
+///
+/// Measured on `Instant`, which is monotonic. Windows counts suspended time,
+/// so a resume expires correctly; Linux and macOS do not, so a suspend can
+/// extend the window by up to one TTL. The cost is a few minutes of bias
+/// toward symbols the user genuinely was looking at, and a live editor
+/// re-reports on the next cursor move anyway.
 const TTL: Duration = Duration::from_secs(300);
 
 /// The most recent editor update, or nothing if none has arrived or it aged out.
@@ -59,9 +65,12 @@ impl EditorContext {
             if trimmed.is_empty() || trimmed.chars().count() > MAX_SYMBOL_CHARS {
                 continue;
             }
-            // Case-insensitive dedupe, matching how the glossary merge treats
-            // the project index, so the two cannot disagree about duplicates.
-            if kept.iter().any(|k| k.eq_ignore_ascii_case(trimmed)) {
+            // Unicode lowercase, matching the glossary merge exactly. An
+            // ASCII-only comparison disagreed with it on non-ASCII identifiers,
+            // so a pair differing only in accent case counted as two here and
+            // one there, over-reporting what was accepted.
+            let folded = trimmed.to_lowercase();
+            if kept.iter().any(|k| k.to_lowercase() == folded) {
                 continue;
             }
             kept.push(trimmed.to_string());
@@ -128,6 +137,18 @@ mod tests {
     }
 
     #[test]
+    fn dedupe_agrees_with_the_glossary_merge_on_non_ascii() {
+        // The merge folds with Unicode lowercase. An ASCII-only comparison
+        // here kept both spellings, so the count reported to the editor was
+        // higher than the number that actually reached the glossary.
+        let c = ctx(&["Uberfuhrung", "uberfuhrung", "Ubung"]);
+        assert_eq!(c.fresh(), ["Uberfuhrung", "Ubung"]);
+
+        let c = ctx(&["Straße", "STRASSE", "Straße"]);
+        assert_eq!(c.fresh().len(), 2, "got {:?}", c.fresh());
+    }
+
+    #[test]
     fn the_symbol_count_is_capped() {
         let many: Vec<String> = (0..MAX_SYMBOLS + 50).map(|i| format!("sym{i}")).collect();
         let mut c = EditorContext::default();
@@ -135,13 +156,17 @@ mod tests {
         assert_eq!(c.fresh().len(), MAX_SYMBOLS);
     }
 
+    // Both sides of the expiry boundary. Times are built by adding to one
+    // base rather than subtracting from now: `Instant - Duration` panics when
+    // the machine has been up for less than the offset, which a fresh CI
+    // runner can be.
     #[test]
     fn context_goes_stale_so_a_dead_editor_stops_biasing() {
         let mut c = EditorContext::default();
-        let long_ago = Instant::now() - (TTL + Duration::from_secs(1));
-        c.replace_at(vec!["staleSymbol".into()], long_ago);
+        let base = Instant::now();
+        c.replace_at(vec!["staleSymbol".into()], base);
         assert!(
-            c.fresh().is_empty(),
+            c.fresh_at(base + TTL + Duration::from_secs(1)).is_empty(),
             "an editor that stopped reporting kept biasing the decoder"
         );
     }
@@ -149,8 +174,11 @@ mod tests {
     #[test]
     fn context_just_inside_the_ttl_still_counts() {
         let mut c = EditorContext::default();
-        let recent = Instant::now() - (TTL - Duration::from_secs(5));
-        c.replace_at(vec!["liveSymbol".into()], recent);
-        assert_eq!(c.fresh(), ["liveSymbol"]);
+        let base = Instant::now();
+        c.replace_at(vec!["liveSymbol".into()], base);
+        assert_eq!(
+            c.fresh_at(base + TTL - Duration::from_secs(5)),
+            ["liveSymbol"]
+        );
     }
 }

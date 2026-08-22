@@ -63,6 +63,23 @@ fn merge_vocabulary(mut user_vocab: Vec<String>, project: &[String]) -> Vec<Stri
     user_vocab
 }
 
+/// Build the decoder glossary in priority order, most specific first.
+///
+/// The prompt budget is small and `cap_glossary` keeps the head, so position
+/// decides what survives. The user's own list is first because it is explicit
+/// intent, the editor's on-screen symbols follow because that set is small and
+/// chosen by where the user actually is, and the broad project index comes
+/// last so it is evicted before either. Getting this order wrong silently
+/// undoes the feature, which is why it is a function with its own test rather
+/// than three statements inline.
+fn assemble_vocabulary(
+    user_vocab: Vec<String>,
+    on_screen: &[String],
+    project: &[String],
+) -> Vec<String> {
+    merge_vocabulary(merge_vocabulary(user_vocab, on_screen), project)
+}
+
 /// Per-profile rejection thresholds.
 struct ProfileLimits {
     min_audio_secs: f32,
@@ -164,23 +181,17 @@ fn transcribe_with(
             settings.translate_to_english,
         )
     };
-    // Priority order on the prompt budget, most specific first: the user's own
-    // glossary, then whatever the editor says is on screen, then the whole
-    // project index. The editor's view outranks the index because it is a much
-    // smaller set chosen by where the user actually is, and the index is broad
-    // enough to crowd it out otherwise. Deduped case-insensitively throughout.
     let vocabulary = {
         let on_screen = state
             .editor_context
             .lock()
             .unwrap_or_else(|e| e.into_inner());
-        let with_editor = merge_vocabulary(user_vocab, on_screen.fresh());
-        drop(on_screen);
+        let on_screen: Vec<String> = on_screen.fresh().to_vec();
         let project = state
             .project_vocab
             .lock()
             .unwrap_or_else(|e| e.into_inner());
-        merge_vocabulary(with_editor, project.as_slice())
+        assemble_vocabulary(user_vocab, &on_screen, project.as_slice())
     };
     let limits = ProfileLimits::for_profile(profile);
     // English-tuned gates over-reject accented non-English speech, so relax them
@@ -748,14 +759,15 @@ mod tests {
 
     #[test]
     fn editor_context_outranks_the_project_index() {
-        // The ordering is the feature. The prompt budget is small and the
-        // project index is large, so if the index merged first it would crowd
-        // out the handful of symbols the user is actually looking at.
+        // Calls the function transcription calls, so swapping the merge order
+        // there fails here. Performing the merges in the test body instead
+        // would only prove the helper preserves order, which was never in
+        // doubt, while leaving the actual decision untested.
         let user = vec!["MyTerm".to_string()];
         let on_screen = ["initializeServer".to_string(), "serverOptions".to_string()];
         let project: Vec<String> = (0..50).map(|i| format!("projectSym{i}")).collect();
 
-        let merged = merge_vocabulary(merge_vocabulary(user, &on_screen), &project);
+        let merged = assemble_vocabulary(user, &on_screen, &project);
 
         assert_eq!(merged[0], "MyTerm", "user glossary must stay first");
         assert_eq!(
@@ -764,6 +776,37 @@ mod tests {
             "editor symbols must precede the index"
         );
         assert!(merged[3..].starts_with(&["projectSym0".to_string()]));
+    }
+
+    #[test]
+    fn the_editor_set_survives_the_prompt_budget_ahead_of_the_index() {
+        // What the ordering is for: the glossary is cut to a small budget from
+        // the head, so a large index must not push the on-screen symbols out.
+        let on_screen: Vec<String> = (0..20).map(|i| format!("onScreenSymbol{i}")).collect();
+        let project: Vec<String> = (0..500).map(|i| format!("projectSymbol{i}")).collect();
+
+        let merged = assemble_vocabulary(vec!["MyTerm".into()], &on_screen, &project);
+        let joined = merged.join(", ");
+        let kept = &joined[..joined.len().min(400)];
+
+        // Every on-screen symbol must survive the cut, and the index may only
+        // use whatever budget is left after them. The index filling the
+        // remainder is correct; the index arriving first is not.
+        for i in 0..20 {
+            assert!(
+                kept.contains(&format!("onScreenSymbol{i}")),
+                "on-screen symbol {i} was cut from the budget"
+            );
+        }
+        let last_editor = kept
+            .find("onScreenSymbol19")
+            .expect("last on-screen symbol missing");
+        if let Some(first_project) = kept.find("projectSymbol") {
+            assert!(
+                first_project > last_editor,
+                "the index reached the budget ahead of the editor set"
+            );
+        }
     }
 
     #[test]

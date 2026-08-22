@@ -95,7 +95,10 @@ struct TauriBackend {
 
 impl ApiBackend for TauriBackend {
     fn set_editor_context(&self, symbols: Vec<String>) -> Result<usize, String> {
-        let state = self.app.state::<crate::state::AppState>();
+        let state = self
+            .app
+            .try_state::<crate::state::AppState>()
+            .ok_or("app state unavailable")?;
         let kept = state
             .editor_context
             .lock()
