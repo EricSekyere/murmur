@@ -164,14 +164,23 @@ fn transcribe_with(
             settings.translate_to_english,
         )
     };
-    // User glossary first (it keeps priority on the prompt budget), then the
-    // indexed codebase symbols, deduped case-insensitively.
+    // Priority order on the prompt budget, most specific first: the user's own
+    // glossary, then whatever the editor says is on screen, then the whole
+    // project index. The editor's view outranks the index because it is a much
+    // smaller set chosen by where the user actually is, and the index is broad
+    // enough to crowd it out otherwise. Deduped case-insensitively throughout.
     let vocabulary = {
+        let on_screen = state
+            .editor_context
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let with_editor = merge_vocabulary(user_vocab, on_screen.fresh());
+        drop(on_screen);
         let project = state
             .project_vocab
             .lock()
             .unwrap_or_else(|e| e.into_inner());
-        merge_vocabulary(user_vocab, project.as_slice())
+        merge_vocabulary(with_editor, project.as_slice())
     };
     let limits = ProfileLimits::for_profile(profile);
     // English-tuned gates over-reject accented non-English speech, so relax them
@@ -736,6 +745,35 @@ fn trim_silence(samples: &[f32], trim_threshold: f32) -> &[f32] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn editor_context_outranks_the_project_index() {
+        // The ordering is the feature. The prompt budget is small and the
+        // project index is large, so if the index merged first it would crowd
+        // out the handful of symbols the user is actually looking at.
+        let user = vec!["MyTerm".to_string()];
+        let on_screen = ["initializeServer".to_string(), "serverOptions".to_string()];
+        let project: Vec<String> = (0..50).map(|i| format!("projectSym{i}")).collect();
+
+        let merged = merge_vocabulary(merge_vocabulary(user, &on_screen), &project);
+
+        assert_eq!(merged[0], "MyTerm", "user glossary must stay first");
+        assert_eq!(
+            &merged[1..3],
+            &on_screen,
+            "editor symbols must precede the index"
+        );
+        assert!(merged[3..].starts_with(&["projectSym0".to_string()]));
+    }
+
+    #[test]
+    fn a_symbol_in_both_the_editor_and_the_index_appears_once() {
+        let merged = merge_vocabulary(
+            merge_vocabulary(Vec::new(), &["Shared".to_string()]),
+            &["shared".to_string(), "Other".to_string()],
+        );
+        assert_eq!(merged, vec!["Shared", "Other"]);
+    }
 
     #[test]
     fn merge_vocabulary_keeps_user_first_and_dedups() {

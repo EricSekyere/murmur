@@ -82,9 +82,10 @@ disconnected.
 
 ### Requests (client to server)
 
-`{ "type": "request", "id": <any json>, "method": <name> }`. The `id` is
-opaque and echoed back verbatim (it may be omitted; the response then carries
-`"id": null`). Methods:
+`{ "type": "request", "id": <any json>, "method": <name>, "params": <object> }`.
+The `id` is opaque and echoed back verbatim (it may be omitted; the response
+then carries `"id": null`). `params` is optional and only some methods read it.
+Methods:
 
 - `toggle_recording`: same as the hotkey; starts or stops a dictation
   session. Result: `{ "ok": true }`.
@@ -95,10 +96,32 @@ opaque and echoed back verbatim (it may be omitted; the response then carries
   come back as an error response.
 - `stop_meeting`: signal the running meeting to stop. Returns immediately;
   the final chunk transcribes and the record saves in the background.
+- `set_editor_context`: report the symbols currently on screen so dictation is
+  biased toward them. `params: { "symbols": [string, ...] }`. Result:
+  `{ "accepted": <count kept> }`.
+
+  Send this whenever the visible symbols change, typically on cursor move or
+  file switch. Each call replaces the previous set rather than adding to it,
+  because the point is what the user is looking at now. Up to 200 symbols are
+  kept per call, each at most 80 characters; blanks, duplicates and non-string
+  entries are dropped rather than failing the request.
+
+  A report goes stale after five minutes, so an editor that closes or loses
+  focus stops influencing dictation on its own. There is no need to send an
+  empty list on exit, though doing so clears it immediately.
+
+  These symbols outrank the codebase index but not the user's own vocabulary
+  list, so a small on-screen set is not crowded out by a large project.
 
 ```json
 { "type": "request", "id": 1, "method": "get_status" }
 { "type": "response", "id": 1, "result": { "recording": false, "processing": false } }
+```
+
+```json
+{ "type": "request", "id": 2, "method": "set_editor_context",
+  "params": { "symbols": ["initializeServer", "serverOptions"] } }
+{ "type": "response", "id": 2, "result": { "accepted": 2 } }
 ```
 
 An unknown method answers an error response and the connection stays open:

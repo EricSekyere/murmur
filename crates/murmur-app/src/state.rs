@@ -90,6 +90,11 @@ pub(crate) struct AppState {
     /// background at startup. Merged with the user's manual vocabulary at
     /// transcription time; empty when the indexer is disabled.
     pub project_vocab: Mutex<Vec<String>>,
+    /// Symbols an editor reports as currently on screen, pushed over the local
+    /// API. Narrower and more relevant than the whole-project index, so they
+    /// are merged ahead of it. Empty until an editor reports, and again once
+    /// the report goes stale.
+    pub editor_context: Mutex<crate::editor_context::EditorContext>,
     /// Relative paths of every indexed project file, refreshed alongside
     /// `project_vocab`, so command mode can resolve "open the … file" phrases.
     /// Empty when the indexer is disabled.

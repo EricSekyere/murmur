@@ -170,6 +170,10 @@ mod tests {
     struct MockBackend;
 
     impl ApiBackend for MockBackend {
+        fn set_editor_context(&self, symbols: Vec<String>) -> Result<usize, String> {
+            Ok(symbols.len())
+        }
+
         fn toggle_recording(&self) {}
 
         fn status(&self) -> Value {
