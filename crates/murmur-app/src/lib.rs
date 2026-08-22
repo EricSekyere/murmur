@@ -608,7 +608,41 @@ pub(crate) fn spawn_mcp_connect(app: tauri::AppHandle) {
         if servers.is_empty() {
             return;
         }
-        state.command.lock().await.connect_servers(servers).await;
+
+        // Read the allowlist under the lock, then release it. Handshakes are
+        // bounded but slow, and every command hotkey press takes this same
+        // lock, so connecting while holding it would freeze command mode for
+        // as long as a slow server took to answer.
+        let allowed = state.command.lock().await.allowed_servers();
+        if allowed.is_empty() {
+            return;
+        }
+
+        let mut backend = murmur_mcp::ActionBackend::new(allowed);
+        let wanted: Vec<_> = servers
+            .into_iter()
+            .filter(|s| backend.is_allowed(&s.name))
+            .collect();
+        let mut connected = 0;
+        for server in &wanted {
+            match backend.connect(server).await {
+                Ok(()) => connected += 1,
+                Err(e) => {
+                    tracing::warn!(server = %server.name, error = %e, "MCP server did not connect");
+                }
+            }
+        }
+        if connected == 0 {
+            return;
+        }
+        let tools = match backend.list_tools().await {
+            Ok(t) => t,
+            Err(e) => {
+                tracing::warn!(error = %e, "could not list MCP tools");
+                return;
+            }
+        };
+        state.command.lock().await.install_backend(backend, tools);
     });
 }
 

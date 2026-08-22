@@ -110,6 +110,8 @@ pub(crate) enum ChoiceDelivery {
 /// Everything `run_command` needs, kept behind one async lock in app state
 /// (execution awaits the tool backend while holding it).
 pub(crate) struct CommandState {
+    /// Kept so a connect task can filter servers without taking the lock.
+    allowed: Vec<String>,
     grammar: Grammar,
     executor: Executor<SystemActions>,
     backend: ActionBackend,
@@ -140,6 +142,7 @@ impl CommandState {
             );
         }
         Ok(Self {
+            allowed: allowed_servers.clone(),
             grammar: starter_grammar().context("building the starter command grammar")?,
             executor: Executor::new(SystemActions, permissions),
             backend: ActionBackend::new(allowed_servers),
@@ -224,38 +227,23 @@ impl CommandState {
     /// the user's MCP client configs, refuses to start, or fails its handshake
     /// is logged and skipped; command mode keeps working with native commands
     /// either way, which is why this never returns an error.
-    pub(crate) async fn connect_servers(&mut self, servers: Vec<murmur_mcp::ServerConfig>) {
-        let wanted: Vec<_> = servers
-            .into_iter()
-            .filter(|s| self.backend.is_allowed(&s.name))
-            .collect();
-        if wanted.is_empty() {
-            return;
-        }
-        let mut connected = 0;
-        for server in &wanted {
-            match self.backend.connect(server).await {
-                Ok(()) => connected += 1,
-                Err(e) => {
-                    tracing::warn!(server = %server.name, error = %e, "MCP server did not connect");
-                }
-            }
-        }
-        if connected == 0 {
-            return;
-        }
-        let tools = match self.backend.list_tools().await {
-            Ok(t) => t,
-            Err(e) => {
-                tracing::warn!(error = %e, "could not list MCP tools");
-                return;
-            }
-        };
+    /// The names this state is allowed to connect to.
+    pub(crate) fn allowed_servers(&self) -> Vec<String> {
+        self.allowed.clone()
+    }
+
+    /// Install an already-connected backend and register what it offers.
+    ///
+    /// Separate from connecting on purpose. Handshakes are bounded but slow,
+    /// and this state is behind the lock every command hotkey press takes, so
+    /// connecting while holding it would freeze command mode for as long as a
+    /// slow server took to answer. Only this part needs the lock.
+    pub(crate) fn install_backend(&mut self, backend: ActionBackend, tools: Vec<Tool>) {
         let spoken = register_tool_phrases(&mut self.grammar, &tools);
         let total = tools.len();
+        self.backend = backend;
         self.executor.set_tools(tools);
         tracing::info!(
-            servers = connected,
             tools = total,
             speakable = spoken,
             "MCP tools registered for command mode"
@@ -269,15 +257,20 @@ const TOOL_ID_SEPARATOR: char = '/';
 
 /// The phrase that invokes a namespaced MCP tool.
 ///
-/// `git/status` becomes "git status": the separator and any underscores or
-/// dashes inside the tool name become spaces, which is how the name would be
-/// read aloud anyway. Returns None when nothing speakable is left.
+/// `git/status` becomes "git status": separators, underscores and dashes read
+/// aloud as spaces anyway. Returns None when nothing speakable is left.
+///
+/// The name comes from the server, and the phrase it produces is parsed as a
+/// grammar pattern, so anything outside letters, digits and spaces is dropped
+/// rather than passed through. A bare `{q}` would otherwise compile to a
+/// free-text slot and turn one tool into a catch-all: "srv {q}" matches
+/// "srv" followed by any words at all.
 fn spoken_phrase_for_tool(tool_name: &str) -> Option<String> {
     let spoken: String = tool_name
         .chars()
         .map(|c| match c {
-            TOOL_ID_SEPARATOR | '_' | '-' | '.' => ' ',
-            other => other.to_ascii_lowercase(),
+            c if c.is_ascii_alphanumeric() => c.to_ascii_lowercase(),
+            _ => ' ',
         })
         .collect();
     let spoken = spoken.split_whitespace().collect::<Vec<_>>().join(" ");
@@ -490,6 +483,7 @@ pub(crate) async fn run_command(
 ) -> Result<ExecOutcomeDto, String> {
     let mut command = state.command.lock().await;
     let CommandState {
+        allowed: _,
         grammar,
         executor,
         backend,
@@ -670,6 +664,20 @@ mod tests {
     }
 
     #[test]
+    fn no_native_command_id_contains_the_tool_separator() {
+        // Routing tells a native command from a server tool by that separator
+        // alone, so a native id gaining one would silently reroute the command
+        // as a tool call. Pin it rather than leave it to a comment.
+        let grammar = starter_grammar().expect("starter grammar");
+        for id in grammar.command_ids() {
+            assert!(
+                !id.contains(TOOL_ID_SEPARATOR),
+                "native command id {id:?} would be routed as a tool call"
+            );
+        }
+    }
+
+    #[test]
     fn a_tool_id_routes_as_a_tool_call_and_a_command_does_not() {
         // The whole bridge: a grammar hit whose id names a tool must become a
         // ToolCall, while a native command must stay a Command.
@@ -721,6 +729,34 @@ mod tests {
             route_transcript(&g, "fs delete"),
             RouteOutcome::NoMatch
         ));
+    }
+
+    #[test]
+    fn a_tool_name_cannot_inject_grammar_syntax() {
+        // A server picks its own tool names, and the derived phrase is parsed
+        // as a grammar pattern. A bare `{q}` compiles to a free-text slot, so
+        // "srv {q}" would match "srv <anything>" and turn one tool into a
+        // catch-all for an unbounded family of phrases.
+        let mut g = Grammar::new();
+        register_tool_phrases(&mut g, &[tool("srv/{q}", &[])]);
+        assert!(
+            matches!(
+                route_transcript(&g, "srv delete everything"),
+                RouteOutcome::NoMatch
+            ),
+            "a server-chosen name captured an arbitrary phrase"
+        );
+    }
+
+    #[test]
+    fn metacharacters_are_stripped_from_derived_phrases() {
+        for name in ["a/{q}", "a/(x|y)", "a/[opt]", "a/{n:0..9}"] {
+            let phrase = spoken_phrase_for_tool(name).unwrap_or_default();
+            assert!(
+                !phrase.contains(['{', '}', '(', ')', '[', ']', '|', ':']),
+                "{name} produced grammar syntax: {phrase:?}"
+            );
+        }
     }
 
     #[test]
