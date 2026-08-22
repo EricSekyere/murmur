@@ -23,13 +23,13 @@ Murmur will enable developers to compose prompts for AI agents, write documentat
 
 ---
 
-## 1.5 Current Implementation Status (v0.22.0)
+## 1.5 Current Implementation Status (v0.25.0)
 
 This PRD was written as a forward-looking plan. The product has since shipped on Windows, but it took a different path than the original phases: dictation quality and live-preview UX were prioritized, while the heavier "code intelligence" and per-agent integration epics have not been built. This section is the source of truth for what exists today; the phase plans further down are kept for historical context and remaining direction.
 
 ### Shipped (Windows + Linux, since v0.5)
 - **Dictation.** Global-hotkey activation with toggle, push-to-talk, and double-tap modes. CPAL audio capture with Silero VAD (via ONNX Runtime).
-- **STT.** whisper-rs (whisper.cpp) with base.en, small.en, medium.en, and large-v3-turbo, plus NVIDIA Parakeet TDT 0.6B v2 (ONNX). Default is small.en. GPU acceleration via CUDA on Windows; model switching in settings.
+- **STT.** whisper-rs (whisper.cpp) with base.en, small.en, medium.en, and large-v3-turbo, plus NVIDIA Parakeet TDT 0.6B v2 and v3 (ONNX). Parakeet is the default: it runs about 0.1 s per phrase on CPU with native punctuation, where medium and large Whisper are only practical on a GPU. GPU acceleration via CUDA or Vulkan on Windows; model switching in settings.
 - **Output.** Direct Unicode typing into the focused application (Windows SendInput), with clipboard-and-paste available as an explicit output mode. The default path never routes through the clipboard, so prior clipboard contents cannot leak.
 - **Live preview.** Interim text appears as you speak, shown in the dashboard and as a caption that sits either under the floating pill or near the active window (configurable). Each caption clears once its phrase is delivered.
 - **Voice editing commands.** "select all", "copy/cut/paste that", "undo that", "redo that", "new line", "new paragraph", "scratch that", "press tab", "press escape".
@@ -62,9 +62,14 @@ This PRD was written as a forward-looking plan. The product has since shipped on
 - **Snippets with a spoken argument**, and a reworked dashboard layout.
 - **CLI correctness.** Read-only commands no longer write to the config directory, `config --show` rejects a corrupt config instead of silently overwriting it, and `--no-download` (or `MURMUR_NO_DOWNLOAD`) lets a script refuse a model fetch.
 
+### Shipped since v0.23
+- **Wake word, "Hey Murmur"** (Epic 4.2). Always-listening is off by default. When enabled, a small on-device model listens continuously and starts a dictation session on the phrase, so a session can begin without touching the keyboard. The detector is openWakeWord's architecture: a frozen melspectrogram and speech-embedding backbone with a head trained in `training/wake-word/`, all three artifacts downloaded once (3.1 MB) and verified against pinned SHA256 hashes before use. Three sensitivity settings map to thresholds fitted on held-out data. Release gates the artifact on false accepts per hour and recall, judged on the conservative end of the 95% interval rather than the point estimate, plus an all-permissive licence audit of every training input.
+- **MCP servers for command mode.** The action backend's allowlist is read from config (`mcp_allowed_servers`) rather than hardcoded empty. It is default-deny: an empty list, which is the default, trusts nothing. Allowlisting a server lifts only the refusal to connect; every tool still passes the permission store, and one the server reports as destructive still requires physical confirmation.
+- **Long-audio safety on Parakeet.** Its ONNX encoder carries a fixed positional encoding, and a single inference past roughly 400 s failed outright rather than returning partial text. Long input is now windowed at silent gaps. Accuracy on long recordings remains a property of the model rather than of the windowing, so the engine warns past 35 s and points at the Whisper backend, which segments internally and measured far better on the same audio.
+
 ### Not yet built (still aspirational in this document)
 - **Distinct coding / prose / command modes as a full mode system** (F6, Epic 2.4). A transcription profile setting and a command mode exist, but not the complete tri-mode design.
-- **Continuous always-listening mode and wake word** (Epic 4.2).
+- **System-audio loopback beyond Windows.** Meeting mode captures system audio on Windows via WASAPI; Linux (a PulseAudio or PipeWire monitor source) and macOS (a Core Audio process tap) are not implemented, and a meeting on those platforms records microphone only.
 
 ### Platform status
 - **Windows (x64)** is the released, signed, auto-updating platform.
@@ -72,7 +77,7 @@ This PRD was written as a forward-looking plan. The product has since shipped on
 - **macOS** ships a universal (Apple Silicon + Intel) `.dmg` from the release pipeline, currently unsigned and not notarized (Gatekeeper requires a right-click Open on first launch). Signing and notarization are blocked on an Apple Developer account; the release job is already wired to enable them once `APPLE_*` secrets exist.
 
 ### CLI surface
-`murmur listen`, `murmur config`, `murmur models` (with stdout and clipboard output), `murmur index` (codebase vocabulary), and `murmur mcp` (stdio MCP server, plus `murmur mcp install` to register with Cursor / Claude). The WebSocket agent API lives in the desktop app, not the CLI (opt-in; see `docs/local-api.md`).
+`murmur listen`, `murmur transcribe` (batch transcription of a file), `murmur config`, `murmur models` (with stdout and clipboard output), `murmur audio-test` (verify microphone capture without transcribing or typing), `murmur index` (codebase vocabulary), and `murmur mcp` (stdio MCP server, plus `murmur mcp install` to register with Cursor / Claude). The WebSocket agent API lives in the desktop app, not the CLI (opt-in; see `docs/local-api.md`).
 
 ---
 
@@ -512,11 +517,11 @@ All dependencies must be compatible with **MIT or Apache 2.0**. No GPL dependenc
 - Target: <200ms latency on Apple Silicon, <300ms on modern x86
 - **Deliverable:** Noticeably faster transcription
 
-#### Epic 4.2: Advanced VAD
-- Implement "continuous mode" (always listening, auto-segment by pauses)
-- Configurable silence threshold and segment duration
-- Wake word support ("Hey Murmur" -> start recording)
-- Background noise adaptation
+#### Epic 4.2: Advanced VAD (partly shipped)
+- Implement "continuous mode" (always listening, auto-segment by pauses). Shipped.
+- Configurable silence threshold and segment duration. Shipped.
+- Wake word support ("Hey Murmur" -> start recording). Shipped, off by default; see Section 1.5.
+- Background noise adaptation. Not built: calibration measures an ambient floor at session start but does not adapt during a session.
 - **Deliverable:** Hands-free continuous dictation option
 
 #### Epic 4.3: Multi-Language Support
