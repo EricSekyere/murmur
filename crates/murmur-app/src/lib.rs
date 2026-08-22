@@ -456,6 +456,7 @@ fn setup_app(
     local_api::spawn(app.handle().clone());
     updater::spawn_check(app.handle().clone(), updater::CheckKind::Startup);
     spawn_project_index(app.handle().clone());
+    spawn_mcp_connect(app.handle().clone());
     #[cfg(feature = "full")]
     spawn_help_index(app.handle().clone());
     watcher::rewatch(app.handle());
@@ -585,6 +586,66 @@ fn run_one_index(app: &tauri::AppHandle) {
 /// Prepare the local Help search engine in the background: download the small
 /// embedder model if missing, then embed the bundled corpus off the async
 /// reactor and store the ready engine in `AppState::help`. Emits `help-ready`
+/// Connect allowlisted MCP servers and register what they offer.
+///
+/// Spawned rather than awaited: each server is a child process plus a
+/// handshake, and startup must not wait on someone else's binary. Command
+/// mode serves native commands from the moment it loads and gains the tools
+/// whenever they arrive. Silent and cheap when nothing is allowlisted, which
+/// is the default.
+pub(crate) fn spawn_mcp_connect(app: tauri::AppHandle) {
+    tauri::async_runtime::spawn(async move {
+        let state = app.state::<crate::state::AppState>();
+        // Discovery reads the user's MCP client config files, so keep it off
+        // the reactor.
+        let servers = match tokio::task::spawn_blocking(murmur_mcp::discover_servers).await {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::warn!(error = %e, "MCP server discovery failed");
+                return;
+            }
+        };
+        if servers.is_empty() {
+            return;
+        }
+
+        // Read the allowlist under the lock, then release it. Handshakes are
+        // bounded but slow, and every command hotkey press takes this same
+        // lock, so connecting while holding it would freeze command mode for
+        // as long as a slow server took to answer.
+        let allowed = state.command.lock().await.allowed_servers();
+        if allowed.is_empty() {
+            return;
+        }
+
+        let mut backend = murmur_mcp::ActionBackend::new(allowed);
+        let wanted: Vec<_> = servers
+            .into_iter()
+            .filter(|s| backend.is_allowed(&s.name))
+            .collect();
+        let mut connected = 0;
+        for server in &wanted {
+            match backend.connect(server).await {
+                Ok(()) => connected += 1,
+                Err(e) => {
+                    tracing::warn!(server = %server.name, error = %e, "MCP server did not connect");
+                }
+            }
+        }
+        if connected == 0 {
+            return;
+        }
+        let tools = match backend.list_tools().await {
+            Ok(t) => t,
+            Err(e) => {
+                tracing::warn!(error = %e, "could not list MCP tools");
+                return;
+            }
+        };
+        state.command.lock().await.install_backend(backend, tools);
+    });
+}
+
 /// so the Help view can drop its "preparing" note. Non-fatal: on any failure
 /// Help simply stays unavailable (the command returns no hits).
 #[cfg(feature = "full")]

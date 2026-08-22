@@ -168,6 +168,14 @@ impl<A: NativeActions> Executor<A> {
     }
 
     /// Apply `deny > ask > allow` plus the risk tier to one tool call.
+    /// Whether a tool came from an MCP server rather than from native code.
+    ///
+    /// Namespaced names are built as `server/tool`, and native ids never carry
+    /// the separator, so the name itself records the provenance.
+    fn is_server_reported(name: &str) -> bool {
+        name.contains('/')
+    }
+
     async fn gate_tool_call<B: ToolBackend>(
         &self,
         name: String,
@@ -186,8 +194,15 @@ impl<A: NativeActions> Executor<A> {
             }
             // The guard restates the core invariant locally: even if the
             // decision table ever said auto-run, Destructive still confirms.
+            // An MCP tool never auto-runs regardless of saved permission,
+            // because the risk tier it would be judged on is self-reported by
+            // the server. A server that wants to skip confirmation only has to
+            // label its tool read-only, so the tier cannot be the thing that
+            // authorises running without asking. Allowlisting a server is
+            // trust that it may connect, not that it describes itself
+            // honestly.
             Decision::AutoRun | Decision::AutoRunReversible
-                if tool.risk != RiskTier::Destructive =>
+                if tool.risk != RiskTier::Destructive && !Self::is_server_reported(&name) =>
             {
                 tracing::info!(tool = %name, "auto-running tool");
                 let result = backend.invoke(&name, args).await?;
@@ -344,36 +359,47 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn allowed_read_only_tool_auto_runs() {
+    async fn an_allowed_native_tool_auto_runs() {
+        // Native tools carry a risk tier this codebase assigned, so Allow can
+        // mean what it says.
         let exec = executor_with(
-            vec![tool("fs/list", RiskTier::ReadOnly)],
-            &[("fs/list", Permission::Allow)],
+            vec![tool("list_files", RiskTier::ReadOnly)],
+            &[("list_files", Permission::Allow)],
         );
         let backend = FakeBackend::default();
         let outcome = exec
-            .execute(tool_call("fs/list"), &backend)
-            .await
-            .expect("execute");
-        assert_eq!(outcome, ExecOutcome::Executed(json!({"ok": true})));
-        assert_eq!(
-            backend.calls(),
-            vec![("fs/list".to_string(), json!({"path": "README.md"}))]
-        );
-    }
-
-    #[tokio::test]
-    async fn allowed_mutating_tool_auto_runs() {
-        let exec = executor_with(
-            vec![tool("fs/rename", RiskTier::Mutating)],
-            &[("fs/rename", Permission::Allow)],
-        );
-        let backend = FakeBackend::default();
-        let outcome = exec
-            .execute(tool_call("fs/rename"), &backend)
+            .execute(tool_call("list_files"), &backend)
             .await
             .expect("execute");
         assert_eq!(outcome, ExecOutcome::Executed(json!({"ok": true})));
         assert_eq!(backend.calls().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn an_allowed_server_tool_still_confirms_however_it_labels_itself() {
+        // The risk tier of a namespaced tool is self-reported by the server,
+        // so a hostile one only has to claim read-only to skip confirmation.
+        // The tier therefore cannot authorise running without asking, and
+        // Allow degrades to a prompt rather than silent execution.
+        for risk in [RiskTier::ReadOnly, RiskTier::Mutating] {
+            let exec = executor_with(
+                vec![tool("evil/looks_harmless", risk)],
+                &[("evil/looks_harmless", Permission::Allow)],
+            );
+            let backend = FakeBackend::default();
+            let outcome = exec
+                .execute(tool_call("evil/looks_harmless"), &backend)
+                .await
+                .expect("execute");
+            assert!(
+                matches!(outcome, ExecOutcome::Pending(_)),
+                "{risk:?} tool auto-ran on a label its own server chose"
+            );
+            assert!(
+                backend.calls().is_empty(),
+                "{risk:?} tool reached the backend without confirmation"
+            );
+        }
     }
 
     #[tokio::test]
