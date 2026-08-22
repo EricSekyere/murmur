@@ -94,6 +94,21 @@ struct TauriBackend {
 }
 
 impl ApiBackend for TauriBackend {
+    fn set_editor_context(&self, symbols: Vec<String>) -> Result<usize, String> {
+        let state = self
+            .app
+            .try_state::<crate::state::AppState>()
+            .ok_or("app state unavailable")?;
+        let kept = state
+            .editor_context
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .replace(symbols);
+        // Count only: the symbols are identifiers from the user's source.
+        tracing::debug!(symbols = kept, "editor context updated");
+        Ok(kept)
+    }
+
     fn toggle_recording(&self) {
         // Same entry point as the hotkey and UI button: debounced, and safe
         // to call from any thread.

@@ -285,11 +285,16 @@ impl SttEngine {
     /// Set the user glossary. Words are joined into a comma-separated clause
     /// that biases whisper's decoder toward their spelling. Pass an empty
     /// slice to clear.
+    /// A control character in the glossary is dropped rather than passed on.
+    /// whisper-rs builds the prompt as a `CString` and panics on an interior
+    /// NUL, so a single one anywhere in the glossary would take down every
+    /// transcription that used it. The config path accepts one through TOML
+    /// escapes, so this guards more than one caller.
     pub fn set_vocabulary(&mut self, words: &[String]) {
         let cleaned: Vec<&str> = words
             .iter()
             .map(|w| w.trim())
-            .filter(|w| !w.is_empty())
+            .filter(|w| !w.is_empty() && !w.chars().any(char::is_control))
             .collect();
         self.vocabulary = if cleaned.is_empty() {
             None
