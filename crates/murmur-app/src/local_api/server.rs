@@ -22,6 +22,13 @@ use super::protocol::{self, ApiBackend, ApiEvent};
 const MAX_CLIENTS: usize = 8;
 /// A client that hasn't authenticated within this window is cut loose.
 const AUTH_TIMEOUT: Duration = Duration::from_secs(5);
+/// Largest client frame accepted, replacing tungstenite's 64 MiB default,
+/// which any local process could make this server buffer before even
+/// authenticating. `set_editor_context` is the only bulk method and its
+/// useful payload tops out around 16 KB (200 kept symbols of 80 chars);
+/// 1 MiB still admits the full 10k-candidate inspection bound in plain
+/// UTF-8, so no real editor comes near it.
+const MAX_MESSAGE_BYTES: usize = 1024 * 1024;
 /// Broadcast depth per client. A slow client lags (drops oldest events)
 /// rather than back-pressuring the app or losing its connection.
 pub(super) const EVENT_BUFFER: usize = 256;
@@ -73,9 +80,16 @@ async fn serve_client(
     mut events: broadcast::Receiver<ApiEvent>,
     backend: Arc<dyn ApiBackend>,
 ) -> Result<()> {
-    let ws = tokio_tungstenite::accept_hdr_async(stream, reject_browser_origins)
-        .await
-        .context("websocket handshake")?;
+    let limits = tokio_tungstenite::tungstenite::protocol::WebSocketConfig::default()
+        .max_message_size(Some(MAX_MESSAGE_BYTES))
+        .max_frame_size(Some(MAX_MESSAGE_BYTES));
+    let ws = tokio_tungstenite::accept_hdr_async_with_config(
+        stream,
+        reject_browser_origins,
+        Some(limits),
+    )
+    .await
+    .context("websocket handshake")?;
     let (mut sink, mut reader) = ws.split();
 
     if !await_auth(&mut reader, token).await? {
@@ -291,5 +305,47 @@ mod tests {
 
         let result = tokio_tungstenite::client_async(request, stream).await;
         assert!(result.is_err(), "browser-origin handshake must be refused");
+    }
+
+    #[tokio::test]
+    async fn a_frame_past_the_size_cap_ends_the_connection_instead_of_a_reply() {
+        let (port, _events) = start_test_server("tok").await;
+        let mut ws = connect(port).await;
+        ws.send(Message::text(r#"{"type":"auth","token":"tok"}"#))
+            .await
+            .expect("send auth");
+        assert_eq!(next_json(&mut ws).await, json!({ "type": "ready" }));
+
+        // A bulk request well under the cap must still flow: the cap exists to
+        // refuse abuse, not the feature that motivated it.
+        let symbols: Vec<String> = (0..200).map(|i| format!("onScreenSymbol{i}")).collect();
+        let bulk = json!({
+            "type": "request", "id": 1, "method": "set_editor_context",
+            "params": { "symbols": symbols }
+        });
+        ws.send(Message::text(bulk.to_string()))
+            .await
+            .expect("send bulk request");
+        assert_eq!(
+            next_json(&mut ws).await,
+            json!({ "type": "response", "id": 1, "result": { "accepted": 200 } })
+        );
+
+        // A syntactically valid request padded past the cap; a server that
+        // read it would answer it. It must drop the connection unread. The
+        // send itself may already fail if the server resets first, which is
+        // the same refusal seen earlier.
+        let padding = "x".repeat(MAX_MESSAGE_BYTES);
+        let oversized =
+            format!(r#"{{"type":"request","id":2,"method":"get_status","pad":"{padding}"}}"#);
+        if ws.send(Message::text(oversized)).await.is_ok() {
+            let outcome = tokio::time::timeout(Duration::from_secs(5), ws.next())
+                .await
+                .expect("server reacts in time");
+            assert!(
+                !matches!(outcome, Some(Ok(Message::Text(_)))),
+                "oversized frame was processed: {outcome:?}"
+            );
+        }
     }
 }

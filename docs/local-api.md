@@ -57,7 +57,9 @@ are closed immediately after accept.
 
 ## Messages
 
-All frames are JSON text frames.
+All frames are JSON text frames. A frame larger than 1 MiB closes the
+connection; the largest useful request (`set_editor_context` at its symbol
+cap) is around 16 KB, so no well-behaved client comes near the limit.
 
 ### Events (server to client)
 
