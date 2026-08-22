@@ -134,6 +134,11 @@ impl Grammar {
         Ok(())
     }
 
+    /// Ids of every registered pattern, in registration order.
+    pub fn command_ids(&self) -> impl Iterator<Item = &str> {
+        self.patterns.iter().map(|p| p.id())
+    }
+
     /// Match a spoken phrase against the registered patterns, first hit wins.
     /// The whole normalized input must be consumed; trailing words reject the
     /// match, so a command can never fire from inside a longer sentence.

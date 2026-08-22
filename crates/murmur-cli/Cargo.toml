@@ -31,3 +31,20 @@ anyhow.workspace = true
 cpal = "0.15"
 # WAV decoding for the offline `transcribe` subcommand.
 hound = "3.5.1"
+# Container/codec decoding for `transcribe`. Pure Rust (no ffmpeg), MPL-2.0,
+# which deny.toml already allows. Codecs are opt-in per format so the binary
+# only carries what the command actually accepts.
+symphonia = { version = "0.6", default-features = false, features = [
+    "aac",
+    "alac",
+    "flac",
+    "isomp4",
+    "mp3",
+    "ogg",
+    "pcm",
+    "vorbis",
+    "wav",
+] }
+
+[dev-dependencies]
+tempfile = "3"

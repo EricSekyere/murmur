@@ -20,7 +20,8 @@ mod server;
 mod wait;
 
 pub use client::{
-    ActionBackend, ServerConfig, namespaced_tool_name, parse_mcp_servers, risk_from_annotations,
+    ActionBackend, ServerConfig, discover_servers, namespaced_tool_name, parse_mcp_servers,
+    risk_from_annotations,
 };
 pub use install::{ClientKind, ConfiguredClient, InstallReport, install, install_at};
 pub use server::serve;
