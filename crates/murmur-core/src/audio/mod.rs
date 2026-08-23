@@ -2,6 +2,8 @@
 pub(crate) mod aec_health;
 #[cfg(feature = "audio")]
 pub mod capture;
+#[cfg(feature = "audio-files")]
+pub mod decode;
 pub(crate) mod dsp;
 #[cfg(feature = "audio")]
 pub mod loopback;

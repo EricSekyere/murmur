@@ -32,6 +32,7 @@ mod session;
 mod sound;
 mod state;
 mod transcribe;
+mod transcribe_file;
 mod tray;
 mod updater;
 mod wake_supervisor;
@@ -244,6 +245,7 @@ pub fn run() -> anyhow::Result<()> {
             commands::set_widget_visible,
             commands::locate_widget,
             commands::pick_project_folder,
+            commands::pick_and_transcribe_file,
             commands::set_codebase_vocabulary,
             commands::mark_whats_new_seen,
             commands::mcp_install,

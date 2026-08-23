@@ -1,4 +1,5 @@
-//! Windowing for backends that do not segment long audio themselves.
+//! Windowing for backends that do not segment long audio themselves, and for
+//! any caller that wants to split long audio at natural pauses.
 //!
 //! whisper.cpp windows internally, so only the Parakeet path needs this.
 //! Its ONNX encoder carries a fixed positional encoding and simply fails
@@ -71,7 +72,7 @@ const PROBE_SAMPLES: usize = RATE / 50;
 /// A `max_len` of zero yields a single range covering everything, since a
 /// zero-length window could not make progress. Continuous speech longer than
 /// `max_len` is cut at `max_len`, since something has to give.
-pub(crate) fn windows(samples: &[f32], max_len: usize) -> Vec<Range<usize>> {
+pub fn windows(samples: &[f32], max_len: usize) -> Vec<Range<usize>> {
     if max_len == 0 || samples.len() <= max_len {
         return std::iter::once(0..samples.len()).collect();
     }
