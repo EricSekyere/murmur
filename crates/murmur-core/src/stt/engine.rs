@@ -735,7 +735,9 @@ impl SttEngine {
         if samples.len() > super::chunk::PARAKEET_RELIABLE_SAMPLES {
             tracing::warn!(
                 audio_secs = secs,
-                "Parakeet loses accuracy on audio this long and may drop much                  of the speech; the Whisper backend segments long recordings                  internally and is the better choice for them"
+                "Parakeet loses accuracy on audio this long and may drop much \
+                 of the speech; the Whisper backend segments long recordings \
+                 internally and is the better choice for them"
             );
         }
 
@@ -798,7 +800,8 @@ impl SttEngine {
             Ok(Err(e)) => {
                 tracing::error!("Parakeet transcription call failed: {}", e);
                 Err(anyhow::anyhow!(
-                    "Parakeet transcription failed: {}.                      This may indicate a DirectML/GPU issue.",
+                    "Parakeet transcription failed: {}. \
+                     This may indicate a DirectML/GPU issue.",
                     e
                 ))
             }
