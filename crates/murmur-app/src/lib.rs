@@ -344,15 +344,7 @@ fn shutdown_meeting(app: &tauri::AppHandle) {
 /// File-based logging so release builds have visible logs. The returned
 /// guard must stay alive for the lifetime of the app.
 fn init_logging() -> tracing_appender::non_blocking::WorkerGuard {
-    let log_dir = if let Ok(appdata) = std::env::var("APPDATA") {
-        std::path::PathBuf::from(appdata).join("murmur")
-    } else if let Ok(home) = std::env::var("HOME") {
-        std::path::PathBuf::from(home)
-            .join(".config")
-            .join("murmur")
-    } else {
-        std::path::PathBuf::from(".")
-    };
+    let log_dir = log_dir_in(murmur_core::fsutil::config_base_dir());
     let _ = std::fs::create_dir_all(&log_dir);
 
     let file_appender = tracing_appender::rolling::daily(&log_dir, "app");
@@ -746,6 +738,15 @@ fn register_hotkey(app: &tauri::App, hotkey: &str) {
     }
 }
 
+/// The directory the app log lives in: the same config base every other file
+/// uses. Reading APPDATA directly here sent a dev build's log (launched with
+/// MURMUR_CONFIG_DIR set) into the production log directory.
+fn log_dir_in(config_base: Option<std::path::PathBuf>) -> std::path::PathBuf {
+    config_base
+        .map(|base| base.join("murmur"))
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+}
+
 /// Make the widget window truly transparent: clear the WebView2 background
 /// and disable the DWM shadow at runtime (the config flag alone has been
 /// unreliable on some Windows builds).
@@ -756,5 +757,25 @@ fn configure_widget(app: &tauri::App, show_on_start: bool) {
         if !show_on_start {
             let _ = widget.hide();
         }
+    }
+}
+
+#[cfg(test)]
+mod log_dir_tests {
+    use super::*;
+
+    // fsutil::config_base_dir owns the MURMUR_CONFIG_DIR override semantics
+    // (covered by murmur-core's tests); what these pin is that logging follows
+    // that resolution instead of reading APPDATA on its own, which sent a dev
+    // build's log into the production log directory.
+    #[test]
+    fn the_log_lands_under_the_resolved_config_base() {
+        let base = std::env::temp_dir().join("murmur-log-dir-test");
+        assert_eq!(log_dir_in(Some(base.clone())), base.join("murmur"));
+    }
+
+    #[test]
+    fn no_config_base_falls_back_to_the_working_directory() {
+        assert_eq!(log_dir_in(None), std::path::PathBuf::from("."));
     }
 }
