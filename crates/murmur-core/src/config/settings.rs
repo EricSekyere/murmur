@@ -699,9 +699,11 @@ impl Settings {
 
     /// Load settings from a TOML file, falling back to defaults.
     ///
-    /// On first run (no config file), creates the file with defaults. If the
-    /// file exists but is unreadable or invalid, it is backed up and defaults
-    /// are used so a corrupt config never blocks startup.
+    /// On first run (no config file), creates the file with defaults. A file
+    /// with some broken fields loads with just those fields defaulted (and
+    /// stays untouched on disk); only a file that is unreadable or not TOML
+    /// at all is backed up and replaced with defaults, so a corrupt config
+    /// never blocks startup.
     pub fn load(path: &PathBuf) -> Result<Self> {
         if !path.exists() {
             tracing::info!(
@@ -762,16 +764,69 @@ impl Settings {
     /// For read paths that must report a broken file to the user instead of
     /// silently substituting defaults (e.g. `murmur config --show`).
     pub fn load_strict(path: &PathBuf) -> Result<Self> {
-        Self::read_and_validate(path)
+        let content = std::fs::read_to_string(path)?;
+        Self::parse_and_validate(&content)
     }
 
     fn read_and_validate(path: &PathBuf) -> Result<Self> {
         let content = std::fs::read_to_string(path)?;
-        let mut settings: Settings = toml::from_str(&content)?;
+        match Self::parse_and_validate(&content) {
+            Ok(settings) => Ok(settings),
+            // One broken field must not cost the user every other setting:
+            // salvage what loads cleanly and only fail (which resets the file
+            // in `load`) when the content is not usable TOML at all.
+            Err(strict_err) => Self::salvage_fields(&content).ok_or(strict_err),
+        }
+    }
+
+    /// Whole-file parse: any bad field fails it.
+    fn parse_and_validate(content: &str) -> Result<Self> {
+        let mut settings: Settings = toml::from_str(content)?;
         // Truncate oversized collections before validating (don't reject the file).
         settings.clamp_collections();
         settings.validate()?;
         Ok(settings)
+    }
+
+    /// Rebuild a config in which some fields are broken, keeping every field
+    /// that loads cleanly on its own and defaulting the rest.
+    ///
+    /// A single mistyped value, e.g. `custom_vocabulary = "foo"` instead of
+    /// `["foo"]`, used to fail the whole-file parse, and `load` then renamed
+    /// the config away and reset every setting the user had. Every field
+    /// carries `#[serde(default)]`, so each top-level key can be probed
+    /// independently against defaults. `None` when the content is not TOML at
+    /// all, or the survivors still fail combined validation (a rule spanning
+    /// fields); the caller falls back wholesale then.
+    fn salvage_fields(content: &str) -> Option<Self> {
+        let table: toml::Table = content.parse().ok()?;
+        let mut good = toml::Table::new();
+        for (key, value) in table {
+            match Self::field_loads_alone(&key, value.clone()) {
+                Ok(()) => {
+                    good.insert(key, value);
+                }
+                Err(e) => tracing::warn!(
+                    field = %key,
+                    error = %e,
+                    "config field failed to load; using its default and keeping the rest"
+                ),
+            }
+        }
+        let mut settings: Settings = toml::Value::Table(good).try_into().ok()?;
+        settings.clamp_collections();
+        settings.validate().ok()?;
+        Some(settings)
+    }
+
+    /// Whether defaults plus this one field deserialize and validate.
+    fn field_loads_alone(key: &str, value: toml::Value) -> Result<()> {
+        let mut probe = toml::Table::new();
+        probe.insert(key.to_string(), value);
+        let mut settings: Settings = toml::Value::Table(probe).try_into()?;
+        settings.clamp_collections();
+        settings.validate()?;
+        Ok(())
     }
 
     /// Save settings to a TOML file (atomic: write to tempfile, then rename).
@@ -1034,6 +1089,84 @@ mod tests {
         let path = dir.path().join("config.toml");
         let _ = Settings::load_readonly(&path);
         assert!(!path.exists());
+    }
+
+    #[test]
+    fn a_mistyped_field_loses_only_itself_not_the_whole_config() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("config.toml");
+        // A string where a list belongs: the classic hand-edit typo.
+        let content = "hotkey = \"ctrl+alt+z\"\ncustom_vocabulary = \"foo\"\n";
+        std::fs::write(&path, content).expect("write");
+
+        let settings = Settings::load(&path).expect("load");
+
+        assert_eq!(settings.hotkey, "ctrl+alt+z", "good fields must survive");
+        assert!(
+            settings.custom_vocabulary.is_empty(),
+            "the broken field falls back to its default"
+        );
+        // Recovery must not reset the file: no backup, content untouched, so
+        // the user can fix the typo instead of losing it.
+        assert!(!path.with_extension("toml.bak").exists());
+        assert_eq!(std::fs::read_to_string(&path).expect("read"), content);
+    }
+
+    #[test]
+    fn an_out_of_range_field_loses_only_itself() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "hotkey = \"ctrl+alt+z\"\nvad_threshold = 40.0\n").expect("write");
+
+        let settings = Settings::load(&path).expect("load");
+
+        assert_eq!(settings.hotkey, "ctrl+alt+z");
+        assert_eq!(settings.vad_threshold, Settings::default().vad_threshold);
+        assert!(!path.with_extension("toml.bak").exists());
+    }
+
+    #[test]
+    fn a_file_that_is_not_toml_still_backs_up_and_resets() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "not [valid toml").expect("write");
+
+        let settings = Settings::load(&path).expect("load");
+
+        assert_eq!(settings.hotkey, Settings::default().hotkey);
+        // Nothing to salvage: the original moves aside and defaults land.
+        assert_eq!(
+            std::fs::read_to_string(path.with_extension("toml.bak")).expect("backup"),
+            "not [valid toml"
+        );
+        let rewritten: Settings =
+            toml::from_str(&std::fs::read_to_string(&path).expect("read")).expect("parse");
+        assert_eq!(rewritten.hotkey, Settings::default().hotkey);
+    }
+
+    #[test]
+    fn load_readonly_salvages_good_fields_without_touching_disk() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("config.toml");
+        let content = "hotkey = \"ctrl+alt+z\"\ncustom_vocabulary = \"foo\"\n";
+        std::fs::write(&path, content).expect("write");
+
+        let settings = Settings::load_readonly(&path);
+
+        assert_eq!(settings.hotkey, "ctrl+alt+z");
+        assert!(settings.custom_vocabulary.is_empty());
+        assert_eq!(std::fs::read_to_string(&path).expect("read"), content);
+        assert!(!path.with_extension("toml.bak").exists());
+    }
+
+    #[test]
+    fn load_strict_still_rejects_a_mistyped_field() {
+        // `murmur config --show` exists to report a broken file, not to paper
+        // over it, so the strict path must keep failing loudly.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "custom_vocabulary = \"foo\"\n").expect("write");
+        assert!(Settings::load_strict(&path).is_err());
     }
 
     #[test]
