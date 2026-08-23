@@ -81,10 +81,11 @@ const SAMPLES_PER_MS: usize = 16;
 #[cfg(feature = "stt")]
 const WHISPER_LEAD_MS: usize = 100;
 
-/// Char budget for the vocabulary clause in Whisper's prompt. The prompt window
-/// is ~224 tokens, shared with the style hint and rolling context, so a long
-/// glossary (a big manual list, or the codebase indexer) must be capped or it
-/// crowds out decoding and degrades transcription.
+/// Coarse char pre-cap for the vocabulary clause in Whisper's prompt, so the
+/// token fitting in `compose_prompt` starts from a bounded string. The prompt
+/// window (~224 tokens, shared with the style hint and rolling context) is
+/// enforced there in real tokens; this only stops a huge glossary (a big
+/// manual list, or the codebase indexer) from being tokenized repeatedly.
 #[cfg(feature = "stt")]
 const MAX_VOCAB_PROMPT_CHARS: usize = 400;
 
@@ -413,6 +414,81 @@ impl SttEngine {
         }
     }
 
+    /// Tokens whisper keeps from the initial prompt: whisper.cpp retains only
+    /// the LAST n_text_ctx/2 tokens of the prompt it is given (its rolling
+    /// context window), cutting from the head on overflow.
+    #[cfg(feature = "stt")]
+    fn prompt_token_budget(ctx: &WhisperContext) -> usize {
+        (ctx.n_text_ctx() / 2).max(0) as usize
+    }
+
+    /// Whisper token count for `text`, or `None` when it cannot be tokenized.
+    /// Every BPE token spans at least one byte, so byte length (plus slack)
+    /// bounds the buffer whisper_tokenize needs.
+    #[cfg(feature = "stt")]
+    fn whisper_token_count(ctx: &WhisperContext, text: &str) -> Option<usize> {
+        ctx.tokenize(text, text.len() + 8).ok().map(|t| t.len())
+    }
+
+    /// Assemble the initial prompt so it fits `token_budget`.
+    ///
+    /// Whisper keeps the tail of an over-budget prompt, while the glossary is
+    /// ordered most-important-first: the user's own words at the head, ahead
+    /// of editor context and the project index. Left unfitted, overflow cut
+    /// the style hint and the user's words before anything else, inverting
+    /// the documented priority exactly when the glossary saturated. Dropping
+    /// glossary entries from the tail here keeps the whole prompt inside the
+    /// window, so whisper never truncates and the low-priority end is what
+    /// pays for overflow.
+    ///
+    /// `count_tokens` is injected so the fitting logic is testable without a
+    /// model on disk; `None` from it (untokenizable text) keeps the prompt as
+    /// assembled, matching the pre-token-budget behavior.
+    #[cfg(feature = "stt")]
+    fn compose_prompt(
+        style_hint: &str,
+        mut glossary: &str,
+        context: &str,
+        token_budget: usize,
+        count_tokens: &dyn Fn(&str) -> Option<usize>,
+    ) -> String {
+        loop {
+            let prompt = Self::join_prompt_parts(style_hint, glossary, context);
+            let Some(tokens) = count_tokens(&prompt) else {
+                return prompt;
+            };
+            if tokens <= token_budget || glossary.is_empty() {
+                return prompt;
+            }
+            glossary = match glossary.rfind(',') {
+                Some(comma) => glossary[..comma].trim_end(),
+                None => "",
+            };
+        }
+    }
+
+    /// Hint, vocabulary clause, and rolling context joined with single
+    /// spaces, skipping empty pieces.
+    #[cfg(feature = "stt")]
+    fn join_prompt_parts(style_hint: &str, glossary: &str, context: &str) -> String {
+        let mut prompt = String::from(style_hint);
+        if !glossary.is_empty() {
+            if !prompt.is_empty() {
+                prompt.push(' ');
+            }
+            prompt.push_str("Vocabulary: ");
+            prompt.push_str(glossary);
+            prompt.push('.');
+        }
+        if !context.is_empty() {
+            if !prompt.is_empty() {
+                prompt.push(' ');
+            }
+            prompt.push_str(context);
+        }
+        prompt
+    }
+
     #[cfg(feature = "stt")]
     #[allow(clippy::too_many_arguments)]
     fn transcribe_whisper(
@@ -489,35 +565,45 @@ impl SttEngine {
         // The English style hint only helps when the output is English; on a
         // non-English transcription it can nudge whisper to code-switch.
         let output_is_english = effective_translate || effective_lang == "en";
-        let mut prompt = String::new();
-        if output_is_english {
-            prompt.push_str("Use proper punctuation and capitalization.");
-        }
-        if let Some(glossary) = vocabulary.filter(|g| !g.trim().is_empty()) {
-            if !prompt.is_empty() {
-                prompt.push(' ');
-            }
-            prompt.push_str("Vocabulary: ");
-            prompt.push_str(Self::cap_glossary(glossary.trim(), MAX_VOCAB_PROMPT_CHARS));
-            prompt.push('.');
-        }
+        let style_hint = if output_is_english {
+            "Use proper punctuation and capitalization."
+        } else {
+            ""
+        };
+        let glossary = vocabulary
+            .map(str::trim)
+            .filter(|g| !g.is_empty())
+            .map(|g| Self::cap_glossary(g, MAX_VOCAB_PROMPT_CHARS))
+            .unwrap_or("");
         // The rolling session context is the prior English transcript, so only
         // feed it back when the output is English. On a non-English decode it
         // would push whisper to code-switch into English.
-        if output_is_english && let Some(prev) = initial_prompt.filter(|s| !s.trim().is_empty()) {
-            // Cap at ~200 chars to keep the prompt token budget bounded.
-            let trimmed = prev.trim();
-            let start_byte = trimmed
-                .char_indices()
-                .rev()
-                .nth(200)
-                .map(|(i, _)| i)
-                .unwrap_or(0);
-            if !prompt.is_empty() {
-                prompt.push(' ');
-            }
-            prompt.push_str(&trimmed[start_byte..]);
-        }
+        let context = if output_is_english {
+            initial_prompt
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(|trimmed| {
+                    // Cap at ~200 chars to keep the prompt token budget bounded.
+                    let start_byte = trimmed
+                        .char_indices()
+                        .rev()
+                        .nth(200)
+                        .map(|(i, _)| i)
+                        .unwrap_or(0);
+                    &trimmed[start_byte..]
+                })
+                .unwrap_or("")
+        } else {
+            ""
+        };
+        let count_tokens = |text: &str| Self::whisper_token_count(ctx, text);
+        let prompt = Self::compose_prompt(
+            style_hint,
+            glossary,
+            context,
+            Self::prompt_token_budget(ctx),
+            &count_tokens,
+        );
         if !prompt.is_empty() {
             params.set_initial_prompt(&prompt);
         }
@@ -758,5 +844,79 @@ mod tests {
         // last comma so no entry is split.
         let g = "alpha, bravo, charlie, delta, echo";
         assert_eq!(SttEngine::cap_glossary(g, 20), "alpha, bravo");
+    }
+
+    // A stand-in tokenizer for the prompt-fitting tests: one token per
+    // whitespace-separated word. The real budget uses whisper's tokenizer,
+    // which needs a model on disk; the fitting logic only needs any counter
+    // that is monotone in the text.
+    fn words(text: &str) -> Option<usize> {
+        Some(text.split_whitespace().count())
+    }
+
+    const HINT: &str = "Use proper punctuation and capitalization.";
+
+    #[test]
+    fn compose_prompt_is_unchanged_when_it_fits_the_budget() {
+        let prompt = SttEngine::compose_prompt(HINT, "alpha, bravo", "prior context", 100, &words);
+        assert_eq!(
+            prompt,
+            "Use proper punctuation and capitalization. Vocabulary: alpha, bravo. prior context"
+        );
+    }
+
+    #[test]
+    fn overflow_drops_the_glossary_tail_never_the_head() {
+        // Head equals highest priority: the user's own words, then editor
+        // context, then the project index. Whisper keeps the TAIL of an
+        // over-budget prompt, so before the fitting stage it was the user's
+        // words that vanished first. 10 word-tokens fit hint(5) +
+        // "Vocabulary:"(1) + two entries(2) + context(2).
+        let prompt = SttEngine::compose_prompt(
+            HINT,
+            "userWord, editorSym, projectSym",
+            "prior context",
+            10,
+            &words,
+        );
+        assert!(prompt.contains("userWord"), "head must survive: {prompt}");
+        assert!(prompt.contains("editorSym"), "head must survive: {prompt}");
+        assert!(
+            !prompt.contains("projectSym"),
+            "the tail pays for overflow: {prompt}"
+        );
+        assert!(prompt.starts_with(HINT));
+        assert!(prompt.ends_with("prior context"));
+    }
+
+    #[test]
+    fn only_the_glossary_pays_for_overflow() {
+        // Hint and rolling context stay even when the budget cannot hold
+        // them: cutting them would be whisper's tail-keeping call to make,
+        // and an empty glossary is the floor of what fitting may do.
+        let prompt =
+            SttEngine::compose_prompt(HINT, "userWord, editorSym", "prior context", 7, &words);
+        assert_eq!(
+            prompt,
+            "Use proper punctuation and capitalization. prior context"
+        );
+    }
+
+    #[test]
+    fn compose_prompt_without_hint_or_context_still_forms_the_clause() {
+        assert_eq!(
+            SttEngine::compose_prompt("", "alpha, bravo", "", 100, &words),
+            "Vocabulary: alpha, bravo."
+        );
+        assert_eq!(SttEngine::compose_prompt("", "", "", 100, &words), "");
+    }
+
+    #[test]
+    fn an_unmeasurable_prompt_is_kept_as_assembled() {
+        let none = |_: &str| None;
+        assert_eq!(
+            SttEngine::compose_prompt("", "alpha, bravo", "", 1, &none),
+            "Vocabulary: alpha, bravo."
+        );
     }
 }
