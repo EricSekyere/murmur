@@ -54,7 +54,7 @@ Voice-to-text desktop tool for developers. See `prd.md` for full requirements an
 ## Architecture Principles
 
 - **Single Responsibility:** Each module (`audio::capture`, `stt::engine`, etc.) has one well-defined purpose. Split files at ~500 lines, functions at ~50 lines.
-- **Open/Closed:** Use traits (e.g., `OutputStrategy`) to extend behaviour without modifying existing code. Prefer `dyn Trait` over sprawling match expressions when adding variants is the common change.
+- **Open/Closed:** Use traits (e.g., `WakeScorer`, `Embedder`) to extend behaviour without modifying existing code. Prefer `dyn Trait` over sprawling match expressions when adding variants is the common change.
 - **Dependency Inversion:** High-level modules depend on abstractions (traits), not concrete types. Inject dependencies via constructors.
 - **DRY:** Share common logic in `murmur-core`. Use functions, generics, and extension traits before reaching for macros. Don't copy-paste significant code.
 - **KISS:** Prefer straightforward solutions. Avoid premature abstraction — wait until duplication actually appears. A simple `if`/`else` usually beats a custom framework.
