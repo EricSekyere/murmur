@@ -9,6 +9,7 @@ mod about;
 mod audio_worker;
 mod calibration;
 mod caption;
+mod editor_context;
 // Public: the command-mode executor is exercised by the UI layer.
 pub mod command_exec;
 mod command_mode;
@@ -198,6 +199,7 @@ pub fn run() -> anyhow::Result<()> {
             startup_notice: Mutex::new(None),
             suppress_output: std::sync::atomic::AtomicBool::new(false),
             project_vocab: Mutex::new(Vec::new()),
+            editor_context: Mutex::new(Default::default()),
             project_files: Mutex::new(Vec::new()),
             codebase_watcher: Mutex::new(None),
             indexing: std::sync::atomic::AtomicBool::new(false),
@@ -342,15 +344,7 @@ fn shutdown_meeting(app: &tauri::AppHandle) {
 /// File-based logging so release builds have visible logs. The returned
 /// guard must stay alive for the lifetime of the app.
 fn init_logging() -> tracing_appender::non_blocking::WorkerGuard {
-    let log_dir = if let Ok(appdata) = std::env::var("APPDATA") {
-        std::path::PathBuf::from(appdata).join("murmur")
-    } else if let Ok(home) = std::env::var("HOME") {
-        std::path::PathBuf::from(home)
-            .join(".config")
-            .join("murmur")
-    } else {
-        std::path::PathBuf::from(".")
-    };
+    let log_dir = log_dir_in(murmur_core::fsutil::config_base_dir());
     let _ = std::fs::create_dir_all(&log_dir);
 
     let file_appender = tracing_appender::rolling::daily(&log_dir, "app");
@@ -456,6 +450,7 @@ fn setup_app(
     local_api::spawn(app.handle().clone());
     updater::spawn_check(app.handle().clone(), updater::CheckKind::Startup);
     spawn_project_index(app.handle().clone());
+    spawn_mcp_connect(app.handle().clone());
     #[cfg(feature = "full")]
     spawn_help_index(app.handle().clone());
     watcher::rewatch(app.handle());
@@ -585,6 +580,66 @@ fn run_one_index(app: &tauri::AppHandle) {
 /// Prepare the local Help search engine in the background: download the small
 /// embedder model if missing, then embed the bundled corpus off the async
 /// reactor and store the ready engine in `AppState::help`. Emits `help-ready`
+/// Connect allowlisted MCP servers and register what they offer.
+///
+/// Spawned rather than awaited: each server is a child process plus a
+/// handshake, and startup must not wait on someone else's binary. Command
+/// mode serves native commands from the moment it loads and gains the tools
+/// whenever they arrive. Silent and cheap when nothing is allowlisted, which
+/// is the default.
+pub(crate) fn spawn_mcp_connect(app: tauri::AppHandle) {
+    tauri::async_runtime::spawn(async move {
+        let state = app.state::<crate::state::AppState>();
+        // Discovery reads the user's MCP client config files, so keep it off
+        // the reactor.
+        let servers = match tokio::task::spawn_blocking(murmur_mcp::discover_servers).await {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::warn!(error = %e, "MCP server discovery failed");
+                return;
+            }
+        };
+        if servers.is_empty() {
+            return;
+        }
+
+        // Read the allowlist under the lock, then release it. Handshakes are
+        // bounded but slow, and every command hotkey press takes this same
+        // lock, so connecting while holding it would freeze command mode for
+        // as long as a slow server took to answer.
+        let allowed = state.command.lock().await.allowed_servers();
+        if allowed.is_empty() {
+            return;
+        }
+
+        let mut backend = murmur_mcp::ActionBackend::new(allowed);
+        let wanted: Vec<_> = servers
+            .into_iter()
+            .filter(|s| backend.is_allowed(&s.name))
+            .collect();
+        let mut connected = 0;
+        for server in &wanted {
+            match backend.connect(server).await {
+                Ok(()) => connected += 1,
+                Err(e) => {
+                    tracing::warn!(server = %server.name, error = %e, "MCP server did not connect");
+                }
+            }
+        }
+        if connected == 0 {
+            return;
+        }
+        let tools = match backend.list_tools().await {
+            Ok(t) => t,
+            Err(e) => {
+                tracing::warn!(error = %e, "could not list MCP tools");
+                return;
+            }
+        };
+        state.command.lock().await.install_backend(backend, tools);
+    });
+}
+
 /// so the Help view can drop its "preparing" note. Non-fatal: on any failure
 /// Help simply stays unavailable (the command returns no hits).
 #[cfg(feature = "full")]
@@ -683,6 +738,15 @@ fn register_hotkey(app: &tauri::App, hotkey: &str) {
     }
 }
 
+/// The directory the app log lives in: the same config base every other file
+/// uses. Reading APPDATA directly here sent a dev build's log (launched with
+/// MURMUR_CONFIG_DIR set) into the production log directory.
+fn log_dir_in(config_base: Option<std::path::PathBuf>) -> std::path::PathBuf {
+    config_base
+        .map(|base| base.join("murmur"))
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+}
+
 /// Make the widget window truly transparent: clear the WebView2 background
 /// and disable the DWM shadow at runtime (the config flag alone has been
 /// unreliable on some Windows builds).
@@ -693,5 +757,25 @@ fn configure_widget(app: &tauri::App, show_on_start: bool) {
         if !show_on_start {
             let _ = widget.hide();
         }
+    }
+}
+
+#[cfg(test)]
+mod log_dir_tests {
+    use super::*;
+
+    // fsutil::config_base_dir owns the MURMUR_CONFIG_DIR override semantics
+    // (covered by murmur-core's tests); what these pin is that logging follows
+    // that resolution instead of reading APPDATA on its own, which sent a dev
+    // build's log into the production log directory.
+    #[test]
+    fn the_log_lands_under_the_resolved_config_base() {
+        let base = std::env::temp_dir().join("murmur-log-dir-test");
+        assert_eq!(log_dir_in(Some(base.clone())), base.join("murmur"));
+    }
+
+    #[test]
+    fn no_config_base_falls_back_to_the_working_directory() {
+        assert_eq!(log_dir_in(None), std::path::PathBuf::from("."));
     }
 }

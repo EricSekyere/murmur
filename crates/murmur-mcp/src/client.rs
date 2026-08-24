@@ -96,6 +96,49 @@ pub fn parse_mcp_servers(json: &str) -> Result<Vec<ServerConfig>> {
     Ok(servers)
 }
 
+/// Servers the user has already configured in an MCP client on this machine.
+///
+/// Read rather than duplicated: someone who set up a server for Cursor or
+/// Claude Desktop should not have to describe it again here. Config files are
+/// the user's own, so an unreadable or malformed one is skipped with a warning
+/// rather than failing discovery for the rest.
+///
+/// Returns definitions only. Nothing is connected, and the allowlist still
+/// decides which of these may ever be reached.
+pub fn discover_servers() -> Vec<ServerConfig> {
+    let mut out: Vec<ServerConfig> = Vec::new();
+    for kind in crate::ClientKind::all() {
+        let Some(path) = kind.config_path() else {
+            continue;
+        };
+        if !path.is_file() {
+            continue;
+        }
+        let text = match std::fs::read_to_string(&path) {
+            Ok(t) => t,
+            Err(e) => {
+                tracing::warn!(path = %path.display(), error = %e, "cannot read MCP client config");
+                continue;
+            }
+        };
+        match parse_mcp_servers(&text) {
+            Ok(servers) => {
+                for server in servers {
+                    // First client wins, so the same server named twice does
+                    // not produce two definitions to choose between.
+                    if !out.iter().any(|s| s.name == server.name) {
+                        out.push(server);
+                    }
+                }
+            }
+            Err(e) => {
+                tracing::warn!(path = %path.display(), error = %e, "cannot parse MCP client config");
+            }
+        }
+    }
+    out
+}
+
 /// Map MCP tool annotations to Murmur's intrinsic risk tier.
 ///
 /// Annotations are unverified hints from an untrusted server, so the mapping

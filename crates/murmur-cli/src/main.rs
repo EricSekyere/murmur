@@ -3,6 +3,8 @@
 //! (`murmur index`), config inspection, and the stdio MCP server
 //! (`murmur mcp`, plus `murmur mcp install` to register with editors).
 
+mod decode;
+
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use cpal::SampleFormat;
@@ -74,15 +76,17 @@ enum Commands {
         no_download: bool,
     },
 
-    /// Transcribe a WAV file and print the text to stdout.
+    /// Transcribe an audio or video file and print the text to stdout.
     ///
     /// Non-interactive: reads the file, resamples to 16 kHz mono, runs STT,
     /// and prints the transcript. Useful for batch processing and for
     /// verifying an STT backend (e.g. a GPU build) end to end. Reads the
     /// config but never creates or modifies it.
     Transcribe {
-        /// Path to a WAV file. Any sample rate / channel count is accepted
-        /// (it is resampled to 16 kHz mono before inference).
+        /// Path to an audio or video file: wav, mp3, m4a, mp4, flac, ogg and
+        /// other containers Symphonia can decode. Any sample rate / channel
+        /// count is accepted (it is resampled to 16 kHz mono before
+        /// inference), and the audio track is taken from a video container.
         path: PathBuf,
 
         /// STT model to use (e.g. whisper-base-en). Defaults to the configured model.
@@ -551,31 +555,6 @@ fn output_text(text: &str, mode: OutputMode) -> Result<()> {
     murmur_core::output::dispatch_output(text, mode)
 }
 
-/// Decode a WAV file to interleaved f32 samples in [-1, 1], plus its native
-/// sample rate and channel count. Handles both float and integer PCM.
-fn read_wav(path: &std::path::Path) -> Result<(Vec<f32>, u32, u16)> {
-    let reader = hound::WavReader::open(path)
-        .with_context(|| format!("Failed to open WAV file {}", path.display()))?;
-    let spec = reader.spec();
-    let samples: Vec<f32> = match spec.sample_format {
-        hound::SampleFormat::Float => reader
-            .into_samples::<f32>()
-            .collect::<std::result::Result<Vec<f32>, _>>()
-            .context("Failed to read float WAV samples")?,
-        hound::SampleFormat::Int => {
-            // Full-scale magnitude for the sample width, so any bit depth
-            // (16/24/32-bit PCM) normalizes to [-1, 1].
-            let scale = (1i64 << (spec.bits_per_sample - 1)) as f32;
-            reader
-                .into_samples::<i32>()
-                .map(|s| s.map(|v| v as f32 / scale))
-                .collect::<std::result::Result<Vec<f32>, _>>()
-                .context("Failed to read integer WAV samples")?
-        }
-    };
-    Ok((samples, spec.sample_rate, spec.channels))
-}
-
 /// Refuse to proceed when this build has no inference backend for `model`,
 /// so a stub engine can never print an empty transcript with exit 0 (or
 /// trigger a model download it cannot use).
@@ -677,8 +656,10 @@ async fn cmd_transcribe(
     ensure_model_present(&model_mgr, model, no_download).await?;
     let model_path = model_mgr.model_path(model);
 
-    let (raw, rate, channels) = read_wav(&path)?;
-    let buffer = murmur_core::audio::AudioBuffer::from_raw(&raw, rate, channels);
+    let decoded = decode::decode(&path)?;
+    let buffer =
+        murmur_core::audio::AudioBuffer::from_raw(&decoded.samples, decoded.rate, decoded.channels);
+    let (rate, channels) = (decoded.rate, decoded.channels);
     tracing::info!(
         "Loaded {} ({} Hz, {} ch) -> {} samples at 16 kHz",
         path.display(),
