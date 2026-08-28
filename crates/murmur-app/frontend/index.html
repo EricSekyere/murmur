@@ -232,6 +232,41 @@
           </section>
 
           <!-- Meetings: record both sides of a call, live transcript, saved records -->
+          <section id="file-transcribe-section" class="collapsible">
+            <button class="collapsible__trigger" id="file-transcribe-toggle" aria-expanded="false">
+              <span class="collapsible__title">Transcribe a file</span>
+              <svg class="collapsible__chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <polyline points="6 9 12 15 18 9"/>
+              </svg>
+            </button>
+            <div id="file-transcribe-panel" hidden>
+              <div class="section-header section-header--panel">
+                <h2>Transcribe a file</h2>
+              </div>
+              <span class="settings-hint">
+                Turn an existing recording into text: a voice memo, a lecture, an
+                interview, or the audio track of a video. Everything is decoded and
+                transcribed on this machine, exactly like dictation.
+              </span>
+              <div class="settings-row">
+                <button id="file-transcribe-pick" class="btn-small" type="button">Choose a file...</button>
+                <span class="settings-hint" id="file-transcribe-status" role="status" aria-live="polite"></span>
+              </div>
+              <progress id="file-transcribe-progress" max="100" value="0" hidden></progress>
+              <textarea
+                id="file-transcribe-output"
+                class="transcript-box"
+                rows="8"
+                readonly
+                hidden
+                aria-label="File transcript"
+              ></textarea>
+              <div class="settings-row" id="file-transcribe-actions" hidden>
+                <button id="file-transcribe-copy" class="btn-small" type="button">Copy</button>
+              </div>
+            </div>
+          </section>
+
           <section id="meetings-section" class="collapsible">
             <button class="collapsible__trigger" id="meetings-toggle" aria-expanded="false">
               <span class="collapsible__title">Meetings</span>
@@ -1238,7 +1273,8 @@
   <script src="js/whatsnew.js"></script>
   <script src="js/commandmode.js"></script>
   <script src="js/rewrite.js"></script>
-  <script src="js/main.js"></script>
+  <script src="js/filetranscribe.js" defer></script>
+    <script src="js/main.js"></script>
   <script src="js/dashboard.js"></script>
   <script src="js/onboarding.js"></script>
 </body>

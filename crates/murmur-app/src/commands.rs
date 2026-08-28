@@ -223,6 +223,38 @@ pub(crate) async fn pick_project_folder(app: tauri::AppHandle) -> Option<String>
         .map(|p| p.to_string_lossy().into_owned())
 }
 
+/// Open a file picker and transcribe the chosen audio or video file.
+///
+/// Returns the transcript, or None when cancelled. Progress arrives as
+/// `file-transcribe-progress` events, since a long recording outlasts what a
+/// dialog should sit unresponsive for.
+#[tauri::command]
+pub(crate) async fn pick_and_transcribe_file(
+    app: tauri::AppHandle,
+) -> Result<Option<String>, String> {
+    use tauri_plugin_dialog::DialogExt;
+    let picked = app
+        .dialog()
+        .file()
+        .add_filter(
+            "Audio and video",
+            &[
+                "wav", "mp3", "m4a", "mp4", "flac", "ogg", "aac", "m4v", "mov",
+            ],
+        )
+        .blocking_pick_file()
+        .and_then(|p| p.into_path().ok());
+    let Some(path) = picked else {
+        return Ok(None);
+    };
+    // Decoding and inference are CPU-heavy, so they must not run on the reactor.
+    let handle = app.clone();
+    tauri::async_runtime::spawn_blocking(move || crate::transcribe_file::run(&handle, &path))
+        .await
+        .map_err(|e| format!("transcription task failed: {e}"))?
+        .map(Some)
+}
+
 /// Enable/disable codebase vocabulary and optionally set the project root, then
 /// persist and re-index (or clear) in the background. The result count is
 /// reported via the `codebase-index` event.
