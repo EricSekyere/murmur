@@ -21,6 +21,7 @@ full = [
     "help",
     "diarization",
     "wake",
+    "audio-files",
 ]
 # Audio capture via CPAL
 audio = ["dep:cpal"]
@@ -62,6 +63,9 @@ cloud = ["reqwest/json"]
 # Local Help retrieval: semantic search over bundled help articles via a small
 # ONNX sentence embedder (reuses the ORT runtime the STT path already loads).
 help = ["dep:ort", "dep:tokenizers", "dep:zip", "dep:flate2", "dep:tar"]
+# Decoding audio and video files (mp3, m4a, mp4, flac, ogg) to raw samples.
+# Pure Rust, so no ffmpeg for the user to install. MPL-2.0, allowed by deny.toml.
+audio-files = ["dep:symphonia", "dep:hound"]
 # Codebase-derived vocabulary: lexical project indexer (gitignore-aware walk + regex)
 indexer = ["dep:ignore", "dep:regex"]
 # Tree-sitter symbol extraction for the indexer (AST-accurate; needs a C compiler
@@ -78,6 +82,19 @@ treesitter = [
 ]
 
 [dependencies]
+hound = { version = "3.5.1", optional = true }
+symphonia = { version = "0.6", default-features = false, optional = true, features = [
+    "aac",
+    "alac",
+    "flac",
+    "isomp4",
+    "mp3",
+    "ogg",
+    "pcm",
+    "vorbis",
+    "wav",
+] }
+
 # Audio (optional — needs system audio libs)
 cpal = { version = "0.15", optional = true }
 
