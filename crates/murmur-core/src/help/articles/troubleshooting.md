@@ -83,10 +83,11 @@ phrase in well under a second. If the Diagnostics view shows your decode
 times are already short, the delay is not the model and switching will not
 help.
 
-**4. Turn off Live Preview if long takes drag.** Preview re-transcribes the
-whole phrase each time it updates, so the cost grows the longer you speak.
-It stops on its own for very long takes, but turning it off removes the work
-entirely.
+**4. Turn off Live Preview if you do not read it.** Preview re-transcribes the
+tail of the phrase as you speak, so it competes with the final transcription
+for the same engine. Murmur already skips it on CPU Whisper, where it would
+cost more than it saves, so this is mostly a Parakeet setting. Turning it off
+removes the work entirely.
 
 > **Tip:** Diagnostics shows decode time. If that number is small and
 > delivery still feels slow, the time is going to the pause length or the
