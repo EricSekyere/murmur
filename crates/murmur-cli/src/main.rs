@@ -3,8 +3,6 @@
 //! (`murmur index`), config inspection, and the stdio MCP server
 //! (`murmur mcp`, plus `murmur mcp install` to register with editors).
 
-mod decode;
-
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use cpal::SampleFormat;
@@ -656,7 +654,7 @@ async fn cmd_transcribe(
     ensure_model_present(&model_mgr, model, no_download).await?;
     let model_path = model_mgr.model_path(model);
 
-    let decoded = decode::decode(&path)?;
+    let decoded = murmur_core::audio::decode::decode(&path)?;
     let buffer =
         murmur_core::audio::AudioBuffer::from_raw(&decoded.samples, decoded.rate, decoded.channels);
     let (rate, channels) = (decoded.rate, decoded.channels);

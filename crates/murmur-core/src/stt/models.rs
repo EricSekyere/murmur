@@ -148,8 +148,12 @@ impl SttModel {
             Self::WhisperSmallEn => "Good balance of speed and accuracy",
             Self::WhisperMediumEn => "Higher accuracy, slower. Needs 4 GB+ RAM",
             Self::WhisperLargeV3Turbo => "Best Whisper accuracy, slowest. Needs 6 GB+ RAM",
-            Self::ParakeetTdt06bV2 => "Best accuracy, native punctuation & capitalization",
-            Self::ParakeetTdt06bV3 => "Best accuracy, 25 languages with auto-detect",
+            Self::ParakeetTdt06bV2 => {
+                "Best accuracy, native punctuation & capitalization. Past ~35 s of audio, a Whisper model is more reliable"
+            }
+            Self::ParakeetTdt06bV3 => {
+                "Best accuracy, 25 languages with auto-detect. Past ~35 s of audio, a Whisper model is more reliable"
+            }
         }
     }
 
