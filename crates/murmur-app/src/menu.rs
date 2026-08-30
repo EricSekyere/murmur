@@ -20,6 +20,7 @@ const ID_QUIT: &str = "app:quit";
 const ID_DICTATE: &str = "app:dictate";
 const ID_COMMAND_MODE: &str = "app:command-mode";
 const ID_COPY_LAST: &str = "app:copy-last";
+const ID_TRANSCRIBE_FILE: &str = "app:transcribe-file";
 const ID_MEETING: &str = "app:meeting";
 const ID_PILL: &str = "app:pill";
 const ID_CHECK_UPDATES: &str = "app:check-updates";
@@ -159,6 +160,13 @@ fn build_dictation_menu(app: &tauri::App) -> tauri::Result<Submenu<Wry>> {
         false,
         Some("CmdOrCtrl+Shift+C"),
     )?;
+    let transcribe_file = MenuItem::with_id(
+        app,
+        ID_TRANSCRIBE_FILE,
+        "Transcribe a File...",
+        true,
+        Some("CmdOrCtrl+O"),
+    )?;
     let initial_meeting = meeting_item(false, false);
     let meeting = MenuItem::with_id(
         app,
@@ -173,6 +181,7 @@ fn build_dictation_menu(app: &tauri::App) -> tauri::Result<Submenu<Wry>> {
         true,
         &[
             &dictate,
+            &transcribe_file,
             &command_mode,
             &copy_last,
             &PredefinedMenuItem::separator(app)?,
@@ -351,6 +360,11 @@ fn handle_event(app: &AppHandle, id: &str) {
         ID_SETTINGS => navigate(app, "settings"),
         ID_QUIT => app.exit(0),
         ID_DICTATE => crate::session::handle_toggle(app),
+        // The frontend owns the flow so progress and the transcript land in
+        // the same view whichever way the user started it.
+        ID_TRANSCRIBE_FILE => {
+            let _ = app.emit("menu-transcribe-file", ());
+        }
         ID_COMMAND_MODE => crate::command_mode::toggle_mode(app),
         ID_COPY_LAST => tray::copy_last_transcript(app),
         ID_MEETING => toggle_meeting(app),

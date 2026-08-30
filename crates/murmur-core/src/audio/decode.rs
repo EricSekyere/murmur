@@ -1,4 +1,4 @@
-//! Decoding audio files to raw samples for `transcribe`.
+//! Decoding audio and video files to raw samples.
 //!
 //! WAV stays on `hound`, which has handled it here for a long time and is
 //! already proven against odd bit depths. Everything else goes through
@@ -10,7 +10,7 @@ use std::path::Path;
 
 /// Interleaved samples in [-1, 1], with the source's own rate and channel
 /// count. Callers resample and downmix through `AudioBuffer::from_raw`.
-pub(crate) struct Decoded {
+pub struct Decoded {
     pub samples: Vec<f32>,
     pub rate: u32,
     pub channels: u16,
@@ -32,7 +32,7 @@ impl std::fmt::Debug for Decoded {
 /// The extension only picks which decoder is tried first. Symphonia probes
 /// the actual content, and a file whose name claims WAV falls back to that
 /// probe when hound rejects it, so a misnamed file decodes either way round.
-pub(crate) fn decode(path: &Path) -> Result<Decoded> {
+pub fn decode(path: &Path) -> Result<Decoded> {
     let is_wav = path
         .extension()
         .and_then(|e| e.to_str())
