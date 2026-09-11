@@ -47,7 +47,20 @@ impl Default for DictationConfig {
 const SPLIT_FRAME_MS: u64 = 30;
 
 /// Trailing window of an in-progress phrase used for live preview snapshots.
-const PREVIEW_WINDOW_SECS: u64 = 12;
+///
+/// Sized so one preview decode finishes inside the interval between snapshots
+/// (about 700 ms). When it does not, the preview worker never idles, so it is
+/// mid-decode whenever a phrase ends, and the final decode blocks on the
+/// engine mutex behind it: `transcribe` takes `lock` while a preview takes
+/// `try_lock`, which stops a preview starting during a final but not the
+/// reverse. That wait lands directly on the text the user is waiting for.
+///
+/// Measured on a real session at 12 s: 83k samples decoded in 286 ms, 142k in
+/// 684 ms, 154k in 721 ms, already past the interval before the window was
+/// even full. Halving it keeps a pass near 450 ms with room for a slower
+/// machine. Nothing visible is lost: the caption clamps to two or three lines,
+/// so a longer window was decoding text the user could never see.
+const PREVIEW_WINDOW_SECS: u64 = 6;
 
 #[derive(Debug, Clone)]
 pub enum DictationEvent {
@@ -497,6 +510,51 @@ mod tests {
             events
                 .iter()
                 .any(|event| matches!(event, DictationEvent::PhraseReady(_)))
+        );
+    }
+
+    #[test]
+    fn the_preview_window_stays_short_enough_to_decode_between_snapshots() {
+        // The window decides preview decode cost, and that cost has to fit
+        // inside the snapshot interval or the worker never idles and the final
+        // decode queues behind it on the engine mutex. Measured at ~4.7 us per
+        // sample on the machine that produced the timings in the constant's
+        // doc comment, against a ~700 ms interval.
+        const MEASURED_MICROS_PER_SAMPLE: f64 = 4.7;
+        const SNAPSHOT_INTERVAL_MS: f64 = 700.0;
+        let samples = (PREVIEW_WINDOW_SECS * 16_000) as f64;
+        let predicted_ms = samples * MEASURED_MICROS_PER_SAMPLE / 1_000.0;
+        assert!(
+            predicted_ms < SNAPSHOT_INTERVAL_MS,
+            "a full window decodes in ~{predicted_ms:.0} ms, past the ~{SNAPSHOT_INTERVAL_MS:.0} ms between snapshots"
+        );
+    }
+
+    #[test]
+    fn a_snapshot_is_trimmed_to_the_preview_window() {
+        // Long phrases must not grow the snapshot, which is what keeps the
+        // decode cost flat rather than climbing with the take.
+        let rate = 16_000;
+        let mut session = DictationSession::new(
+            DictationConfig {
+                speech_threshold: 0.01,
+                silence_hold: Duration::from_millis(100),
+                min_phrase: Duration::from_millis(50),
+                max_phrase: Duration::from_secs(600),
+                split_search: Duration::from_millis(500),
+                preroll: Duration::from_millis(50),
+                session_timeout: Duration::from_secs(600),
+            },
+            rate,
+        );
+        // Well past the window, so trimming is what bounds the result.
+        let _ = session.ingest(&speech(rate as usize * (PREVIEW_WINDOW_SECS as usize + 8)));
+        let snapshot = session.current_phrase().expect("phrase in progress");
+        let window_at_16k = PREVIEW_WINDOW_SECS as usize * 16_000;
+        assert!(
+            snapshot.samples.len() <= window_at_16k,
+            "snapshot {} samples, past the {window_at_16k} window",
+            snapshot.samples.len()
         );
     }
 
