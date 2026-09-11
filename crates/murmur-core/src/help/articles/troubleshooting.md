@@ -57,14 +57,41 @@ repeated output.
 2. Add the tricky terms to your personal dictionary so they are biased toward the right spelling.
 3. If hallucinations persist, switch to the strict transcription profile, which filters more aggressively.
 
-## Output is slow to appear
+## Dictation feels slow, or output is delayed
 
-A heavy Whisper model on a CPU-only machine adds latency.
+If there is a lag between finishing a sentence and the text appearing, these
+settings usually explain it. Work down the list in order: the first two are
+settings changes that cost nothing to try, and the model is usually not the
+problem. Each one makes dictation faster by removing waiting, not by
+transcribing quicker.
 
-1. Switch to Parakeet (the default) or a small Whisper model for low latency.
-2. Turn off Live Preview for the absolute fastest delivery.
+**1. Check the pause length.** Murmur waits for a gap in your speech before
+it decides a phrase has ended, and that wait is pure delay on every phrase.
+The default is 0.6 seconds. If yours is higher, every phrase you speak is
+slower to land by the difference. Lower it in Settings, or set
+`phrase_pause_secs` in the config file. Too low and a breath mid-sentence
+splits one phrase into two, so 0.6 is a good place to return to.
 
-> **Tip:** The Diagnostics view shows model latency.
+**2. Check the pre-output delay.** `pre_output_delay_ms` pauses before typing
+so the target window is ready to receive keystrokes. The default is 80 ms.
+Some apps need it; most do not. Lowering it shaves that much off delivery,
+but if text starts arriving with missing first characters, put it back.
+
+**3. Only then look at the model.** A heavy Whisper model on a CPU-only
+machine genuinely adds latency, but Parakeet on CPU decodes a ten-second
+phrase in well under a second. If the Diagnostics view shows your decode
+times are already short, the delay is not the model and switching will not
+help.
+
+**4. Turn off Live Preview if you do not read it.** Preview re-transcribes the
+tail of the phrase as you speak, so it competes with the final transcription
+for the same engine. Murmur already skips it on CPU Whisper, where it would
+cost more than it saves, so this is mostly a Parakeet setting. Turning it off
+removes the work entirely.
+
+> **Tip:** Diagnostics shows decode time. If that number is small and
+> delivery still feels slow, the time is going to the pause length or the
+> pre-output delay, not to transcription.
 
 ## Typing fails on Linux
 
