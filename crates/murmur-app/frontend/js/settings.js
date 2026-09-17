@@ -524,6 +524,7 @@ saveHistoryToggle.addEventListener('change', async () => {
   const enabled = saveHistoryToggle.checked;
   try {
     await invoke('update_settings', { save_history: enabled });
+    await loadHistory();
     showToast(enabled ? 'History on' : 'History off, nothing stored', 'success');
   } catch (err) {
     saveHistoryToggle.checked = !enabled;

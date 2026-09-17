@@ -35,6 +35,11 @@ jobs:
           toolchain: "1.93.1"
           components: rustfmt
       - run: cargo fmt --all --check
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Frontend regression tests
+        run: node --test crates/murmur-app/tests/transcription.test.cjs
 
   # Feature-gate regression checks: the build shapes a --workspace run never
   # exercises. Feature unification there gives murmur-core every non-GPU
