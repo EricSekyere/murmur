@@ -751,7 +751,17 @@ fn deliver_text(
     };
     let text: &str = repaired.as_deref().unwrap_or(text);
 
-    deliver_output(app, state, text, ctx, join);
+    // Preserve the transcript before touching external applications. Output
+    // failure must never prevent recovery from the dashboard or history.
+    let entry_id = record_history(app, state, text);
+    if let Err(e) = app.emit(
+        "streaming-phrase",
+        serde_json::json!({ "text": text, "processing_time_ms": processing_time_ms }),
+    ) {
+        tracing::warn!("Failed to display transcript: {}", e);
+    }
+
+    let destination = deliver_output(app, state, text, ctx, join);
 
     // Focused modes append a trailing space (dispatch_output) — and a leading
     // one on a repaired junction; clipboard-only doesn't type, so there is
@@ -764,7 +774,7 @@ fn deliver_text(
     // a visible stray glyph — the safer failure mode than over-deleting real
     // text the user did not intend to remove.
     let spaces = if repaired.is_some() { 2 } else { 1 };
-    let delivered = if matches!(ctx.output_mode, OutputMode::Clipboard | OutputMode::Stdout) {
+    let delivered = if destination != crate::focus::OutputDestination::External {
         0
     } else {
         // A typed/pasted phrase landed in the target; the session's
@@ -777,19 +787,10 @@ fn deliver_text(
         .lock()
         .unwrap_or_else(|e| e.into_inner()) = delivered;
 
-    // History, events, and captions all mirror what actually landed on
-    // screen, so a repaired junction records the lowercased text.
-    let entry_id = record_history(state, text);
-
-    let _ = app.emit(
-        "streaming-phrase",
-        serde_json::json!({ "text": text, "processing_time_ms": processing_time_ms }),
-    );
-
     *last_delivery = Some(LastDelivery {
         text: text.trim().to_string(),
         delivered_at: Instant::now(),
-        typed: matches!(ctx.output_mode, OutputMode::Auto | OutputMode::Keyboard),
+        typed: delivered > 0 && matches!(ctx.output_mode, OutputMode::Auto | OutputMode::Keyboard),
         kind,
         #[cfg(windows)]
         target_hwnd: ctx.previous_hwnd,
@@ -878,16 +879,14 @@ fn attempt_junction_repair(
 }
 
 /// Append a delivered phrase to the persistent history and per-day insights
-/// aggregate, saving both. Best effort: a failed write is logged, never
-/// surfaced to the user. Skipped entirely when the user has turned history
+/// aggregate, saving both. Failed history writes leave the in-memory entry
+/// available and warn the user. Skipped when the user has turned history
 /// off (returns None then; Some(entry id) once recorded).
-fn record_history(state: &AppState, text: &str) -> Option<String> {
-    if !state
-        .settings
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .save_history
-    {
+fn record_history(app: &tauri::AppHandle, state: &AppState, text: &str) -> Option<String> {
+    // Serialize with history opt-out so a late phrase cannot recreate a
+    // history file after the user has disabled it and purged their entries.
+    let settings = state.settings.lock().unwrap_or_else(|e| e.into_inner());
+    if !settings.save_history {
         return None;
     }
     let app_name = current_app_name();
@@ -896,6 +895,10 @@ fn record_history(state: &AppState, text: &str) -> Option<String> {
         let entry_id = history.add(text, app_name);
         if let Err(e) = history.save(&state.history_path) {
             tracing::warn!("Failed to save history: {}", e);
+            crate::state::emit_transcription_error(
+                app,
+                "Could not save history to disk. Copy your transcript before closing Murmur.",
+            );
         }
         entry_id
     };
@@ -986,7 +989,7 @@ fn deliver_output(
     text: &str,
     ctx: &DeliveryContext,
     join: crate::focus::TextJoin,
-) {
+) -> crate::focus::OutputDestination {
     #[cfg(not(windows))]
     let _ = state;
     #[cfg(windows)]
@@ -1008,17 +1011,20 @@ fn deliver_output(
         )
     }));
     match result {
-        Ok(Ok(())) => {}
+        Ok(Ok(destination)) => return destination,
         Ok(Err(e)) => {
             tracing::error!("Failed to output text: {}", e);
-            emit_hotkey_error(app, &format!("Failed to output text: {}", e));
         }
         Err(panic_info) => {
             let msg = panic_message(panic_info, "unknown panic in output_text");
             tracing::error!("output_text panicked: {}", msg);
-            emit_hotkey_error(app, &format!("Output crashed: {}", msg));
         }
     }
+    crate::state::emit_transcription_error(
+        app,
+        "Could not insert text into the other app. Your transcript is available in Murmur.",
+    );
+    crate::focus::OutputDestination::App
 }
 
 fn finish_streaming(

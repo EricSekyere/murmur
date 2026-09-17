@@ -1,13 +1,17 @@
 // Transcription display, history, and recording/streaming event handling.
 
 // Load (optionally filtered) history from the persistent backend store.
+let historyRequest = 0;
 async function loadHistory() {
+  const request = ++historyRequest;
+  const query = historyQuery;
   try {
-    const result = await invoke('get_history', { query: historyQuery, limit: 200 });
+    const result = await invoke('get_history', { query, limit: 500 });
+    if (request !== historyRequest || query !== historyQuery) return;
     history = result.entries || [];
   } catch (err) {
     console.error('Failed to load history:', err);
-    history = [];
+    return;
   }
   renderHistory();
 }
@@ -20,8 +24,10 @@ function onHistorySearch(value) {
 }
 
 async function clearHistory() {
+  ++historyRequest;
   try {
     await invoke('clear_history');
+    ++historyRequest;
     history = [];
     renderHistory();
     showToast('History cleared', 'success');
@@ -67,9 +73,7 @@ function renderHistory() {
 
     const textSpan = document.createElement('span');
     textSpan.className = 'history-item__text';
-    textSpan.textContent = entry.text.length > 60
-      ? entry.text.slice(0, 60) + '…'
-      : entry.text;
+    textSpan.textContent = entry.text;
     textSpan.title = entry.text;
 
     const meta = document.createElement('span');
@@ -227,14 +231,20 @@ listen('transcription-error', (event) => {
 // '\n' segments render as line breaks; text segments join with spaces.
 function renderSessionTranscript() {
   let html = '';
+  let plainText = '';
   let needsSpace = false;
   for (const seg of sessionPhrases) {
     if (seg === '\n') {
       html += '<br>';
+      plainText += '\n';
       needsSpace = false;
     } else {
-      if (needsSpace) html += ' ';
+      if (needsSpace) {
+        html += ' ';
+        plainText += ' ';
+      }
       html += escapeHtml(seg);
+      plainText += seg;
       needsSpace = true;
     }
   }
@@ -245,7 +255,7 @@ function renderSessionTranscript() {
     html += `<span class="interim">${escapeHtml(interimText)}</span>`;
   }
   transcriptionOutput.innerHTML = html || '<span class="placeholder">Listening…</span>';
-  lastTranscription = sessionPhrases.filter(s => s !== '\n').join(' ');
+  lastTranscription = plainText;
   copyTranscription.disabled = lastTranscription.length === 0;
 }
 
@@ -272,6 +282,7 @@ listen('streaming-phrase', (event) => {
   interimText = '';
   sessionPhrases.push(text);
   renderSessionTranscript();
+  loadHistory();
 
   if (currentSession) {
     currentSession.phraseCount++;
@@ -309,17 +320,19 @@ listen('streaming-done', () => {
   stopVisualization();
   interimText = '';
 
+  renderSessionTranscript();
+  loadHistory();
   const finalText = lastTranscription.trim();
   if (finalText) {
     const words = finalText.split(/\s+/).length;
     wordCount.textContent = `${words} word${words !== 1 ? 's' : ''}`;
-    loadHistory();
     applyState('done');
     setTimeout(() => {
       if (uiState === 'done') applyState('idle');
     }, 2000);
   } else {
     applyState('idle');
+    transcriptionOutput.innerHTML = '<span class="placeholder">Press the mic or hit your hotkey to begin.</span>';
   }
 
   if (currentSession) {
@@ -328,4 +341,6 @@ listen('streaming-done', () => {
     currentSession = null;
   }
 });
+
+loadHistory();
 
