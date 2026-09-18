@@ -18,6 +18,30 @@ pub(crate) enum TextJoin {
     Joining,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum OutputDestination {
+    App,
+    External,
+    ClipboardOrStdout,
+}
+
+fn dispatch_to_target(
+    mode: OutputMode,
+    target_available: impl FnOnce() -> bool,
+    dispatch: impl FnOnce() -> anyhow::Result<()>,
+) -> anyhow::Result<OutputDestination> {
+    let needs_target = !matches!(mode, OutputMode::Clipboard | OutputMode::Stdout);
+    if needs_target && !target_available() {
+        return Ok(OutputDestination::App);
+    }
+    dispatch()?;
+    Ok(if needs_target {
+        OutputDestination::External
+    } else {
+        OutputDestination::ClipboardOrStdout
+    })
+}
+
 /// Output transcribed text according to the configured output mode,
 /// restoring focus to the user's target window first when necessary.
 pub(crate) fn output_text(
@@ -26,28 +50,25 @@ pub(crate) fn output_text(
     join: TextJoin,
     #[cfg(windows)] previous_hwnd: usize,
     #[cfg(windows)] last_external_hwnd: usize,
-) -> anyhow::Result<()> {
-    #[cfg(windows)]
-    {
-        let needs_focused_target = !matches!(mode, OutputMode::Clipboard | OutputMode::Stdout);
-        if needs_focused_target && !ensure_external_target(previous_hwnd, last_external_hwnd) {
-            murmur_core::output::clipboard::ClipboardOutput::new()?.copy(text.trim())?;
-            anyhow::bail!(
-                "No target window available (Murmur is in front and no external \
-                 window is tracked); copied transcription to clipboard"
-            );
-        }
-    }
-
-    match join {
-        TextJoin::Phrase => murmur_core::output::dispatch_output(text, mode),
-        TextJoin::Joining => murmur_core::output::dispatch_joining(text, mode),
-    }
+) -> anyhow::Result<OutputDestination> {
+    dispatch_to_target(
+        mode,
+        || {
+            #[cfg(windows)]
+            return ensure_external_target(previous_hwnd, last_external_hwnd);
+            #[cfg(not(windows))]
+            true
+        },
+        || match join {
+            TextJoin::Phrase => murmur_core::output::dispatch_output(text, mode),
+            TextJoin::Joining => murmur_core::output::dispatch_joining(text, mode),
+        },
+    )
 }
 
 /// Make sure the window dictation started in receives the text. With a real
 /// start window, deliver only to it (focused or restorable); if it's gone,
-/// return false so the caller diverts to the clipboard instead of typing into
+/// return false so dictation stays in the app instead of typing into
 /// whatever window is now live. The live-tracked fallback applies only when no
 /// start window was captured (dictation triggered from Murmur's own UI).
 /// Also used by the selection rewrite to focus its copy/paste target.
@@ -60,7 +81,7 @@ pub(crate) fn ensure_external_target(previous_hwnd: usize, last_external_hwnd: u
     let start_target =
         (previous_hwnd != 0 && !is_own_window(previous_hwnd)).then_some(previous_hwnd);
     if let Some(target) = start_target {
-        // Deliver only to that window; if it's gone, refuse (caller -> clipboard).
+        // Deliver only to that window; if it's gone, keep the text in the app.
         return current_fg == target || restore_foreground_window(target);
     }
 
@@ -239,4 +260,61 @@ pub(crate) fn spawn_foreground_tracker(app: tauri::AppHandle) {
             std::thread::sleep(std::time::Duration::from_millis(150));
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn missing_target_keeps_text_in_app_without_external_side_effects() {
+        for mode in [
+            OutputMode::Auto,
+            OutputMode::Keyboard,
+            OutputMode::ClipboardPaste,
+        ] {
+            let destination = dispatch_to_target(
+                mode,
+                || false,
+                || panic!("No target must not type, paste, or overwrite the clipboard"),
+            )
+            .unwrap();
+            assert_eq!(destination, OutputDestination::App);
+        }
+    }
+
+    #[test]
+    fn available_target_dispatches_text() {
+        let mut calls = 0;
+        let destination = dispatch_to_target(
+            OutputMode::Keyboard,
+            || true,
+            || {
+                calls += 1;
+                Ok(())
+            },
+        )
+        .unwrap();
+        assert_eq!(calls, 1);
+        assert_eq!(destination, OutputDestination::External);
+    }
+
+    #[test]
+    fn clipboard_and_stdout_do_not_require_a_target() {
+        for mode in [OutputMode::Clipboard, OutputMode::Stdout] {
+            let destination =
+                dispatch_to_target(mode, || panic!("Must not change focus"), || Ok(())).unwrap();
+            assert_eq!(destination, OutputDestination::ClipboardOrStdout);
+        }
+    }
+
+    #[test]
+    fn output_failure_is_not_reported_as_external_delivery() {
+        let result = dispatch_to_target(
+            OutputMode::Keyboard,
+            || true,
+            || anyhow::bail!("output unavailable"),
+        );
+        assert!(result.is_err());
+    }
 }

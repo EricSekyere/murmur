@@ -167,6 +167,41 @@ mod tests {
     /// Needs the downloaded model + the ORT DLL, so it is ignored in CI. Run
     /// locally with the model present:
     ///   cargo test -p murmur-core --features help embedder_smoke -- --ignored --nocapture
+    /// Retrieval quality guard for the slow-dictation guidance, run manually
+    /// with the model present:
+    ///   cargo test -p murmur-core --features help slow_dictation -- --ignored --nocapture
+    ///
+    /// Wording drives retrieval, so this pins phrasings a user in that
+    /// situation would actually type. An earlier heading, "Output is slow to
+    /// appear", missed "what settings make dictation quicker" entirely: the
+    /// word settings pulled it to the configuration article instead.
+    #[test]
+    #[ignore]
+    fn slow_dictation_questions_find_the_guidance() {
+        let embedder = OnnxEmbedder::load().expect("load embedder");
+        let index = HelpIndex::build(&embedder, &articles()).expect("build index");
+        for q in [
+            "dictation feels slow",
+            "typing into my window is slow",
+            "how do I make transcription faster",
+            "there is a delay before my text appears",
+            "what settings make dictation quicker",
+        ] {
+            let emb = embedder.embed_query(q).unwrap();
+            let hits = index.search(&emb, 3);
+            println!(
+                "Q: {q}
+  -> {:.3} {}",
+                hits[0].score, hits[0].heading
+            );
+            assert!(
+                hits[0].heading.starts_with("Dictation feels slow"),
+                "'{q}' returned '{}' instead of the slow-dictation guidance",
+                hits[0].heading
+            );
+        }
+    }
+
     #[test]
     #[ignore]
     fn embedder_smoke_ranks_relevant_section() {
