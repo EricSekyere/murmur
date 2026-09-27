@@ -33,7 +33,14 @@
     }
   }
 
+  const content = document.querySelector('.content');
+  const scrollPositions = new Map();
+  let activeView = 'home';
+
   function activateView(name) {
+    if (content) scrollPositions.set(activeView, content.scrollTop);
+    const changingView = activeView !== name;
+    activeView = name;
     for (const item of navItems) {
       item.classList.toggle('nav__item--active', item.dataset.view === name);
       item.setAttribute('aria-current', item.dataset.view === name ? 'page' : 'false');
@@ -41,11 +48,14 @@
     for (const [key, el] of Object.entries(viewEls)) {
       if (el) el.classList.toggle('view--active', key === name);
     }
+    window.dispatchEvent(new CustomEvent('workspace-view-changed', { detail: name }));
     // Refresh settings/analytics on every visit; history stays live.
     ensureExpanded(viewToggles[name], name !== 'home');
+    if (content) content.scrollTop = changingView ? scrollPositions.get(name) || 0 : 0;
   }
 
   for (const item of navItems) {
+    item.setAttribute('aria-label', item.textContent.trim());
     item.addEventListener('click', () => activateView(item.dataset.view));
   }
 

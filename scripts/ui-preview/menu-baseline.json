@@ -1,0 +1,36 @@
+{
+  "File": [
+    "Settings",
+    "Quit"
+  ],
+  "Dictation": [
+    "Start dictation",
+    "Transcribe a File...",
+    "Command Mode",
+    "Copy Last Transcript",
+    "Start meeting"
+  ],
+  "Edit": [
+    "Undo",
+    "Redo",
+    "Cut",
+    "Copy",
+    "Paste",
+    "Select All"
+  ],
+  "View": [
+    "Home",
+    "Analytics",
+    "Settings",
+    "Diagnostics",
+    "Help",
+    "Toggle Floating Pill"
+  ],
+  "Help": [
+    "Help Center",
+    "Report a Problem",
+    "Project Page",
+    "Check for Updates\u2026",
+    "About Murmur"
+  ]
+}

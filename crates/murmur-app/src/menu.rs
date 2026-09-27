@@ -15,6 +15,13 @@ use crate::tray;
 
 // Menu item ids carry an `app:` prefix so they can never collide with the
 // tray menu's ids in the shared menu-event stream.
+const ACCEL_SETTINGS: &str = "CmdOrCtrl+Comma";
+const ACCEL_QUIT: &str = "CmdOrCtrl+Q";
+const ACCEL_DICTATE: &str = "CmdOrCtrl+D";
+const ACCEL_COPY_LAST: &str = "CmdOrCtrl+Shift+C";
+const ACCEL_TRANSCRIBE_FILE: &str = "CmdOrCtrl+O";
+const ACCEL_HELP_CENTER: &str = "F1";
+
 const ID_SETTINGS: &str = "app:settings";
 const ID_QUIT: &str = "app:quit";
 const ID_DICTATE: &str = "app:dictate";
@@ -50,6 +57,22 @@ const VIEW_ITEMS: &[(&str, &str, &str, &str)] = &[
     ),
     ("app:view:help", "Help", "CmdOrCtrl+5", "help"),
 ];
+
+pub(crate) fn accelerator_for(id: &str) -> Option<&'static str> {
+    VIEW_ITEMS
+        .iter()
+        .find(|item| item.0 == id)
+        .map(|item| item.2)
+        .or(match id {
+            ID_SETTINGS => Some(ACCEL_SETTINGS),
+            ID_QUIT => Some(ACCEL_QUIT),
+            ID_DICTATE => Some(ACCEL_DICTATE),
+            ID_COPY_LAST => Some(ACCEL_COPY_LAST),
+            ID_TRANSCRIBE_FILE => Some(ACCEL_TRANSCRIBE_FILE),
+            ID_HELP_CENTER => Some(ACCEL_HELP_CENTER),
+            _ => None,
+        })
+}
 
 /// Handles to the state-dependent items, kept in Tauri state so
 /// [`update_menu`] can reach them from any thread.
@@ -149,7 +172,7 @@ fn build_dictation_menu(app: &tauri::App) -> tauri::Result<Submenu<Wry>> {
         ID_DICTATE,
         initial.label,
         initial.enabled,
-        Some("CmdOrCtrl+D"),
+        Some(ACCEL_DICTATE),
     )?;
     let command_mode = MenuItem::with_id(app, ID_COMMAND_MODE, "Command Mode", true, None::<&str>)?;
     // Disabled until update_menu sees stored history, like the tray item.
@@ -158,14 +181,14 @@ fn build_dictation_menu(app: &tauri::App) -> tauri::Result<Submenu<Wry>> {
         ID_COPY_LAST,
         "Copy Last Transcript",
         false,
-        Some("CmdOrCtrl+Shift+C"),
+        Some(ACCEL_COPY_LAST),
     )?;
     let transcribe_file = MenuItem::with_id(
         app,
         ID_TRANSCRIBE_FILE,
         "Transcribe a File...",
         true,
-        Some("CmdOrCtrl+O"),
+        Some(ACCEL_TRANSCRIBE_FILE),
     )?;
     let initial_meeting = meeting_item(false, false);
     let meeting = MenuItem::with_id(
@@ -234,7 +257,13 @@ fn build_view_menu(app: &tauri::App) -> tauri::Result<Submenu<Wry>> {
 }
 
 fn build_help_menu(app: &tauri::App) -> tauri::Result<Submenu<Wry>> {
-    let help_center = MenuItem::with_id(app, ID_HELP_CENTER, "Help Center", true, Some("F1"))?;
+    let help_center = MenuItem::with_id(
+        app,
+        ID_HELP_CENTER,
+        "Help Center",
+        true,
+        Some(ACCEL_HELP_CENTER),
+    )?;
     let report = MenuItem::with_id(app, ID_REPORT, "Report a Problem", true, None::<&str>)?;
     let project = MenuItem::with_id(app, ID_PROJECT, "Project Page", true, None::<&str>)?;
     // macOS puts this in the application menu, next to About.
@@ -292,7 +321,7 @@ fn build_mac_app_menu(app: &tauri::App) -> tauri::Result<Submenu<Wry>> {
         ID_SETTINGS,
         "Settings\u{2026}",
         true,
-        Some("CmdOrCtrl+Comma"),
+        Some(ACCEL_SETTINGS),
     )?;
     let check_updates = MenuItem::with_id(
         app,
@@ -339,10 +368,10 @@ fn build_mac_window_menu(app: &tauri::App) -> tauri::Result<Submenu<Wry>> {
 
 #[cfg(not(target_os = "macos"))]
 fn build_file_menu(app: &tauri::App) -> tauri::Result<Submenu<Wry>> {
-    let settings = MenuItem::with_id(app, ID_SETTINGS, "Settings", true, Some("CmdOrCtrl+Comma"))?;
+    let settings = MenuItem::with_id(app, ID_SETTINGS, "Settings", true, Some(ACCEL_SETTINGS))?;
     // Routes through app.exit(0) in the handler so RunEvent::Exit still runs
     // (stops an active meeting and deletes its audio spool).
-    let quit = MenuItem::with_id(app, ID_QUIT, "Quit", true, Some("CmdOrCtrl+Q"))?;
+    let quit = MenuItem::with_id(app, ID_QUIT, "Quit", true, Some(ACCEL_QUIT))?;
     Submenu::with_items(
         app,
         "File",
@@ -351,7 +380,7 @@ fn build_file_menu(app: &tauri::App) -> tauri::Result<Submenu<Wry>> {
     )
 }
 
-fn handle_event(app: &AppHandle, id: &str) {
+pub(crate) fn handle_event(app: &AppHandle, id: &str) {
     if let Some(view) = view_for_id(id) {
         navigate(app, view);
         return;
@@ -363,7 +392,10 @@ fn handle_event(app: &AppHandle, id: &str) {
         // The frontend owns the flow so progress and the transcript land in
         // the same view whichever way the user started it.
         ID_TRANSCRIBE_FILE => {
-            let _ = app.emit("menu-transcribe-file", ());
+            navigate(app, "home");
+            if let Err(error) = app.emit("menu-transcribe-file", ()) {
+                tracing::warn!(%error, "could not open file transcription");
+            }
         }
         ID_COMMAND_MODE => crate::command_mode::toggle_mode(app),
         ID_COPY_LAST => tray::copy_last_transcript(app),
@@ -507,6 +539,17 @@ mod tests {
         for (index, (_, _, accel, _)) in VIEW_ITEMS.iter().enumerate() {
             assert_eq!(*accel, format!("CmdOrCtrl+{}", index + 1));
         }
+    }
+
+    #[test]
+    fn custom_menu_shortcuts_match_native_accelerators() {
+        assert_eq!(accelerator_for(ID_TRANSCRIBE_FILE), Some("CmdOrCtrl+O"));
+        assert_eq!(accelerator_for(ID_SETTINGS), Some("CmdOrCtrl+Comma"));
+        for (id, _, accelerator, _) in VIEW_ITEMS {
+            assert_eq!(accelerator_for(id), Some(*accelerator));
+        }
+        assert_eq!(accelerator_for(ID_MEETING), None);
+        assert_eq!(accelerator_for("unknown"), None);
     }
 
     #[test]
