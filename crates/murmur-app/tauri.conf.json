@@ -11,6 +11,9 @@
       {
         "label": "main",
         "title": "Murmur",
+        "titleBarStyle": "Overlay",
+        "hiddenTitle": true,
+        "trafficLightPosition": { "x": 16, "y": 18 },
         "width": 960,
         "height": 640,
         "minWidth": 760,

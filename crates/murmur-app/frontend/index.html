@@ -11,9 +11,43 @@
   <link rel="stylesheet" href="dashboard.css">
   <link rel="stylesheet" href="workspace.css">
   <link rel="stylesheet" href="themes.css">
+  <link rel="stylesheet" href="titlebar.css">
 </head>
 <body>
   <div id="app">
+
+    <header class="titlebar" id="window-titlebar" aria-label="Workspace toolbar" data-tauri-drag-region>
+      <div class="titlebar__identity" data-tauri-drag-region>
+        <button class="titlebar__icon" id="window-menu" type="button" aria-expanded="false" aria-label="Application menu" aria-haspopup="menu" title="Application menu">
+          <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 5h12M4 10h8M4 15h12"/></svg>
+        </button>
+        <div class="header__brand">
+          <span class="brandmark" aria-hidden="true">
+            <span class="bm-ring"></span><span class="bm-ring"></span><span class="bm-core"></span>
+          </span>
+          <h1 class="logo">murmur</h1>
+          <span id="dev-mode-badge" class="badge badge--dev" hidden>DEV</span>
+          <span id="dev-build-badge" class="badge badge--dev" hidden>dev build</span>
+        </div>
+      </div>
+      <div class="workspace-switcher">
+        <button id="workspace-toggle" class="workspace-toggle" type="button" aria-haspopup="menu" aria-expanded="false" aria-controls="workspace-menu">
+          <span class="workspace-toggle__prefix">Workspace</span><span class="workspace-toggle__divider" aria-hidden="true">/</span>
+          <span id="workspace-current">Dictate</span>
+          <svg viewBox="0 0 20 20" aria-hidden="true"><path d="m6 8 4 4 4-4"/></svg>
+        </button>
+        <div id="workspace-menu" class="workspace-menu" role="menu" aria-label="Switch page" hidden></div>
+      </div>
+      <div class="titlebar__end" data-tauri-drag-region>
+        <span class="titlebar__local" title="Speech processing stays on this device"><span aria-hidden="true"></span>On device</span>
+        <div class="window-controls" id="window-controls" hidden>
+          <button class="window-control" id="window-minimize" type="button" aria-label="Minimize window" title="Minimize"><svg viewBox="0 0 12 12" aria-hidden="true"><path d="M1 6h10"/></svg></button>
+          <button class="window-control" id="window-maximize" type="button" aria-label="Maximize window" title="Maximize"><svg class="maximize-icon" viewBox="0 0 12 12" aria-hidden="true"><rect x="1.5" y="1.5" width="9" height="9"/></svg><svg class="restore-icon" viewBox="0 0 12 12" aria-hidden="true" hidden><path d="M4 3V1.5h6.5V8H9"/><rect x="1.5" y="4" width="6.5" height="6.5"/></svg></button>
+          <button class="window-control window-control--close" id="window-close" type="button" aria-label="Close window to tray" title="Close to tray"><svg viewBox="0 0 12 12" aria-hidden="true"><path d="m2 2 8 8M2 10l8-8"/></svg></button>
+        </div>
+      </div>
+    </header>
+
 
     <!-- Model Banner: shown when model not ready -->
     <div id="model-banner" class="banner banner--warn" role="status" aria-live="polite" hidden>
@@ -45,14 +79,7 @@
 
       <!-- Sidebar -->
       <aside class="sidebar">
-        <div class="header__brand">
-          <span class="brandmark" aria-hidden="true">
-            <span class="bm-ring"></span><span class="bm-ring"></span><span class="bm-core"></span>
-          </span>
-          <h1 class="logo">murmur</h1>
-          <span id="dev-mode-badge" class="badge badge--dev" hidden>DEV</span>
-          <span id="dev-build-badge" class="badge badge--dev" hidden>dev build</span>
-        </div>
+
 
         <span id="status-badge" class="badge badge--idle" role="status" aria-live="polite">Idle</span>
         <span id="command-mode-badge" class="badge badge--command" role="status" aria-live="polite" hidden>Command mode</span>
@@ -1333,6 +1360,8 @@
   <script src="js/filetranscribe.js" defer></script>
     <script src="js/main.js"></script>
   <script src="js/dashboard.js"></script>
+  <script src="js/application-menu.js"></script>
+  <script src="js/titlebar.js"></script>
   <script src="js/onboarding.js"></script>
 </body>
 </html>

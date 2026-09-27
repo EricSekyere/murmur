@@ -48,6 +48,7 @@
     for (const [key, el] of Object.entries(viewEls)) {
       if (el) el.classList.toggle('view--active', key === name);
     }
+    window.dispatchEvent(new CustomEvent('workspace-view-changed', { detail: name }));
     // Refresh settings/analytics on every visit; history stays live.
     ensureExpanded(viewToggles[name], name !== 'home');
     if (content) content.scrollTop = changingView ? scrollPositions.get(name) || 0 : 0;
