@@ -34,6 +34,10 @@
   const today = Math.floor(Date.now() / 86400000);
   async function invoke(command, args = {}) {
     switch (command) {
+      case 'window_menu_groups': return Object.entries(previewMenus()).map(([label, items]) => ({ id: label, label, native: ['Edit', 'Murmur', 'Window'].includes(label), items: items.map(item => item ? { kind: 'command', id: `app:${item[1]}`, label: item[0], accelerator: item[2], enabled: item[1] !== 'copy-last' || entries.length > 0 } : { kind: 'separator' }) }));
+      case 'invoke_menu_command': window.previewWindowActions.push(args.id); return previewMenuAction(args.id.replace(/^app:/, ''), args.id.replace(/^app:/, ''));
+      case 'initialize_window_chrome': return params.get('platform') || 'windows';
+      case 'show_window_menu': window.previewWindowActions.push('menu'); return showPreviewMenu(args);
       case 'get_status': return { ...status };
       case 'get_history': return { entries: entries.filter(e => `${e.text} ${e.app}`.toLowerCase().includes((args.query || '').toLowerCase())) };
       case 'clear_history': entries.length = 0; return;
@@ -73,7 +77,121 @@
       default: throw new Error('This action needs the desktop app. The design preview uses sample data only.');
     }
   }
-  window.__TAURI__ = { core: { invoke }, window: { getCurrentWindow: () => ({ setSize: async () => {}, startDragging: async () => {} }), LogicalSize: class { constructor(width, height) { this.width = width; this.height = height; } } }, event: { listen: async (name, fn) => {
+  // Mirror the native menu for browser review; production still uses src/menu.rs.
+  function previewMenus() {
+    const mac = params.get('platform') === 'macos';
+    const menus = {
+      File: [['Settings', 'settings', 'Ctrl+,'], null, ['Quit', 'quit', 'Ctrl+Q']],
+      Dictation: [[status.recording ? 'Stop dictation' : 'Start dictation', 'dictate', 'Ctrl+D'], ['Transcribe a File...', 'transcribe-file', 'Ctrl+O'], ['Command Mode', 'command-mode'], ['Copy Last Transcript', 'copy-last', 'Ctrl+Shift+C'], null, ['Start Meeting', 'meeting']],
+      Edit: [['Undo', 'edit:undo', 'Ctrl+Z'], ['Redo', 'edit:redo', mac ? 'Ctrl+Shift+Z' : 'Ctrl+Y'], null, ['Cut', 'edit:cut', 'Ctrl+X'], ['Copy', 'edit:copy', 'Ctrl+C'], ['Paste', 'edit:paste', 'Ctrl+V'], null, ['Select All', 'edit:selectAll', 'Ctrl+A']],
+      View: [['Home', 'view:home', 'Ctrl+1'], ['Analytics', 'view:analytics', 'Ctrl+2'], ['Settings', 'view:settings', 'Ctrl+3'], ['Diagnostics', 'view:diagnostics', 'Ctrl+4'], ['Help', 'view:help', 'Ctrl+5'], null, ['Toggle Floating Pill', 'pill']],
+      Help: [['Help Center', 'help-center', 'F1'], null, ['Report a Problem', 'report'], ['Project Page', 'project'], null, ['Check for Updates...', 'check-updates'], ['About Murmur', 'about']],
+    };
+    if (!mac) return menus;
+    return {
+      Murmur: [['About Murmur', 'about'], ['Check for Updates...', 'check-updates'], null, ['Settings...', 'settings', 'Ctrl+,'], null, ['Services', 'services'], null, ['Hide Murmur', 'hide', 'Ctrl+H'], ['Hide Others', 'hide-others', 'Ctrl+Alt+H'], ['Show All', 'show-all'], null, ['Quit Murmur', 'quit', 'Ctrl+Q']],
+      Dictation: menus.Dictation, Edit: menus.Edit, View: menus.View,
+      Window: [['Minimize', 'minimize', 'Ctrl+M'], ['Maximize', 'maximize']],
+      Help: menus.Help.slice(0, 4),
+    };
+  }
+
+  function previewMenuAction(id, label) {
+    if (id === 'settings' || id.startsWith('view:') || id === 'help-center') {
+      const view = id === 'settings' ? 'settings' : id === 'help-center' ? 'help' : id.slice(5);
+      document.querySelector(`.nav__item[data-view="${view}"]`).click();
+    } else if (id === 'dictate') document.getElementById('mic-btn').click();
+    else if (id === 'pill') document.getElementById('find-pill-btn').click();
+    else if (id === 'about') emit('show-about', {});
+    else showToast(`${label} is available in the desktop app. This preview uses sample data.`, 'success', 4000);
+  }
+
+  function previewMenuButton(label, shortcut) {
+    const button = document.createElement('button');
+    button.type = 'button'; button.role = 'menuitem';
+    const text = document.createElement('span'); text.textContent = label; button.append(text);
+    if (shortcut) {
+      const key = document.createElement('kbd');
+      key.textContent = params.get('platform') === 'macos' ? shortcut.replace('Ctrl', '\u2318') : shortcut;
+      button.append(key);
+    }
+    return button;
+  }
+
+  function previewMenuKeys(event, panel) {
+    const items = [...panel.querySelectorAll('button')];
+    const index = items.indexOf(document.activeElement);
+    const positions = { ArrowDown: (index + 1) % items.length, ArrowUp: (index + items.length - 1) % items.length, Home: 0, End: items.length - 1 };
+    if (!(event.key in positions)) return;
+    event.preventDefault(); items[positions[event.key]].focus();
+  }
+
+  function previewSubmenu(panel, items, close) {
+    panel.replaceChildren();
+    for (const item of items) {
+      if (!item) { const separator = document.createElement('hr'); separator.role = 'separator'; panel.append(separator); continue; }
+      const [label, id, shortcut] = item;
+      const button = previewMenuButton(label, shortcut);
+      button.dataset.command = id;
+      button.addEventListener('click', () => { close(); previewMenuAction(id, label); });
+      panel.append(button);
+    }
+  }
+
+  function showPreviewMenu({ x, y, menuId }) {
+    document.getElementById('preview-app-menu')?.dismiss();
+    return new Promise(resolve => {
+      const trigger = document.getElementById('window-menu');
+      const popup = document.createElement('div'); popup.id = 'preview-app-menu'; popup.role = 'menu';
+      popup.setAttribute('aria-label', 'Application menu'); popup.style.left = `${Math.max(8, x)}px`; popup.style.top = `${y}px`;
+      const submenu = document.createElement('div'); submenu.id = 'preview-app-submenu'; submenu.role = 'menu'; submenu.hidden = true;
+      const abort = new AbortController(); const options = { signal: abort.signal };
+      let selected;
+      const close = (restoreFocus = true) => { popup.remove(); submenu.remove(); abort.abort(); if (restoreFocus) trigger.focus(); resolve(); };
+      popup.dismiss = () => close(false);
+      const select = (button, label, items, focus = false) => {
+        selected = button; popup.querySelectorAll('button').forEach(b => b.setAttribute('aria-expanded', String(b === button)));
+        submenu.setAttribute('aria-label', label); previewSubmenu(submenu, items, close); submenu.hidden = false;
+        const bounds = button.getBoundingClientRect();
+        submenu.style.left = `${Math.min(popup.getBoundingClientRect().right + 4, innerWidth - 288)}px`;
+        submenu.style.top = `${Math.max(8, Math.min(bounds.top, innerHeight - submenu.offsetHeight - 8))}px`;
+        if (focus) submenu.querySelector('button').focus();
+      };
+      for (const [label, items] of Object.entries(previewMenus())) {
+        const button = previewMenuButton(label, '\u203a'); button.setAttribute('aria-haspopup', 'menu'); button.setAttribute('aria-expanded', 'false');
+        button.addEventListener('click', () => select(button, label, items, true));
+        button.addEventListener('pointerenter', () => select(button, label, items));
+        popup.append(button);
+      }
+      document.getElementById('app').append(popup, submenu); popup.querySelector('button').focus();
+      if (menuId) { const group = [...popup.querySelectorAll('button')].find(button => button.querySelector('span').textContent === menuId); group?.click(); popup.style.visibility = 'hidden'; submenu.style.left = `${Math.min(x, innerWidth - 288)}px`; submenu.style.top = `${y}px`; }
+      popup.addEventListener('keydown', event => {
+        previewMenuKeys(event, popup);
+        if (event.key === 'ArrowRight') { event.preventDefault(); document.activeElement.click(); }
+        if (event.key === 'Escape' || event.key === 'Tab') { close(); if (event.key === 'Escape') event.preventDefault(); }
+      });
+      submenu.addEventListener('keydown', event => {
+        previewMenuKeys(event, submenu);
+        if (event.key === 'Escape' || event.key === 'ArrowLeft') { event.preventDefault(); if (menuId) { close(); return; } submenu.hidden = true; selected.setAttribute('aria-expanded', 'false'); selected.focus(); }
+        if (event.key === 'Tab') close();
+      });
+      document.addEventListener('pointerdown', event => { if (!popup.contains(event.target) && !submenu.contains(event.target)) close(false); }, options);
+      window.addEventListener('blur', () => close(false), options);
+    });
+  }
+
+  window.previewWindowActions = [];
+  let maximized = false;
+  const mockWindow = {
+    setSize: async () => {}, startDragging: async () => {},
+    minimize: async () => { window.previewWindowActions.push('minimize'); },
+    toggleMaximize: async () => { maximized = !maximized; window.previewWindowActions.push('maximize'); },
+    isMaximized: async () => maximized,
+    close: async () => { window.previewWindowActions.push('close'); },
+    setTheme: async theme => { window.previewWindowActions.push(`theme:${theme}`); },
+    onResized: async () => () => {}, onFocusChanged: async () => () => {},
+  };
+  window.__TAURI__ = { core: { invoke }, window: { getCurrentWindow: () => mockWindow, LogicalSize: class { constructor(width, height) { this.width = width; this.height = height; } } }, event: { listen: async (name, fn) => {
     const set = listeners.get(name) || []; set.push(fn); listeners.set(name, set);
     return () => listeners.set(name, set.filter(f => f !== fn));
   } } };
@@ -92,8 +210,10 @@
       observer.observe(parent.document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
       window.addEventListener('beforeunload', () => observer.disconnect(), { once: true });
     }
+
+    style.textContent += '#preview-app-menu,#preview-app-submenu{position:fixed;z-index:50;width:184px;padding:6px;border:1px solid var(--color-border-hover);border-radius:8px;background:var(--color-surface-solid);box-shadow:0 12px 32px #0003;color:var(--color-text)}#preview-app-submenu{width:280px;max-height:calc(100vh - 16px);overflow-y:auto}#preview-app-menu button,#preview-app-submenu button{display:flex;align-items:center;gap:16px;width:100%;border:0;border-radius:4px;background:transparent;color:var(--color-text);padding:10px 8px;text-align:left;font:12px var(--font-sans);cursor:pointer}#preview-app-menu button:hover,#preview-app-menu button:focus,#preview-app-submenu button:hover,#preview-app-submenu button:focus,#preview-app-menu button[aria-expanded=true]{background:var(--color-nav-active);outline:none}#preview-app-menu button:focus-visible,#preview-app-submenu button:focus-visible{outline:2px solid var(--color-accent);outline-offset:-2px}#preview-app-menu kbd,#preview-app-submenu kbd{margin-left:auto;white-space:nowrap;color:var(--color-text-muted);font:10px var(--font-sans)}#preview-app-submenu hr{border:0;border-top:1px solid var(--color-border);margin:4px}';
     document.head.append(style);
-    document.getElementById('app')?.prepend(banner);
+    document.getElementById('window-titlebar')?.after(banner);
     if (document.getElementById('app')) {
       const pill = document.createElement('iframe');
       pill.id = 'preview-pill'; pill.className = 'preview-pill'; pill.title = 'Floating pill preview'; pill.src = '/widget.html';
