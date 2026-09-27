@@ -57,7 +57,8 @@ pub fn format_identifier(words: &str, style: CaseStyle) -> String {
 /// format. Recognizes "snake", "camel", "pascal", "kebab", "constant",
 /// "screaming" (alias for Constant, with an optional trailing "snake"), and
 /// "dot". An optional "case" after the style word is swallowed, so
-/// "camel case get user" works. Returns `None` when the phrase does not start
+/// "camel case get user" works. Joined spellings emitted by speech models
+/// ("CamelCase", "snakecase") are also accepted. Returns `None` when the phrase does not start
 /// with a style word or nothing follows it.
 pub fn parse_case_command(phrase: &str) -> Option<(CaseStyle, String)> {
     let mut words = phrase.split_whitespace().peekable();
@@ -78,12 +79,12 @@ pub fn parse_case_command(phrase: &str) -> Option<(CaseStyle, String)> {
 
 fn style_word(word: &str) -> Option<CaseStyle> {
     match word.to_ascii_lowercase().as_str() {
-        "snake" => Some(CaseStyle::Snake),
-        "camel" => Some(CaseStyle::Camel),
-        "pascal" => Some(CaseStyle::Pascal),
-        "kebab" => Some(CaseStyle::Kebab),
-        "constant" | "screaming" => Some(CaseStyle::Constant),
-        "dot" => Some(CaseStyle::Dot),
+        "snake" | "snakecase" => Some(CaseStyle::Snake),
+        "camel" | "camelcase" => Some(CaseStyle::Camel),
+        "pascal" | "pascalcase" => Some(CaseStyle::Pascal),
+        "kebab" | "kebabcase" => Some(CaseStyle::Kebab),
+        "constant" | "constantcase" | "screaming" => Some(CaseStyle::Constant),
+        "dot" | "dotcase" => Some(CaseStyle::Dot),
         _ => None,
     }
 }
@@ -121,6 +122,23 @@ fn split_camel(fragment: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn model_joined_case_commands_format_identifiers() {
+        for (spoken, expected) in [
+            ("CamelCase get user profile.", "getUserProfile"),
+            ("Snakecase user account settings.", "user_account_settings"),
+            ("PascalCase user profile card.", "UserProfileCard"),
+            ("CONSTANTCASE max retry count.", "MAX_RETRY_COUNT"),
+            ("kebabcase user profile.", "user-profile"),
+            ("dotcase user profile.", "user.profile"),
+        ] {
+            let (style, words) = parse_case_command(spoken).expect("recognized case command");
+            assert_eq!(format_identifier(&words, style), expected);
+        }
+        assert!(parse_case_command("CamelCase").is_none());
+        assert!(parse_case_command("showcase user profile").is_none());
+    }
 
     #[test]
     fn all_styles_on_three_words() {

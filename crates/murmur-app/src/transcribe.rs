@@ -10,6 +10,13 @@ use tauri::Manager;
 
 use crate::state::{AppState, emit_transcription_diagnostic, emit_transcription_error};
 
+mod preparation;
+use preparation::PreparedAudio;
+pub(crate) use preparation::prepare_audio;
+
+#[cfg(all(test, feature = "full"))]
+mod stress;
+
 /// Whisper hallucination phrases produced on silence/noise.
 const HALLUCINATIONS: &[&str] = &[
     "thank you",
@@ -91,10 +98,6 @@ fn assemble_vocabulary(
 
 /// Per-profile rejection thresholds.
 struct ProfileLimits {
-    min_audio_secs: f32,
-    trim_threshold: f32,
-    min_peak: f32,
-    min_rms: f32,
     no_speech_max: f32,
     min_conf: f32,
     short_min_conf: f32,
@@ -105,20 +108,12 @@ impl ProfileLimits {
     fn for_profile(profile: TranscriptionProfile) -> Self {
         match profile {
             TranscriptionProfile::Relaxed => Self {
-                min_audio_secs: 0.12,
-                trim_threshold: 0.003,
-                min_peak: 0.008,
-                min_rms: 0.0008,
                 no_speech_max: 0.7,
                 min_conf: 0.40,
                 short_min_conf: 0.55,
                 short_max_no_speech: 0.40,
             },
             TranscriptionProfile::Strict => Self {
-                min_audio_secs: 0.15,
-                trim_threshold: 0.005,
-                min_peak: 0.012,
-                min_rms: 0.0012,
                 no_speech_max: 0.55,
                 min_conf: 0.50,
                 short_min_conf: 0.62,
@@ -126,13 +121,6 @@ impl ProfileLimits {
             },
         }
     }
-}
-
-struct PreparedAudio {
-    samples: Vec<f32>,
-    peak: f32,
-    rms: f32,
-    duration_secs: f32,
 }
 
 /// Whether a transcription belongs to the live dictation session (reads and
@@ -211,7 +199,6 @@ fn transcribe_with(
             ProjectIndex(project.as_slice()),
         )
     };
-    let limits = ProfileLimits::for_profile(profile);
     // English-tuned gates over-reject accented non-English speech, so relax them
     // for non-English dictation — but only when the active model can actually
     // decode that language. English-only models are forced to "en" regardless of
@@ -226,7 +213,7 @@ fn transcribe_with(
         .is_some_and(|model| model.is_multilingual());
     let non_english = is_non_english_language(&language) && multilingual_model;
 
-    let prepared = preprocess(app, audio, &limits)?;
+    let prepared = preprocess(app, audio, profile)?;
     let result = run_engine(
         app,
         &state,
@@ -237,20 +224,17 @@ fn transcribe_with(
         context,
     )?;
 
-    if let Some(reason) =
-        quality_reject_reason(&result, &limits, prepared.duration_secs, non_english)
-    {
-        return reject(app, &state, reason, &prepared, Some(&result.text), context);
-    }
-
-    let text = postprocess_text(&result, developer_mode, clean_speech);
-    if text.is_empty() {
-        emit_diag(app, "rejected", "empty_after_postprocess", &prepared);
-        return None;
-    }
-    if let Some(reason) = hallucination_reason(&text, profile, non_english) {
-        return reject(app, &state, reason, &prepared, Some(&text), context);
-    }
+    let text = match finish_text(
+        &result,
+        profile,
+        prepared.duration_secs,
+        non_english,
+        developer_mode,
+        clean_speech,
+    ) {
+        Ok(text) => text,
+        Err(reason) => return reject(app, &state, reason, &prepared, Some(&result.text), context),
+    };
 
     tracing::info!("Transcription accepted ({} chars)", text.chars().count());
     // Transcript only at trace, so debug-level diagnostics never log it.
@@ -262,83 +246,37 @@ fn transcribe_with(
     Some((text, result.processing_time_ms))
 }
 
-/// Validate length, trim silence, normalize, and gate on signal level.
+/// Bound dictation latency, then check the signal before amplification.
 fn preprocess(
     app: &tauri::AppHandle,
     audio: &murmur_core::audio::AudioBuffer,
-    limits: &ProfileLimits,
+    profile: TranscriptionProfile,
 ) -> Option<PreparedAudio> {
-    if audio.samples.is_empty() {
-        emit_transcription_diagnostic(app, "rejected", "empty_audio", None, None, None);
-        return None;
-    }
-
-    // Keep the FRONT when truncating: cutting the start loses the beginning
-    // of the user's sentence on long continuous speech.
     let samples = if audio.samples.len() > MAX_AUDIO_SAMPLES {
         tracing::warn!(
-            "Truncating audio from {:.1}s to 25s",
-            audio.samples.len() as f32 / SAMPLE_RATE
+            audio_secs = audio.samples.len() as f32 / SAMPLE_RATE,
+            "Truncating dictation audio to 25s"
         );
         &audio.samples[..MAX_AUDIO_SAMPLES]
     } else {
         &audio.samples
     };
-
-    let raw_duration = samples.len() as f32 / SAMPLE_RATE;
-    if raw_duration < limits.min_audio_secs {
-        emit_transcription_diagnostic(
-            app,
-            "rejected",
-            "too_short_raw",
-            None,
-            None,
-            Some(raw_duration),
-        );
-        return None;
+    match prepare_audio(samples, profile) {
+        Ok(prepared) => {
+            tracing::info!(
+                raw_secs = samples.len() as f32 / SAMPLE_RATE,
+                prepared_secs = prepared.duration_secs,
+                peak = prepared.peak,
+                rms = prepared.rms,
+                "Prepared audio (signal levels before normalization)"
+            );
+            Some(prepared)
+        }
+        Err(reason) => {
+            emit_transcription_diagnostic(app, "rejected", reason, None, None, None);
+            None
+        }
     }
-
-    let trimmed = trim_silence(samples, limits.trim_threshold);
-    let trimmed_duration = trimmed.len() as f32 / SAMPLE_RATE;
-    if trimmed_duration < limits.min_audio_secs {
-        emit_transcription_diagnostic(
-            app,
-            "rejected",
-            "too_short_trimmed",
-            None,
-            None,
-            Some(trimmed_duration),
-        );
-        return None;
-    }
-
-    let samples = normalize_peak(trimmed);
-    let duration_secs = samples.len() as f32 / SAMPLE_RATE;
-    let peak = samples.iter().map(|s| s.abs()).fold(0.0_f32, f32::max);
-    let rms = {
-        let sum_sq: f32 = samples.iter().map(|s| s * s).sum();
-        (sum_sq / samples.len() as f32).sqrt()
-    };
-    tracing::info!(
-        "Audio: {:.2}s raw -> {:.2}s prepared, peak={:.4}, rms={:.4}",
-        raw_duration,
-        duration_secs,
-        peak,
-        rms
-    );
-
-    let prepared = PreparedAudio {
-        samples,
-        peak,
-        rms,
-        duration_secs,
-    };
-    // Near-silent audio makes whisper grind on noise and hallucinate.
-    if peak < limits.min_peak || rms < limits.min_rms {
-        emit_diag(app, "rejected", "too_quiet", &prepared);
-        return None;
-    }
-    Some(prepared)
 }
 
 /// Run inference with the running session transcript as decoder prompt
@@ -516,6 +454,47 @@ fn quality_reject_reason(
         return Some("no_speech_short");
     }
     None
+}
+
+pub(crate) fn preview_text(
+    result: &TranscriptionResult,
+    profile: TranscriptionProfile,
+    duration_secs: f32,
+    non_english: bool,
+) -> Option<&str> {
+    let limits = ProfileLimits::for_profile(profile);
+    if quality_reject_reason(result, &limits, duration_secs, non_english).is_some() {
+        return None;
+    }
+    let text = result.text.trim();
+    (!text.is_empty() && !is_hallucination_text(text, profile, non_english)).then_some(text)
+}
+
+fn finish_text(
+    result: &TranscriptionResult,
+    profile: TranscriptionProfile,
+    duration_secs: f32,
+    non_english: bool,
+    developer_mode: bool,
+    clean_speech: bool,
+) -> Result<String, &'static str> {
+    let limits = ProfileLimits::for_profile(profile);
+    if let Some(reason) = quality_reject_reason(result, &limits, duration_secs, non_english) {
+        return Err(reason);
+    }
+    // Inspect recognized words before formatting: valid spoken symbols can
+    // become punctuation-only or bracketed code, which is not a hallucination.
+    if let Some(reason) = hallucination_reason(&result.text, profile, non_english) {
+        return Err(reason);
+    }
+    let text = postprocess_text(result, developer_mode, clean_speech);
+    if text.is_empty() {
+        return Err("empty_after_postprocess");
+    }
+    if !developer_mode && let Some(reason) = hallucination_reason(&text, profile, non_english) {
+        return Err(reason);
+    }
+    Ok(text)
 }
 
 fn postprocess_text(
@@ -722,55 +701,6 @@ fn update_session_context(state: &AppState, text: &str) {
     }
 }
 
-/// Scale very quiet audio so the engine sees usable levels; gain capped at
-/// 5x to avoid amplifying the noise floor.
-fn normalize_peak(samples: &[f32]) -> Vec<f32> {
-    let peak = samples.iter().map(|s| s.abs()).fold(0.0_f32, f32::max);
-    if peak >= 0.1 || peak <= 0.0 {
-        return samples.to_vec();
-    }
-    let scale = (0.5 / peak).min(5.0);
-    samples
-        .iter()
-        .map(|s| (s * scale).clamp(-1.0, 1.0))
-        .collect()
-}
-
-/// Trim leading/trailing silence (dead air causes hallucinations), keeping
-/// ~64ms of context before the first speech frame.
-fn trim_silence(samples: &[f32], trim_threshold: f32) -> &[f32] {
-    const FRAME_SIZE: usize = 512; // ~32ms at 16kHz
-    const PREROLL_FRAMES: usize = 2;
-
-    if samples.len() < FRAME_SIZE {
-        return samples;
-    }
-
-    let frames: Vec<f32> = samples
-        .chunks(FRAME_SIZE)
-        .map(|chunk| {
-            let sum_sq: f32 = chunk.iter().map(|&s| s * s).sum();
-            (sum_sq / chunk.len() as f32).sqrt()
-        })
-        .collect();
-
-    let first_speech = frames
-        .iter()
-        .position(|&rms| rms >= trim_threshold)
-        .unwrap_or(0);
-    let last_speech = frames
-        .iter()
-        .rposition(|&rms| rms >= trim_threshold)
-        .unwrap_or(frames.len().saturating_sub(1));
-
-    let start = first_speech.saturating_sub(PREROLL_FRAMES) * FRAME_SIZE;
-    let end = ((last_speech + 1) * FRAME_SIZE).min(samples.len());
-    if start >= end {
-        return &samples[..0];
-    }
-    &samples[start..end]
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -944,20 +874,84 @@ mod tests {
     }
 
     #[test]
-    fn trim_silence_keeps_speech_region() {
-        let mut samples = vec![0.0_f32; 16_000];
-        for s in &mut samples[6_000..10_000] {
-            *s = 0.2;
+    fn spoken_symbols_survive_hallucination_checks() {
+        for words in ["open paren x close paren", "open brace", "semicolon"] {
+            let result = TranscriptionResult {
+                text: words.into(),
+                processing_time_ms: 0,
+                segments: Vec::new(),
+            };
+            let text = finish_text(
+                &result,
+                TranscriptionProfile::Relaxed,
+                2.0,
+                false,
+                true,
+                false,
+            )
+            .expect("explicit spoken symbols are code");
+            assert_eq!(text, PostProcessor::process(words));
+            assert_ne!(text, words);
         }
-        let trimmed = trim_silence(&samples, 0.01);
-        assert!(trimmed.len() < samples.len());
-        assert!(trimmed.iter().any(|&s| s > 0.1));
     }
 
     #[test]
-    fn normalize_peak_boosts_quiet_audio() {
-        let samples = vec![0.02_f32; 1_000];
-        let normalized = normalize_peak(&samples);
-        assert!(normalized[0] > samples[0]);
+    fn raw_noise_annotations_remain_rejected() {
+        let result = TranscriptionResult {
+            text: "[music]".into(),
+            processing_time_ms: 0,
+            segments: Vec::new(),
+        };
+        assert!(
+            finish_text(
+                &result,
+                TranscriptionProfile::Relaxed,
+                2.0,
+                false,
+                true,
+                false
+            )
+            .is_err()
+        );
+    }
+    #[test]
+    fn preview_rejects_low_confidence_words_that_final_delivery_rejects() {
+        let mut result = TranscriptionResult {
+            text: "invented words".into(),
+            processing_time_ms: 0,
+            segments: vec![Segment {
+                text: "invented words".into(),
+                start_cs: 0,
+                end_cs: 100,
+                no_speech_prob: Some(0.8),
+                avg_token_prob: Some(0.2),
+            }],
+        };
+        assert!(preview_text(&result, TranscriptionProfile::Relaxed, 1.0, false).is_none());
+        result.segments[0].no_speech_prob = Some(0.01);
+        result.segments[0].avg_token_prob = Some(0.95);
+        assert_eq!(
+            preview_text(&result, TranscriptionProfile::Relaxed, 1.0, false),
+            Some("invented words")
+        );
+    }
+    #[test]
+    fn prose_cleanup_does_not_bypass_phrase_rejection() {
+        let result = TranscriptionResult {
+            text: "um thank you".into(),
+            processing_time_ms: 0,
+            segments: Vec::new(),
+        };
+        assert_eq!(
+            finish_text(
+                &result,
+                TranscriptionProfile::Relaxed,
+                2.0,
+                false,
+                false,
+                true
+            ),
+            Err("hallucination_exact")
+        );
     }
 }

@@ -1,8 +1,8 @@
 //! Windowing for backends that do not segment long audio themselves, and for
 //! any caller that wants to split long audio at natural pauses.
 //!
-//! whisper.cpp windows internally, so only the Parakeet path needs this.
-//! Its ONNX encoder carries a fixed positional encoding and simply fails
+//! File transcription also uses these windows independently of the backend.
+//! Parakeet's ONNX encoder carries a fixed positional encoding and fails
 //! past the end of it, and long input degrades badly well before that point.
 
 use std::ops::Range;
@@ -25,6 +25,7 @@ const RATE: usize = 16_000;
 /// when split. Anything under this threshold is therefore left exactly as it
 /// was. Long recordings belong on the Whisper backend, which windows
 /// internally and scored 99.8% coverage on the same 490 s audio.
+#[cfg(any(feature = "parakeet", test))]
 pub(crate) const PARAKEET_MAX_CHUNK_SAMPLES: usize = 240 * RATE;
 
 /// Longest audio Parakeet transcribes reliably, measured.
@@ -33,6 +34,7 @@ pub(crate) const PARAKEET_MAX_CHUNK_SAMPLES: usize = 240 * RATE;
 /// 33 s, then collapsed to 7.5% at 63 s. The cliff sits between those, so
 /// this marks the point past which a transcript should not be trusted
 /// silently. Meeting mode's 30 s chunk cap stays below it.
+#[cfg(feature = "parakeet")]
 pub(crate) const PARAKEET_RELIABLE_SAMPLES: usize = 35 * RATE;
 
 /// Energy at or below this fraction of the search region's loudest probe
