@@ -1,4 +1,4 @@
-#[cfg(feature = "parakeet")]
+// File transcription uses this pure-Rust helper with every backend.
 pub mod chunk;
 pub mod engine;
 pub mod models;

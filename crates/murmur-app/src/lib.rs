@@ -38,6 +38,7 @@ mod tray;
 mod updater;
 mod wake_supervisor;
 mod watcher;
+mod window_chrome;
 
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -225,6 +226,10 @@ pub fn run() -> anyhow::Result<()> {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            window_chrome::initialize_window_chrome,
+            window_chrome::show_window_menu,
+            window_chrome::window_menu_groups,
+            window_chrome::invoke_menu_command,
             about::about_info,
             about::open_about_link,
             about::diagnostics_report,
@@ -435,6 +440,9 @@ fn setup_app(
 
     tray::build(app)?;
     menu::build(app)?;
+    if let Err(error) = app.emit("application-menu-ready", ()) {
+        tracing::warn!(%error, "could not notify the window that menus are ready");
+    }
     register_hotkey(app, hotkey);
     command_mode::register_hotkey(app);
     configure_widget(app, show_widget_on_start);

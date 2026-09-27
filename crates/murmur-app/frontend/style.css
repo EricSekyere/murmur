@@ -1,23 +1,21 @@
 /* ─── Custom Properties ─────────────────────────────────────────────────── */
 :root {
-  /* Design language v2 ("the ripple"): refined cool blue-black void + violet
-     signal, bone text. The accent was already this violet, so the palette swap
-     is mostly the void/bone refinements; the big shift is Space Grotesk type. */
-  --color-bg: #0a0b0f;
-  --color-surface: rgba(22, 25, 41, 0.55);
-  --color-surface-solid: #161929;
-  --color-surface-raised: rgba(39, 44, 66, 0.65);
-  --color-border: rgba(255, 255, 255, 0.07);
-  --color-border-hover: rgba(255, 255, 255, 0.13);
+  /* Shared desktop surfaces; Dictate retains its original signal colors. */
+  --color-bg: #111318;
+  --color-surface: #191c23;
+  --color-surface-solid: #191c23;
+  --color-surface-raised: #22262f;
+  --color-border: #303540;
+  --color-border-hover: #535d70;
 
-  --color-text: #e8eaf2;
-  --color-text-secondary: #8a90a6;
-  --color-text-muted: #565c72;
+  --color-text: #edf0f5;
+  --color-text-secondary: #b2bac8;
+  --color-text-muted: #929dae;
 
-  --color-accent: #8b5cf6;
-  --color-accent-light: #a78bfa;
-  --color-accent-dim: rgba(139, 92, 246, 0.12);
-  --color-accent-glow: rgba(139, 92, 246, 0.25);
+  --color-accent: #9b8ade;
+  --color-accent-light: #c6baf4;
+  --color-accent-dim: rgba(155, 138, 222, 0.12);
+  --color-accent-glow: rgba(155, 138, 222, 0.18);
 
   --color-record: #fb6e72;
   --color-record-dim: rgba(251, 110, 114, 0.12);
@@ -36,13 +34,13 @@
   --color-error-border: rgba(180, 40, 40, 0.3);
   --color-error-text: #f08080;
 
-  --font-sans: "Space Grotesk", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-sans: "Segoe UI", system-ui, -apple-system, Roboto, sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
 
   --mic-size: 96px;
   --radius-sm: 8px;
-  --radius-md: 12px;
-  --radius-lg: 16px;
+  --radius-md: 10px;
+  --radius-lg: 12px;
   --radius-full: 9999px;
 
   --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
@@ -55,13 +53,6 @@
 }
 
 /* ─── Keyframes ─────────────────────────────────────────────────────────── */
-@keyframes mesh-drift {
-  0%, 100% { transform: translate(0, 0) scale(1); }
-  25%      { transform: translate(4%, -3%) scale(1.04); }
-  50%      { transform: translate(-3%, 4%) scale(0.97); }
-  75%      { transform: translate(2%, 2%) scale(1.02); }
-}
-
 @keyframes mic-idle-pulse {
   0%, 100% { transform: scale(1); }
   50%      { transform: scale(1.03); }
@@ -122,9 +113,7 @@
 /* ─── Base ──────────────────────────────────────────────────────────────── */
 body {
   font-family: var(--font-sans);
-  background:
-    radial-gradient(120% 80% at 50% 0%, rgba(139, 92, 246, 0.04), transparent 60%),
-    var(--color-bg);
+  background: var(--color-bg);
   color: var(--color-text);
   min-height: 100vh;
   font-size: 14px;
@@ -140,38 +129,13 @@ body {
   color: var(--color-text);
 }
 
-/* ─── Ambient Background ────────────────────────────────────────────────── */
-.ambient {
-  position: fixed;
-  inset: -60%;
-  width: 220%;
-  height: 220%;
-  z-index: 0;
-  pointer-events: none;
-  background:
-    radial-gradient(ellipse 50% 50% at 25% 35%, rgba(139, 92, 246, 0.10) 0%, transparent 65%),
-    radial-gradient(ellipse 45% 55% at 75% 25%, rgba(59, 130, 246, 0.06) 0%, transparent 55%),
-    radial-gradient(ellipse 55% 45% at 45% 75%, rgba(168, 85, 247, 0.05) 0%, transparent 55%);
-  animation: mesh-drift 24s ease-in-out infinite;
-}
-
-/* ─── Grain Overlay ─────────────────────────────────────────────────────── */
-#app::after {
-  content: "";
-  position: fixed;
-  inset: 0;
-  z-index: 9999;
-  pointer-events: none;
-  opacity: 0.025;
-  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
-}
-
 /* ─── App Layout ────────────────────────────────────────────────────────── */
 #app {
   position: relative;
   display: flex;
   flex-direction: column;
-  min-height: 100vh;
+  height: 100dvh;
+  min-height: 0;
   z-index: 1;
 }
 

@@ -1,9 +1,7 @@
 //! Live preview: a background worker that transcribes in-progress phrase
-//! snapshots for interim on-screen display. It never delivers text and skips
-//! the audio quality gates the final-phrase path applies, but still drops
-//! obvious hallucination fillers so the caption doesn't flash text the final
-//! path would reject. Its job is to show words as they are spoken, then get
-//! out of the way of the real transcription.
+//! snapshots for interim on-screen display. It never delivers text and applies
+//! the same signal and decoder quality checks as final transcription. It shows
+//! words as they are spoken, then yields to the final transcription.
 
 use std::sync::mpsc::{Receiver, Sender};
 use std::thread::JoinHandle;
@@ -70,6 +68,7 @@ fn transcribe_preview(state: &AppState, audio: &AudioBuffer) -> Option<String> {
             settings.transcription_profile,
         )
     };
+    let prepared = crate::transcribe::prepare_audio(&audio.samples, profile).ok()?;
     let mut guard = state.engine.try_lock().ok()?;
     let engine = guard.as_mut()?;
     // Match the final-phrase path: relax the English gates only when the model
@@ -83,10 +82,8 @@ fn transcribe_preview(state: &AppState, audio: &AudioBuffer) -> Option<String> {
     // Mirror the language/translate settings so the preview matches the final.
     engine.set_language(Some(language));
     engine.set_translate(translate);
-    let result = engine.transcribe(&audio.samples).ok()?;
-    let text = result.text.trim();
-    if text.is_empty() || crate::transcribe::is_hallucination_text(text, profile, non_english) {
-        return None;
-    }
+    let result = engine.transcribe(&prepared.samples).ok()?;
+    let text =
+        crate::transcribe::preview_text(&result, profile, prepared.duration_secs, non_english)?;
     Some(text.to_string())
 }
