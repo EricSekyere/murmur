@@ -164,7 +164,8 @@ function showToast(message, type = 'success', durationMs = 3000) {
 
   setTimeout(() => {
     toast.classList.add('toast--dismissing');
-    toast.addEventListener('animationend', () => toast.remove());
+    // Reduced-motion styles disable animations, so animationend may never fire.
+    setTimeout(() => toast.remove(), 250);
   }, durationMs - 250);
 }
 
