@@ -231,11 +231,12 @@
 .model-card__btn:hover:not(:disabled) { background: var(--color-accent-light); transform: none; }
 .model-card__btn--active { background: transparent; color: var(--color-accent-light); }
 button:disabled { cursor: not-allowed; }
-:where(button, a, input, select, textarea, summary):focus-visible {
+#app :is(button, a, input:not([type="checkbox"]), select, textarea, summary):focus-visible {
   outline: 2px solid var(--color-accent-light);
-  outline-offset: 3px;
+  outline-offset: -2px;
+  box-shadow: none;
 }
-.toggle-switch input:focus-visible + .toggle-switch__slider { outline: 2px solid var(--color-accent-light); outline-offset: 3px; }
+#app .toggle-switch input:focus-visible + .toggle-switch__slider { outline: 2px solid var(--color-accent-light); outline-offset: -2px; box-shadow: none; }
 
 .analytics-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
 #analytics-panel,
@@ -296,7 +297,7 @@ button:disabled { cursor: not-allowed; }
   .content { padding: 24px; }
   .settings-category { padding: 16px; }
   #view-settings .settings-row { flex-wrap: wrap; gap: 16px; }
-  #view-settings .settings-row__text { flex-basis: 220px; }
+  #view-settings .settings-row > .settings-row__text { flex-basis: 220px; }
   #view-settings .settings-row > :not(.settings-row__text) { max-width: 100%; }
   #view-settings .model-list { grid-template-columns: 1fr; }
   .analytics-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -316,3 +317,11 @@ button:disabled { cursor: not-allowed; }
 @media (prefers-reduced-motion: reduce) {
   .view, .settings-panel, .onboarding, .onboarding__panel--active { animation: none; }
 }
+
+#app :is(.settings-input, .settings-textarea, .settings-select):focus {
+  outline: 2px solid var(--color-accent-light);
+  outline-offset: -2px;
+  border-color: var(--color-accent-light);
+  box-shadow: none;
+}
+#app .settings-slider-wrap input[type="range"]:focus::-webkit-slider-thumb { box-shadow: none; }
