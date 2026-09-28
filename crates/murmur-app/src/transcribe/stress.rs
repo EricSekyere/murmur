@@ -9,6 +9,8 @@ use murmur_core::stt::{engine::SttEngine, models::SttModel};
 use serde::{Deserialize, Serialize};
 use std::{path::Path, time::Duration};
 
+mod quiet;
+
 #[derive(Deserialize)]
 struct Case {
     id: String,
@@ -60,7 +62,15 @@ fn stress_local_transcription() -> Result<()> {
     for case in cases {
         let decoded = decode::decode(&parent.join(&case.file))?;
         let audio = AudioBuffer::from_raw(&decoded.samples, decoded.rate, decoded.channels);
-        for condition in ["clean", "quiet", "noise", "padded"] {
+        for condition in [
+            "clean",
+            "quiet",
+            "amplitude_5_percent",
+            "amplitude_2_percent",
+            "amplitude_1_percent",
+            "noise",
+            "padded",
+        ] {
             let samples = perturb(&audio.samples, condition);
             observations.push(evaluate(
                 &mut engine,
@@ -193,6 +203,9 @@ fn perturb(samples: &[f32], condition: &str) -> Vec<f32> {
         .iter()
         .map(|&s| match condition {
             "quiet" => s * 0.2,
+            "amplitude_5_percent" => s * 0.05,
+            "amplitude_2_percent" => s * 0.02,
+            "amplitude_1_percent" => s * 0.01,
             "noise" => (s + noise(&mut random) * 0.025).clamp(-1.0, 1.0),
             _ => s,
         })
