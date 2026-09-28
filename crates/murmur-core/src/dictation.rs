@@ -46,6 +46,12 @@ impl Default for DictationConfig {
 /// 30ms @ 16 kHz; matches transcribe-rs's `frame_size = 480`.
 const SPLIT_FRAME_MS: u64 = 30;
 
+/// Trailing audio kept past the last frame the gate scored as speech. The
+/// gate decides on level, so a word's fading end falls under it mid-word and
+/// truncating to the last positive frame cuts real speech. Enough for a
+/// released stop, still short enough to drop the bulk of the pause.
+const TRAILING_SPEECH_MARGIN_MS: u64 = 200;
+
 /// Trailing window of an in-progress phrase used for live preview snapshots.
 ///
 /// Sized so one preview decode finishes inside the interval between snapshots
@@ -85,6 +91,7 @@ pub struct DictationSession {
     /// Width of the energy-minimum search window (in samples) used when the
     /// buffer exceeds `max_phrase` and we have to force a split.
     split_search_samples: usize,
+    trailing_margin_samples: usize,
     /// Frame size in samples for energy scoring during split-point search.
     split_frame_samples: usize,
     preroll: VecDeque<f32>,
@@ -127,6 +134,8 @@ impl DictationSession {
             min_phrase_samples: sample_count(config.min_phrase),
             max_phrase_samples: sample_count(config.max_phrase),
             split_search_samples: sample_count(config.split_search),
+            trailing_margin_samples: ((TRAILING_SPEECH_MARGIN_MS * native_rate as u64) / 1000)
+                as usize,
             split_frame_samples,
             preroll: VecDeque::new(),
             phrase_samples: Vec::new(),
@@ -349,7 +358,9 @@ impl DictationSession {
     fn flush_phrase(&mut self, trim_trailing_silence: bool) -> Option<AudioBuffer> {
         let mut samples = std::mem::take(&mut self.phrase_samples);
         let trailing = if trim_trailing_silence {
-            self.silence_run_samples.min(samples.len())
+            self.silence_run_samples
+                .saturating_sub(self.trailing_margin_samples)
+                .min(samples.len())
         } else {
             0
         };
@@ -486,6 +497,51 @@ mod tests {
 
     fn silence(len: usize) -> Vec<f32> {
         vec![0.001; len]
+    }
+
+    /// Runs before the app's quiet-edge padding, so what this drops is gone.
+    #[test]
+    fn a_fading_final_word_is_truncated_before_preparation_can_protect_it() {
+        let rate: u32 = 16_000;
+        let n = rate as usize;
+        let mut session = DictationSession::new(
+            DictationConfig {
+                speech_threshold: 0.01,
+                silence_hold: Duration::from_millis(600),
+                min_phrase: Duration::from_millis(50),
+                max_phrase: Duration::from_secs(600),
+                split_search: Duration::from_millis(500),
+                preroll: Duration::from_millis(50),
+                session_timeout: Duration::from_secs(600),
+            },
+            rate,
+        );
+
+        let _ = session.ingest(&speech(n));
+        // Trails off under the gate but is still speech.
+        let _ = session.ingest(&vec![0.004_f32; n / 4]);
+        let events = session.ingest(&silence(n));
+
+        let buffer = events
+            .iter()
+            .find_map(|e| match e {
+                DictationEvent::PhraseReady(b) => Some(b),
+                _ => None,
+            })
+            .expect("phrase should be emitted");
+
+        let kept = buffer.samples.len() as f32 / 16_000.0;
+        let tail_survived = buffer
+            .samples
+            .iter()
+            .rev()
+            .take(1_000)
+            .any(|s| (*s - 0.004).abs() < 0.001);
+        println!("kept {kept:.3}s of 1.25s spoken; fading tail survived: {tail_survived}");
+        assert!(
+            tail_survived,
+            "the fading final word was truncated: only {kept:.3}s kept"
+        );
     }
 
     #[test]
