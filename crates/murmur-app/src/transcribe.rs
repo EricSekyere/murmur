@@ -705,6 +705,39 @@ fn update_session_context(state: &AppState, text: &str) {
 mod tests {
     use super::*;
 
+    /// Parakeet returns no segments, so the gate's limits are unreachable for
+    /// the default backend. Fails if the metrics appear or the gate stops
+    /// depending on them.
+    #[test]
+    fn the_confidence_gate_is_unreachable_without_segment_metrics() {
+        let limits = ProfileLimits::for_profile(TranscriptionProfile::Strict);
+        let whisper_shaped = TranscriptionResult {
+            text: "invented words".into(),
+            processing_time_ms: 0,
+            segments: vec![Segment {
+                text: "invented words".into(),
+                start_cs: 0,
+                end_cs: 100,
+                no_speech_prob: Some(0.99),
+                avg_token_prob: Some(0.01),
+            }],
+        };
+        assert!(
+            quality_reject_reason(&whisper_shaped, &limits, 1.0, false).is_some(),
+            "this decode must be rejected while the metrics exist"
+        );
+
+        let parakeet_shaped = TranscriptionResult {
+            segments: Vec::new(),
+            ..whisper_shaped
+        };
+        assert_eq!(
+            quality_reject_reason(&parakeet_shaped, &limits, 1.0, false),
+            None,
+            "identical text passes once the segments are empty"
+        );
+    }
+
     #[test]
     fn editor_context_outranks_the_project_index() {
         // Calls the function transcription calls, so swapping the merge order
