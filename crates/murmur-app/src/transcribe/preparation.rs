@@ -5,8 +5,9 @@ use murmur_core::config::TranscriptionProfile;
 
 const SAMPLE_RATE: f32 = 16_000.0;
 const FRAME_SIZE: usize = 512;
-const CONTEXT_FRAMES: usize = 2;
+const CONTEXT_FRAMES: usize = 5;
 const MIN_AUDIBLE_FRAMES: usize = 2;
+const RELATIVE_TRIM_THRESHOLD: f32 = 0.1;
 
 pub(crate) struct PreparedAudio {
     pub samples: Vec<f32>,
@@ -86,6 +87,16 @@ fn normalize_peak(samples: &[f32], peak: f32) -> Vec<f32> {
 }
 
 fn trim_silence(samples: &[f32], threshold: f32) -> &[f32] {
+    let loudest_frame = samples
+        .chunks(FRAME_SIZE)
+        .map(compute_rms)
+        .fold(0.0_f32, f32::max);
+    if loudest_frame == 0.0 {
+        return &samples[..0];
+    }
+    // A fixed floor cuts quiet words even when the clip passes the signal
+    // checks. Adapt only trimming; admission still uses the raw peak and RMS.
+    let threshold = threshold.min(loudest_frame * RELATIVE_TRIM_THRESHOLD);
     let mut audible = samples
         .chunks(FRAME_SIZE)
         .enumerate()
@@ -104,8 +115,7 @@ fn trim_silence(samples: &[f32], threshold: f32) -> &[f32] {
         return &samples[..0];
     }
     let start = first.saturating_sub(CONTEXT_FRAMES) * FRAME_SIZE;
-    // Quiet consonants can follow the last loud vowel. Preserve context on
-    // both ends rather than cutting precisely at the last above-floor frame.
+    // Keep 160 ms around speech so quiet consonants survive at either edge.
     let end = ((last + 1 + CONTEXT_FRAMES) * FRAME_SIZE).min(samples.len());
     &samples[start..end]
 }
@@ -115,7 +125,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn no_audible_frames_means_no_audio() {
+    fn signals_below_admission_floors_are_rejected() {
         for profile in [TranscriptionProfile::Relaxed, TranscriptionProfile::Strict] {
             for level in [0.0, 0.0005, 0.002] {
                 let samples = vec![level; 16_000];
@@ -139,7 +149,7 @@ mod tests {
         samples[4_096..8_192].fill(0.1);
         samples[8_192..8_992].fill(0.002);
         let trimmed = trim_silence(&samples, 0.003);
-        assert_eq!(trimmed, &samples[3_072..9_216]);
+        assert_eq!(trimmed, &samples[1_536..10_752]);
     }
 
     #[test]
@@ -150,6 +160,35 @@ mod tests {
         assert_eq!(prepared.peak, 0.02);
         assert!((prepared.rms - 0.02).abs() < 0.0001);
         assert!(prepared.samples[0] > samples[0]);
+    }
+
+    #[test]
+    fn quiet_waveform_below_absolute_trim_floor_survives() {
+        let mut samples: Vec<f32> = (0..16_000)
+            .map(|i| 0.002 * (std::f32::consts::TAU * i as f32 / 64.0).sin())
+            .collect();
+        for i in (0..samples.len()).step_by(64) {
+            samples[i] = 0.01;
+        }
+        assert!(samples.chunks(FRAME_SIZE).all(|f| compute_rms(f) < 0.003));
+        let prepared = prepare_audio(&samples, TranscriptionProfile::Relaxed)
+            .expect("quiet signal above raw admission floors");
+        assert_eq!(prepared.samples.len(), samples.len());
+        assert!(prepared.rms >= 0.0008);
+    }
+
+    #[test]
+    fn quiet_phrase_edges_survive_volume_changes() {
+        let mut samples = vec![0.0; 16_384];
+        samples[4_096..6_144].fill(0.005);
+        samples[6_144..10_240].fill(0.02);
+        samples[10_240..12_288].fill(0.005);
+        let quiet: Vec<f32> = samples.iter().map(|s| s * 0.5).collect();
+        for audio in [&samples, &quiet] {
+            let prepared =
+                prepare_audio(audio, TranscriptionProfile::Relaxed).expect("quiet phrase edges");
+            assert_eq!(prepared.samples.len(), 13_312);
+        }
     }
 
     #[test]

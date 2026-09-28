@@ -5,6 +5,12 @@ cannot guarantee exact recognition, arbitrary speech-to-program conversion, or
 zero hallucinations. Formatter correctness and recognition accuracy are different
 properties and need separate tests.
 
+The [quiet-speech follow-up](quiet-speech-regression.md) found false rejections
+and clipped words missed by this initial audit. In particular, quieter synthetic
+speech at 20% amplitude did not cover the new trimmer's failure at lower levels.
+The original measurements below are historical, not a claim that the hardening
+was free of recognition regressions.
+
 ## Website claims
 
 Reviewed https://www.ericsekyere.ca/projects/murmur on 2026-09-27.

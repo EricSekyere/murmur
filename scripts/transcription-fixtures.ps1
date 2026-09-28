@@ -8,6 +8,7 @@ $phrases = @(
     @{ id='negation'; expected='Do not delete the backup until the migration is complete.' },
     @{ id='technical'; expected='Use async await with TypeScript and install the package with npm.' },
     @{ id='names'; expected='Ask Claude to update the Fresha integration.' },
+    @{ id='close_out'; expected='What are some processes I can close out?' },
     @{ id='camel'; expected='Camel case get user profile'; identifier='getUserProfile' },
     @{ id='snake'; expected='Snake case user account settings'; identifier='user_account_settings' },
     @{ id='constant'; expected='Constant max retry count'; identifier='MAX_RETRY_COUNT' },
