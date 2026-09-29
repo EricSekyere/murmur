@@ -170,6 +170,26 @@ elif [ "$has_patch" -eq 1 ]; then
   level="patch"
 fi
 
+# A manual run says "release this" in so many words, so it outranks the commit
+# scan. Without it the Run workflow button silently no-ops whenever the range
+# holds only chore/docs/test commits, which reads as a broken button. Only the
+# workflow sets this; a push to production never does, so promoting docs still
+# releases nothing on its own.
+forced="${MURMUR_FORCE_BUMP:-}"
+case "$forced" in
+  major | minor | patch)
+    if [ "$forced" != "$level" ]; then
+      echo "note: forcing a ${forced} bump (commits alone gave ${level})" >&2
+    fi
+    level="$forced"
+    ;;
+  "" | none) ;;
+  *)
+    echo "MURMUR_FORCE_BUMP must be major, minor, patch, or empty (got: ${forced})" >&2
+    exit 1
+    ;;
+esac
+
 if [ "$level" = "none" ]; then
   release="false"
   version="$base"

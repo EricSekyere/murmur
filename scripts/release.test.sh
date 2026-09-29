@@ -240,6 +240,56 @@ else
   fail=$((fail + 1))
 fi
 
+
+# --- Case 15: a forced bump releases a range the scan alone would skip ---
+repo="$(new_repo case15)"
+git -C "$repo" commit -q --allow-empty -m 'test: add a harness'
+out="$(cd "$repo" && MURMUR_FORCE_BUMP=patch bash "$SCRIPT" notes.md whatsnew.data.js)"
+if printf '%s' "$out" | grep -q 'release=true' && printf '%s' "$out" | grep -q 'version=0.1.1'; then
+  echo 'PASS: forced patch releases a test-only range'
+  pass=$((pass + 1))
+else
+  echo 'FAIL: forced patch releases a test-only range'
+  echo "  output: $out"
+  fail=$((fail + 1))
+fi
+
+# --- Case 16: without the override that same range still releases nothing ---
+repo="$(new_repo case16)"
+git -C "$repo" commit -q --allow-empty -m 'test: add a harness'
+out="$(cd "$repo" && bash "$SCRIPT" notes.md whatsnew.data.js)"
+if printf '%s' "$out" | grep -q 'release=false'; then
+  echo 'PASS: push path still skips a test-only range'
+  pass=$((pass + 1))
+else
+  echo 'FAIL: push path still skips a test-only range'
+  echo "  output: $out"
+  fail=$((fail + 1))
+fi
+
+# --- Case 17: a forced bump never lowers what the commits already earned ---
+repo="$(new_repo case17)"
+git -C "$repo" commit -q --allow-empty -m 'feat: add a thing'
+out="$(cd "$repo" && MURMUR_FORCE_BUMP=minor bash "$SCRIPT" notes.md whatsnew.data.js)"
+if printf '%s' "$out" | grep -q 'version=0.2.0'; then
+  echo 'PASS: forcing the level the commits already gave is a no-op'
+  pass=$((pass + 1))
+else
+  echo 'FAIL: forcing the level the commits already gave is a no-op'
+  echo "  output: $out"
+  fail=$((fail + 1))
+fi
+
+# --- Case 18: a bad value fails loudly instead of silently releasing ---
+repo="$(new_repo case18)"
+git -C "$repo" commit -q --allow-empty -m 'fix: something'
+if (cd "$repo" && MURMUR_FORCE_BUMP=banana bash "$SCRIPT" notes.md whatsnew.data.js) >/dev/null 2>&1; then
+  echo 'FAIL: an invalid MURMUR_FORCE_BUMP must abort'
+  fail=$((fail + 1))
+else
+  echo 'PASS: an invalid MURMUR_FORCE_BUMP aborts'
+  pass=$((pass + 1))
+fi
 echo
 echo "passed=$pass failed=$fail"
 [ "$fail" -eq 0 ]
