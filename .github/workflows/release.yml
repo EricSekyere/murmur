@@ -16,6 +16,15 @@ on:
   push:
     branches: [production]
   workflow_dispatch:
+    inputs:
+      bump:
+        description: >-
+          Release at this level even when the commits since the last tag do not
+          call for one. Leave as none to derive it, which is what a push does.
+          While the version is still 0.x, major lands as a minor bump.
+        type: choice
+        options: [none, patch, minor, major]
+        default: none
 
 permissions:
   contents: write
@@ -37,6 +46,9 @@ jobs:
       - name: Derive version, notes, and What's New from Conventional Commits
         id: calc
         shell: bash
+        env:
+          # Empty on a push, so promotion keeps deriving from the commits.
+          MURMUR_FORCE_BUMP: ${{ inputs.bump }}
         run: bash scripts/release.sh release-notes.md whatsnew.data.js
 
       - name: Summarize decision
