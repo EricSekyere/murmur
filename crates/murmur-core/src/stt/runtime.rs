@@ -296,3 +296,25 @@ pub fn apply_low_memory(
         .with_memory_pattern(false)?
         .with_execution_providers([ort::ep::CPU::default().with_arena_allocator(false).build()])
 }
+
+/// Session tuning for the small models that run on every captured frame.
+///
+/// ORT defaults an intra-op pool to one thread per logical core and lets
+/// those threads spin before parking. That is right for one big inference and
+/// wrong for a ~1 MB model scored 12 times a second: the pool never idles long
+/// enough to park, so the spin is nearly continuous and costs orders of
+/// magnitude more than the inference it is waiting on. Measured on a 16-core
+/// machine, always-listening idled at 143 CPU-seconds per 15 s of wall clock
+/// against 0.03 with the feature off.
+///
+/// These models are far too small to parallelize usefully, so one thread is
+/// not a compromise; splitting them across cores costs more in coordination
+/// than it saves in compute.
+pub fn apply_realtime(
+    builder: ort::session::builder::SessionBuilder,
+) -> ort::Result<ort::session::builder::SessionBuilder> {
+    apply_low_memory(builder)?
+        .with_intra_threads(1)?
+        .with_intra_op_spinning(false)?
+        .with_inter_op_spinning(false)
+}
