@@ -170,7 +170,12 @@ fn extract_dll(archive_bytes: &[u8], dest_dir: &Path) -> Result<()> {
 
     for i in 0..archive.len() {
         let mut entry = archive.by_index(i).context("Failed to read ZIP entry")?;
-        let name = entry.name().to_string();
+        // zip 9 returns a Result here, failing on a non-UTF-8 entry name.
+        // Such an entry cannot be the DLL we are looking for, so skip it
+        // rather than abandoning the archive.
+        let Ok(name) = entry.name().map(|n| n.to_string()) else {
+            continue;
+        };
 
         // The DLL is at <prefix>/lib/onnxruntime.dll inside the archive
         if name.ends_with(&format!("/lib/{}", DLL_FILENAME)) || name == DLL_FILENAME {
