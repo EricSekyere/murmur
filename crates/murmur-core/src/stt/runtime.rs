@@ -170,7 +170,12 @@ fn extract_dll(archive_bytes: &[u8], dest_dir: &Path) -> Result<()> {
 
     for i in 0..archive.len() {
         let mut entry = archive.by_index(i).context("Failed to read ZIP entry")?;
-        let name = entry.name().to_string();
+        // zip 9 returns a Result here, failing on a non-UTF-8 entry name.
+        // Such an entry cannot be the DLL we are looking for, so skip it
+        // rather than abandoning the archive.
+        let Ok(name) = entry.name().map(|n| n.to_string()) else {
+            continue;
+        };
 
         // The DLL is at <prefix>/lib/onnxruntime.dll inside the archive
         if name.ends_with(&format!("/lib/{}", DLL_FILENAME)) || name == DLL_FILENAME {
@@ -295,4 +300,26 @@ pub fn apply_low_memory(
     builder
         .with_memory_pattern(false)?
         .with_execution_providers([ort::ep::CPU::default().with_arena_allocator(false).build()])
+}
+
+/// Session tuning for the small models that run on every captured frame.
+///
+/// ORT defaults an intra-op pool to one thread per logical core and lets
+/// those threads spin before parking. That is right for one big inference and
+/// wrong for a ~1 MB model scored 12 times a second: the pool never idles long
+/// enough to park, so the spin is nearly continuous and costs orders of
+/// magnitude more than the inference it is waiting on. Measured on a 16-core
+/// machine, always-listening idled at 143 CPU-seconds per 15 s of wall clock
+/// against 0.03 with the feature off.
+///
+/// These models are far too small to parallelize usefully, so one thread is
+/// not a compromise; splitting them across cores costs more in coordination
+/// than it saves in compute.
+pub fn apply_realtime(
+    builder: ort::session::builder::SessionBuilder,
+) -> ort::Result<ort::session::builder::SessionBuilder> {
+    apply_low_memory(builder)?
+        .with_intra_threads(1)?
+        .with_intra_op_spinning(false)?
+        .with_inter_op_spinning(false)
 }
