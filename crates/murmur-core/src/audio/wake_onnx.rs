@@ -157,7 +157,7 @@ impl WakeScorer for OnnxWakeScorer {
 fn build_session(path: &std::path::Path, label: &str) -> Result<ort::session::Session> {
     let builder = ort::session::Session::builder()
         .map_err(|e| anyhow::anyhow!("Failed to build {label} session: {}", e))?;
-    let builder = crate::stt::runtime::apply_low_memory(builder)
+    let builder = crate::stt::runtime::apply_realtime(builder)
         .map_err(|e| anyhow::anyhow!("Failed to configure {label} session: {}", e))?;
     builder
         .commit_from_file(path)
