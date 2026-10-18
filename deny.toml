@@ -44,6 +44,25 @@ ignore = [
     "RUSTSEC-2025-0057", # fxhash: transitive hasher
     "RUSTSEC-2025-0119", # number_prefix: via indicatif (CLI progress bars)
 
+    # zip 4.6.1 (CVE class: malicious archive extraction): transitive through
+    # tauri-plugin-updater, which has no release on zip 9 yet. Our own use is
+    # on zip 9 and is not affected regardless: runtime.rs reads one entry by
+    # index and copies it into a Vec, then writes through atomic_write to a
+    # path we build. It never calls extract(), which is what all three
+    # advisories are about, and the archive's SHA256 is verified against a
+    # pinned hash first. Remove when tauri-plugin-updater ships on zip >= 9.
+    "RUSTSEC-2026-0367", # SUID/SGID bits preserved during extraction
+    "RUSTSEC-2026-0368", # extract() follows symlinks out of the destination
+    "RUSTSEC-2026-0369", # extract() applies permissions through symlinks
+
+    # zbus stack (unmaintained): Linux-only D-Bus, transitive through the
+    # notification and clipboard paths. No maintained replacement, and none of
+    # it is reachable on Windows or macOS. Remove when the zbus 5.x line is
+    # adopted upstream or the dependents move off it.
+    "RUSTSEC-2026-0370", # zvariant
+    "RUSTSEC-2026-0371", # zbus_names
+    "RUSTSEC-2026-0372", # zvariant_derive
+
     # quick-xml DoS (RUSTSEC-2026-0194 quadratic parse, -0195 unbounded
     # namespace allocation). This is the only *vulnerability* here, accepted
     # with justification:
