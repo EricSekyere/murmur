@@ -94,12 +94,18 @@ impl Server {
 
     /// Standard MCP handshake; the returned value is the initialize result.
     fn initialize(&mut self) -> Value {
+        self.initialize_with("2024-11-05")
+    }
+
+    /// [`Self::initialize`] pinned to a specific revision, so negotiation can
+    /// be driven from both ends of the range the SDK knows.
+    fn initialize_with(&mut self, protocol_version: &str) -> Value {
         self.send(&json!({
             "jsonrpc": "2.0",
             "id": 0,
             "method": "initialize",
             "params": {
-                "protocolVersion": "2024-11-05",
+                "protocolVersion": protocol_version,
                 "capabilities": {},
                 "clientInfo": {"name": "murmur-tests", "version": "0"}
             }
@@ -217,6 +223,73 @@ fn initialize_reports_the_murmur_server() {
     let result = server.initialize();
     assert_eq!(result["serverInfo"]["name"], "murmur");
     assert!(result["capabilities"]["tools"].is_object());
+}
+
+#[test]
+fn initialize_answers_with_a_revision_the_client_can_handshake() {
+    let base = tempfile::tempdir().expect("tempdir");
+    let mut server = Server::spawn(base.path(), &[]);
+    assert_eq!(
+        server.initialize_with("2024-11-05")["protocolVersion"],
+        "2024-11-05",
+        "a client pinned to an older revision must be answered in that revision"
+    );
+
+    // The newest revision the SDK knows (2026-07-28) replaced `initialize`
+    // with per-request metadata, so answering a handshake with it would
+    // strand the very client that just sent one. An unrecognized request
+    // must fall back to the newest revision that still has a handshake,
+    // which is what keeps shipped editors working across an SDK bump.
+    let mut server = Server::spawn(base.path(), &[]);
+    assert_eq!(
+        server.initialize_with("2999-01-01")["protocolVersion"],
+        "2025-11-25"
+    );
+}
+
+#[test]
+fn tools_are_reachable_without_a_handshake_under_the_newest_revision() {
+    // 2026-07-28 replaced the `initialize` handshake with per-request
+    // metadata: a client on that revision opens with a real call carrying
+    // its version and capabilities in `_meta`. The SDK owns that lifecycle,
+    // so what is pinned here is that our tools stay reachable through it.
+    let base = tempfile::tempdir().expect("tempdir");
+    let mut server = Server::spawn(base.path(), &[]);
+    server.send(&json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/list",
+        "params": {
+            "_meta": {
+                "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                "io.modelcontextprotocol/clientCapabilities": {}
+            }
+        }
+    }));
+    let resp = server.recv();
+    assert!(
+        resp["error"].is_null(),
+        "inline lifecycle must not be rejected: {}",
+        resp["error"]
+    );
+    let count = resp["result"]["tools"]
+        .as_array()
+        .expect("tools array")
+        .len();
+    assert_eq!(count, 4);
+
+    // The same opener missing its capabilities must be refused, which is what
+    // shows the lifecycle is enforced rather than ignored.
+    server.send(&json!({
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "tools/list",
+        "params": {
+            "_meta": {"io.modelcontextprotocol/protocolVersion": "2026-07-28"}
+        }
+    }));
+    let resp = server.recv();
+    assert_eq!(resp["error"]["code"], -32602, "expected invalid params");
 }
 
 #[test]

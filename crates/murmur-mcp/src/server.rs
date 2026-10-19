@@ -14,7 +14,7 @@ use murmur_core::history::{History, HistoryEntry};
 use rmcp::{
     ErrorData as McpError, ServerHandler, ServiceExt,
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
-    model::{CallToolResult, Content, Implementation, ServerCapabilities, ServerInfo},
+    model::{CallToolResult, ContentBlock, Implementation, InitializeResult, ServerCapabilities},
     schemars, tool, tool_handler, tool_router,
     transport::stdio,
 };
@@ -273,8 +273,8 @@ impl MurmurMcp {
 
 #[tool_handler(router = self.tool_router)]
 impl ServerHandler for MurmurMcp {
-    fn get_info(&self) -> ServerInfo {
-        let mut info = ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+    fn get_info(&self) -> InitializeResult {
+        let mut info = InitializeResult::new(ServerCapabilities::builder().enable_tools().build())
             .with_instructions(
                 "Murmur exposes your local voice-to-text history. Call get_recent_transcripts \
                  to see what was just dictated, search_transcripts to find a past phrase, \
@@ -306,7 +306,7 @@ fn history_json(query: &str, limit: Option<usize>) -> Result<CallToolResult, Mcp
     // Respect the history opt-out: expose nothing when the user has disabled
     // saving history, even if a log file remains on disk from before.
     if !history_enabled() {
-        return Ok(CallToolResult::success(vec![Content::text("[]")]));
+        return Ok(CallToolResult::success(vec![ContentBlock::text("[]")]));
     }
     let limit = limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT);
     let path = History::default_path()
@@ -318,7 +318,7 @@ fn history_json(query: &str, limit: Option<usize>) -> Result<CallToolResult, Mcp
         .collect();
     let json = serde_json::to_string_pretty(&entries)
         .map_err(|e| McpError::internal_error(format!("serialize: {e}"), None))?;
-    Ok(CallToolResult::success(vec![Content::text(json)]))
+    Ok(CallToolResult::success(vec![ContentBlock::text(json)]))
 }
 
 /// Write the dictation trigger file the running app polls for, on the
@@ -352,7 +352,7 @@ fn now_epoch_ms() -> u64 {
 fn outcome_json(outcome: &WaitOutcome) -> Result<CallToolResult, McpError> {
     let json = serde_json::to_string_pretty(outcome)
         .map_err(|e| McpError::internal_error(format!("serialize: {e}"), None))?;
-    Ok(CallToolResult::success(vec![Content::text(json)]))
+    Ok(CallToolResult::success(vec![ContentBlock::text(json)]))
 }
 
 /// Whether the user currently allows storing transcription history. Defaults to
