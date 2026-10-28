@@ -9,6 +9,7 @@ use murmur_core::stt::{engine::SttEngine, models::SttModel};
 use serde::{Deserialize, Serialize};
 use std::{path::Path, time::Duration};
 
+mod config;
 mod quiet;
 
 #[derive(Deserialize)]
@@ -26,6 +27,10 @@ struct Observation {
     condition: String,
     expected: String,
     actual: String,
+    raw_actual: String,
+    corrected_actual: String,
+    raw_word_errors: usize,
+    corrected_word_errors: usize,
     word_errors: usize,
     reference_words: usize,
     identifier: Option<String>,
@@ -43,18 +48,16 @@ fn stress_local_transcription() -> Result<()> {
     let report = std::env::var("MURMUR_STRESS_REPORT").context("set MURMUR_STRESS_REPORT")?;
     let model_name =
         std::env::var("MURMUR_STRESS_BACKEND").unwrap_or_else(|_| "parakeet-v3".into());
-    let mut engine = match model_name.as_str() {
-        "parakeet-v2" | "parakeet-v3" => SttEngine::new_parakeet(&model_dir)?,
-        "whisper-small" => SttEngine::new_whisper(&model_dir, 4)?,
-        _ => anyhow::bail!("backend must be parakeet-v2, parakeet-v3, or whisper-small"),
+    let model = config::model(&model_name)?;
+    let mut engine = match model.backend() {
+        murmur_core::stt::models::Backend::Parakeet => SttEngine::new_parakeet(&model_dir)?,
+        murmur_core::stt::models::Backend::Whisper => SttEngine::new_whisper(&model_dir, 4)?,
     };
-    engine.set_model(match model_name.as_str() {
-        "parakeet-v2" => SttModel::ParakeetTdt06bV2,
-        "parakeet-v3" => SttModel::ParakeetTdt06bV3,
-        _ => SttModel::WhisperSmallEn,
-    });
+    engine.set_model(model);
     engine.set_language(Some("en".into()));
-    engine.set_vocabulary(&["Claude".into(), "Fresha".into()]);
+    let vocabulary = config::vocabulary()?;
+    let conditions = config::conditions()?;
+    engine.set_vocabulary(&vocabulary);
     let cases: Vec<Case> = serde_json::from_slice(&std::fs::read(&manifest)?)?;
     anyhow::ensure!(!cases.is_empty(), "manifest must contain cases");
     let parent = Path::new(&manifest).parent().context("manifest parent")?;
@@ -62,15 +65,7 @@ fn stress_local_transcription() -> Result<()> {
     for case in cases {
         let decoded = decode::decode(&parent.join(&case.file))?;
         let audio = AudioBuffer::from_raw(&decoded.samples, decoded.rate, decoded.channels);
-        for condition in [
-            "clean",
-            "quiet",
-            "amplitude_5_percent",
-            "amplitude_2_percent",
-            "amplitude_1_percent",
-            "noise",
-            "padded",
-        ] {
+        for condition in &conditions {
             let samples = perturb(&audio.samples, condition);
             observations.push(evaluate(
                 &mut engine,
@@ -78,6 +73,7 @@ fn stress_local_transcription() -> Result<()> {
                 &case,
                 condition,
                 &samples,
+                &vocabulary,
             )?);
         }
     }
@@ -94,6 +90,7 @@ fn stress_local_transcription() -> Result<()> {
             &case,
             "non_speech",
             &samples,
+            &vocabulary,
         )?);
     }
     // Reports can contain supplied speech; only write to the explicit local path.
@@ -103,6 +100,8 @@ fn stress_local_transcription() -> Result<()> {
             "model": model_name,
             "profile": "relaxed",
             "vad_threshold": 0.5,
+            "vocabulary": vocabulary,
+            "conditions": conditions,
             "observations": observations,
         }))?,
     )?;
@@ -115,6 +114,7 @@ fn evaluate(
     case: &Case,
     condition: &str,
     samples: &[f32],
+    vocabulary: &[String],
 ) -> Result<Observation> {
     let vad = VoiceActivityDetector::new(vad_path, 0.5)?;
     let config = DictationConfig {
@@ -134,6 +134,8 @@ fn evaluate(
         phrases.push(audio);
     }
     let mut actual = String::new();
+    let mut raw_actual = String::new();
+    let mut corrected_actual = String::new();
     let mut rejected = Vec::new();
     let mut inference_ms = 0;
     if phrases.is_empty() {
@@ -141,13 +143,16 @@ fn evaluate(
     }
     engine.set_initial_prompt(None);
     for audio in phrases {
-        match recognize(engine, &audio.samples)? {
-            Ok((text, ms)) => {
+        let recognized = recognize(engine, &audio.samples, vocabulary)?;
+        append_phrase(&mut raw_actual, &recognized.raw);
+        append_phrase(&mut corrected_actual, &recognized.corrected);
+        inference_ms += recognized.inference_ms;
+        match recognized.delivered {
+            Ok(text) => {
                 if !actual.is_empty() {
                     actual.push(' ');
                 }
                 actual.push_str(&text);
-                inference_ms += ms;
                 engine.set_initial_prompt(Some(actual.clone()));
             }
             Err(reason) => {
@@ -165,6 +170,10 @@ fn evaluate(
         expected: case.expected.clone(),
         word_errors: edit_distance(&reference, &tokens(&actual)),
         reference_words: reference.len(),
+        raw_word_errors: edit_distance(&reference, &tokens(&raw_actual)),
+        corrected_word_errors: edit_distance(&reference, &tokens(&corrected_actual)),
+        raw_actual,
+        corrected_actual,
         identifier_correct: case
             .identifier
             .as_ref()
@@ -176,25 +185,49 @@ fn evaluate(
     })
 }
 
+struct Recognition {
+    raw: String,
+    corrected: String,
+    delivered: Result<String, &'static str>,
+    inference_ms: u64,
+}
+
+fn append_phrase(target: &mut String, phrase: &str) {
+    if phrase.is_empty() {
+        return;
+    }
+    if !target.is_empty() {
+        target.push(' ');
+    }
+    target.push_str(phrase);
+}
+
 fn recognize(
     engine: &mut SttEngine,
     samples: &[f32],
-) -> Result<Result<(String, u64), &'static str>> {
+    vocabulary: &[String],
+) -> Result<Recognition> {
     let profile = TranscriptionProfile::Relaxed;
     let prepared = match prepare_audio(samples, profile) {
         Ok(prepared) => prepared,
-        Err(reason) => return Ok(Err(reason)),
+        Err(reason) => {
+            return Ok(Recognition {
+                raw: String::new(),
+                corrected: String::new(),
+                delivered: Err(reason),
+                inference_ms: 0,
+            });
+        }
     };
     let mut result = engine.transcribe(&prepared.samples)?;
-    result.text = murmur_core::vocab_correct::correct_counted(
-        &result.text,
-        &["Claude".into(), "Fresha".into()],
-    )
-    .0;
-    Ok(
-        finish_text(&result, profile, prepared.duration_secs, false, false, true)
-            .map(|text| (text, result.processing_time_ms)),
-    )
+    let raw = result.text.clone();
+    result.text = murmur_core::vocab_correct::correct_counted(&result.text, vocabulary).0;
+    Ok(Recognition {
+        raw,
+        corrected: result.text.clone(),
+        delivered: finish_text(&result, profile, prepared.duration_secs, false, false, true),
+        inference_ms: result.processing_time_ms,
+    })
 }
 
 fn perturb(samples: &[f32], condition: &str) -> Vec<f32> {
