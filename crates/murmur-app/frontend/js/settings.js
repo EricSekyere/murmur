@@ -66,6 +66,7 @@ settingsToggle.addEventListener('click', async () => {
       vocabularyInput.value = status.custom_vocabulary.join('\n');
       vocabularySave.disabled = true;
     }
+    if (typeof loadCorrections === 'function') loadCorrections(status.vocabulary_replacements || []);
     if (Array.isArray(status.snippets)) {
       snippetsInput.value = status.snippets
         .map(s => `${s.trigger} = ${s.expansion}`)
