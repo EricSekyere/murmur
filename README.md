@@ -106,7 +106,7 @@ CI runs formatting, clippy (warnings denied), the full test suite on Windows and
 
 ## Privacy
 
-Everything runs locally. The only network access is the checksum-verified download of model and runtime files, plus update checks against GitHub Releases. Audio and transcripts never leave your machine; dictation audio is never written to disk, and meeting audio is only spooled temporarily for speaker labeling and deleted after processing. See the full [Privacy Policy](PRIVACY.md).
+Everything runs locally. Network access supports model and runtime downloads and update checks. Automatic dictation retention keeps audio in memory. You can explicitly save a correction example locally for testing and delete it under Saved examples; meeting audio is spooled temporarily for speaker labels and deleted after processing. See the full [Privacy Policy](PRIVACY.md).
 
 ## Contributing
 

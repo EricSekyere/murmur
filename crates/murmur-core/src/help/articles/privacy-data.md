@@ -10,17 +10,21 @@ locally using a model on your own machine. There are no cloud calls for
 dictation and no telemetry. Your speech and the resulting text stay on
 your computer.
 
-## No audio is kept
+## Audio retention
 
-Audio is processed and discarded; Murmur does not save recordings. Only
-the text of delivered phrases is ever stored, and only if you leave
-history on. To power Re-transcribe, the last few utterances (about ten,
+Dictation does not automatically save recordings. Delivered text is stored
+if history is enabled. To power Re-transcribe, the last few utterances (about ten,
 up to a minute of audio in total) stay in memory while the app runs, and
-only while history is on; that audio is never written to disk and
+only while history is on; automatic retention never writes audio to disk and
 vanishes when the app exits, when you clear history, or when you turn
 Save History off.
 
-> **Privacy:** The one exception is meeting speaker labels: with labels
+You can choose **Save mistake**, review the corrected text, and explicitly
+save that selected audio clip locally. Nothing is uploaded or learned.
+**Saved examples** lists and deletes these pairs; they remain after exit,
+clearing history, or disabling history.
+
+> **Privacy:** Meeting speaker labels also use disk: with labels
 > enabled, a meeting's audio is spooled to a temporary file so speakers
 > can be told apart. That file is deleted as soon as the meeting is
 > processed, on any failure, when you quit the app mid-meeting (the
@@ -31,8 +35,8 @@ Save History off.
 ## History is optional
 
 Murmur keeps a local, searchable log of delivered phrases so you can find
-and reuse them. Turn off Save History in Settings to store nothing on
-disk. Turning history off also purges what is already stored, deleting
+and reuse them. Turn off Save History in Settings to stop saving delivered
+text. Turning history off also purges existing history, deleting
 the history file rather than leaving an empty one behind.
 
 ## Where your data lives
