@@ -91,24 +91,26 @@ matches wins, so put specific patterns before general ones.
 The personal dictionary is a list of names, jargon, and terms the model
 tends to mishear. Enter them in Settings, one per line. On Whisper models
 they are injected into the decoder as a glossary that biases recognition.
-On every model, including Parakeet, a correction pass then fixes close
-mishearings of your terms in the finished text, so the dictionary works
-no matter which engine you use.
+On every model, including Parakeet, a formatting pass repairs matching
+capitalization and exact word joins in the finished text. Parakeet's current
+recognizer does not receive vocabulary hints while decoding audio.
 
 ## How dictionary corrections work
 
 After transcription, Murmur compares each word, and short runs of two or
-three words, against your dictionary. A term is corrected only when it
-both sounds like and is spelled close to the dictionary entry.
+three words, against your dictionary. Their letters must match exactly,
+ignoring capitalization and the separators in a dictionary term.
 
 | The model heard | Your dictionary fixes it to |
 | --- | --- |
-| "kubernetis" | Kubernetes |
+| "kubernetes" | Kubernetes |
 | "git hub" | GitHub |
 
 A word that already matches an entry except for casing gets just its
-casing fixed. Common English words are never rewritten, and text with no
-near-match of a dictionary term is left untouched.
+casing fixed. Different spellings are left as heard: adding Fresha must not
+change "a fresh approach" into "a Fresha approach". The dictionary does not
+guess corrections from phonetic similarity, and joins never cross sentences
+or line breaks.
 
 ## Learn from history
 

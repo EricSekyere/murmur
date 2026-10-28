@@ -10,10 +10,10 @@ Codebase Vocabulary. It is off by default.
 Murmur walks each project folder you add, extracts the distinctive
 identifiers (function, class, and variable names), ranks them, and
 injects the top ones into the decoder vocabulary. Decoder biasing helps
-Whisper models; on every model, including Parakeet, the same sound-alike
-correction pass as the personal dictionary fixes close mishearings of
-your identifiers in the finished text, so "user controller" can come out
-as UserController.
+Whisper models; on every model, including Parakeet, the personal dictionary
+repairs matching capitalization and exact word joins in the finished text,
+so "user controller" can come out as UserController. It does not replace
+words merely because they sound like an identifier.
 
 ## Add project folders
 
