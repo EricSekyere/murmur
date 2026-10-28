@@ -96,6 +96,33 @@ fn assemble_vocabulary(
     merge_vocabulary(merge_vocabulary(user_vocab, on_screen.0), project.0)
 }
 
+pub(crate) fn vocabulary_snapshot(state: &AppState, user_vocab: Vec<String>) -> Vec<String> {
+    let on_screen = state
+        .editor_context
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .fresh()
+        .to_vec();
+    let project = state
+        .project_vocab
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    assemble_vocabulary(
+        user_vocab,
+        OnScreenSymbols(&on_screen),
+        ProjectIndex(&project),
+    )
+}
+
+pub(crate) fn correct_vocabulary(result: &mut TranscriptionResult, vocabulary: &[String]) {
+    let (corrected, corrections) =
+        murmur_core::vocab_correct::correct_counted(&result.text, vocabulary);
+    if corrections > 0 {
+        tracing::debug!(corrections, "applied vocabulary formatting");
+        result.text = corrected;
+    }
+}
+
 /// Per-profile rejection thresholds.
 struct ProfileLimits {
     no_speech_max: f32,
@@ -178,27 +205,7 @@ fn transcribe_with(
             settings.translate_to_english,
         )
     };
-    let vocabulary = {
-        // Copied out and the guard released before the next lock is taken.
-        // Shadowing the guard would not drop it, leaving editor_context held
-        // across the project_vocab acquisition for no reason.
-        let on_screen: Vec<String> = {
-            let guard = state
-                .editor_context
-                .lock()
-                .unwrap_or_else(|e| e.into_inner());
-            guard.fresh().to_vec()
-        };
-        let project = state
-            .project_vocab
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        assemble_vocabulary(
-            user_vocab,
-            OnScreenSymbols(&on_screen),
-            ProjectIndex(project.as_slice()),
-        )
-    };
+    let vocabulary = vocabulary_snapshot(&state, user_vocab);
     // English-tuned gates over-reject accented non-English speech, so relax them
     // for non-English dictation — but only when the active model can actually
     // decode that language. English-only models are forced to "en" regardless of
@@ -336,17 +343,7 @@ fn run_engine(
             None
         }
         Ok(mut result) => {
-            // Vocabulary correction runs on the output of BOTH engines:
-            // whisper keeps its prompt biasing (this fixes what biasing
-            // missed), and Parakeet has no biasing API at all, so this is
-            // the only way the Personal Dictionary reaches it.
-            let (corrected, corrections) =
-                murmur_core::vocab_correct::correct_counted(&result.text, vocabulary);
-            if corrections > 0 {
-                // Count only: transcript content never appears above trace.
-                tracing::debug!(corrections, "applied vocabulary corrections");
-                result.text = corrected;
-            }
+            correct_vocabulary(&mut result, vocabulary);
             tracing::info!(
                 "Engine returned {} chars ({}ms, {} segments)",
                 result.text.chars().count(),
@@ -704,6 +701,35 @@ fn update_session_context(state: &AppState, text: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn refreshed_vocabulary_formats_preview_without_changing_decoder_evidence() {
+        let mut result = TranscriptionResult {
+            text: "a fresh approach to type script".into(),
+            processing_time_ms: 42,
+            segments: vec![Segment {
+                text: "a fresh approach to type script".into(),
+                start_cs: 0,
+                end_cs: 100,
+                no_speech_prob: Some(0.8),
+                avg_token_prob: Some(0.2),
+            }],
+        };
+        correct_vocabulary(&mut result, &[]);
+        assert!(result.text.ends_with("type script"));
+        correct_vocabulary(&mut result, &["Fresha".into(), "TypeScript".into()]);
+        assert_eq!(result.text, "a fresh approach to TypeScript");
+        assert_eq!(result.processing_time_ms, 42);
+        assert_eq!(result.segments[0].text, "a fresh approach to type script");
+        assert_eq!(result.segments[0].no_speech_prob, Some(0.8));
+        assert!(preview_text(&result, TranscriptionProfile::Relaxed, 1.0, false).is_none());
+        result.segments[0].no_speech_prob = Some(0.01);
+        result.segments[0].avg_token_prob = Some(0.95);
+        assert_eq!(
+            preview_text(&result, TranscriptionProfile::Relaxed, 1.0, false),
+            Some("a fresh approach to TypeScript")
+        );
+    }
 
     /// Parakeet returns no segments, so the gate's limits are unreachable for
     /// the default backend. Fails if the metrics appear or the gate stops

@@ -60,14 +60,16 @@ fn transcribe_preview(state: &AppState, audio: &AudioBuffer) -> Option<String> {
     if audio.samples.len() < MIN_PREVIEW_SAMPLES {
         return None;
     }
-    let (language, translate, profile) = {
+    let (language, translate, profile, user_vocab) = {
         let settings = state.settings.lock().unwrap_or_else(|e| e.into_inner());
         (
             settings.language.clone(),
             settings.translate_to_english,
             settings.transcription_profile,
+            settings.custom_vocabulary.clone(),
         )
     };
+    let vocabulary = crate::transcribe::vocabulary_snapshot(state, user_vocab);
     let prepared = crate::transcribe::prepare_audio(&audio.samples, profile).ok()?;
     let mut guard = state.engine.try_lock().ok()?;
     let engine = guard.as_mut()?;
@@ -79,10 +81,12 @@ fn transcribe_preview(state: &AppState, audio: &AudioBuffer) -> Option<String> {
     // No decoder prompt: a preview must not pollute the running session
     // context that the final-phrase path feeds back as `initial_prompt`.
     engine.set_initial_prompt(None);
+    engine.set_vocabulary(&vocabulary);
     // Mirror the language/translate settings so the preview matches the final.
     engine.set_language(Some(language));
     engine.set_translate(translate);
-    let result = engine.transcribe(&prepared.samples).ok()?;
+    let mut result = engine.transcribe(&prepared.samples).ok()?;
+    crate::transcribe::correct_vocabulary(&mut result, &vocabulary);
     let text =
         crate::transcribe::preview_text(&result, profile, prepared.duration_secs, non_english)?;
     Some(text.to_string())
