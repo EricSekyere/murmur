@@ -14,6 +14,7 @@ mod editor_context;
 pub mod command_exec;
 mod command_mode;
 mod commands;
+mod correction_examples;
 mod dictation_trigger;
 mod focus;
 mod gain;
@@ -240,6 +241,9 @@ pub fn run() -> anyhow::Result<()> {
             commands::get_history,
             commands::clear_history,
             commands::retranscribe_entry,
+            correction_examples::save_correction_example,
+            correction_examples::list_correction_examples,
+            correction_examples::delete_correction_example,
             commands::get_config,
             commands::download_model,
             commands::download_wake_models,

@@ -22,6 +22,8 @@ pub mod dictation_request;
 pub mod dictation_submit;
 pub mod download;
 pub mod emoji;
+#[cfg(feature = "audio-files")]
+pub mod evaluation;
 pub mod filler;
 pub mod fsutil;
 #[cfg(feature = "help")]
