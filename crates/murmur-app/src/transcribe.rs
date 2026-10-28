@@ -19,7 +19,6 @@ mod stress;
 
 /// Whisper hallucination phrases produced on silence/noise.
 const HALLUCINATIONS: &[&str] = &[
-    "thank you",
     "thank you for watching",
     "thanks for watching",
     "thanks for listening",
@@ -39,7 +38,7 @@ const STRICT_EXTRA_HALLUCINATIONS: &[&str] = &["bye", "goodbye", "you", "so"];
 const INTERJECTIONS: &[&str] = &[
     "hmm", "hm", "mm", "mmm", "mm-hmm", "mhm", "uh", "um", "umm", "ugh", "ah", "aah", "oh", "ooh",
     "huh", "ha", "haha", "ha ha", "phew", "whew", "ahem", "heh", "pfft", "shh", "tsk", "whoo",
-    "hoo", "argh", "eugh", "ew", "okay", "ok", "mkay",
+    "hoo", "argh", "eugh", "ew",
 ];
 
 /// 25s cap keeps inference latency bounded while leaving room for the
@@ -829,10 +828,8 @@ mod tests {
             hallucination_reason("Ugh, this is broken.", TranscriptionProfile::Relaxed, false)
                 .is_none()
         );
-        // Bare "okay"/"ok" are filler whisper emits on silence; filter them as
-        // whole phrases but never when they lead a real sentence.
-        assert!(hallucination_reason("Okay.", TranscriptionProfile::Relaxed, false).is_some());
-        assert!(hallucination_reason("OK", TranscriptionProfile::Relaxed, false).is_some());
+        assert!(hallucination_reason("Okay.", TranscriptionProfile::Relaxed, false).is_none());
+        assert!(hallucination_reason("OK", TranscriptionProfile::Relaxed, false).is_none());
         assert!(
             hallucination_reason("Okay, next step.", TranscriptionProfile::Relaxed, false)
                 .is_none()
@@ -969,9 +966,58 @@ mod tests {
         );
     }
     #[test]
+    fn spoken_acknowledgments_survive_preview_and_delivery() {
+        for profile in [TranscriptionProfile::Relaxed, TranscriptionProfile::Strict] {
+            for text in ["Okay.", "OK", "Thank you.", "Mkay."] {
+                let result = TranscriptionResult {
+                    text: text.into(),
+                    processing_time_ms: 0,
+                    segments: Vec::new(),
+                };
+                assert_eq!(preview_text(&result, profile, 0.8, false), Some(text));
+                assert_eq!(
+                    finish_text(&result, profile, 0.8, false, false, true),
+                    Ok(text.to_string())
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn acknowledgment_text_does_not_override_decoder_evidence() {
+        let mut result = TranscriptionResult {
+            text: "Thank you.".into(),
+            processing_time_ms: 0,
+            segments: vec![Segment {
+                text: "Thank you.".into(),
+                start_cs: 0,
+                end_cs: 80,
+                no_speech_prob: Some(0.9),
+                avg_token_prob: Some(0.95),
+            }],
+        };
+        for profile in [TranscriptionProfile::Relaxed, TranscriptionProfile::Strict] {
+            assert!(preview_text(&result, profile, 0.8, false).is_none());
+            assert!(finish_text(&result, profile, 0.8, false, false, true).is_err());
+        }
+        result.segments[0].no_speech_prob = Some(0.01);
+        assert!(
+            finish_text(
+                &result,
+                TranscriptionProfile::Relaxed,
+                0.8,
+                false,
+                false,
+                true
+            )
+            .is_ok()
+        );
+    }
+
+    #[test]
     fn prose_cleanup_does_not_bypass_phrase_rejection() {
         let result = TranscriptionResult {
-            text: "um thank you".into(),
+            text: "um please subscribe".into(),
             processing_time_ms: 0,
             segments: Vec::new(),
         };
