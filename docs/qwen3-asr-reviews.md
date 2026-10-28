@@ -17,20 +17,61 @@ and difficult-audio caveats. It does not support calling it universally best.
 For Murmur, preserving negations and whole phrases matters more than making
 the output look fluent.
 
-The local trial should use the original 1.7B weights first, pin the model
-revision, verify downloaded weight hashes, and run inference offline. Keep the
-runtime outside Murmur's default installation while measuring correctness,
-memory, and latency on the RTX 4050 laptop. Test the same recordings with and
-without a small relevant glossary, including ordinary words that could be
-incorrectly attracted to glossary terms. Count omissions and false output on
-non-speech separately from word error rate. Compare any smaller or quantized
-variant independently rather than assuming it retains the original accuracy.
+## Completed local trial
+
+The original 1.7B weights ran offline on this RTX 4050 laptop, with verified
+checksums and a pinned revision. The experiment uses the official Transformers
+runtime in an isolated Python environment. It does not install a new Murmur
+backend or change the selected model. See the [reproduction instructions](../scripts/qwen-asr/README.md).
+
+Sixty original synthetic recordings ran twice, with and without context,
+followed by seven non-speech signals in both conditions: 134 observations.
+Scoring follows the baseline's punctuation/case normalization and excludes
+number-formatting and disfluency cases. This leaves 50 clips and 734 words.
+
+| Original complete audio | Word errors | WER | General-only errors (688 words) |
+| --- | ---: | ---: | ---: |
+| Qwen, no glossary | 7 | 0.95% | 5 |
+| Qwen, relevant glossary | 5 | 0.68% | 5 |
+
+The glossary repaired Owneli in two clips; the general-speech score was
+unchanged. One voice's “Use async await” became “You say sync a wait” with and
+without hints. The original email clips were complete in both voices.
+These synthetic results do not establish personal microphone or accent accuracy.
+
+**All seven direct non-speech inputs produced unwanted text in both conditions.**
+Without context, silence became an invented sentence and noise often became
+“Okay” or “Oh.” With context, every non-speech output repeated the glossary.
+This makes VAD and acceptance checks a prerequisite for integration.
+These results bypass Murmur's VAD, preparation, correction and filtering;
+Murmur's zero-output noise results used those checks, so this is not an equal
+comparison of the underlying models' resistance to hallucination.
+
+The GPU memory budget was 3500 MiB to leave room for the running app; some
+weights were offloaded to CPU. Average speech inference was 13.3 seconds without
+context and 14.0 with context, approximately 2.45 and 2.58 times audio duration.
+Concurrent native builds and CPU offloading make this unsuitable for ranking
+production latency. It does show that this configuration was too slow for
+responsive dictation. A smaller model or quantized runtime needs a separate
+accuracy and speed evaluation; neither is assumed equivalent to these weights.
+
+**Recommendation:** retain Qwen as an experimental candidate. Do not replace
+Murmur's default model yet. Test a real held-out microphone set through the same
+complete pipeline, with bounded context and non-speech rejection, then measure
+latency in isolation. The [recorded observations](evaluations/qwen3-asr-2026-10-28.json)
+contain only the synthetic corpus.
 
 GPT-Transcribe is excluded from this implementation scope following the decision
 to keep speech processing local. Its API requires cloud processing and paid
 usage; an API key does not make it an offline model.
 
-Pipeline fixes remain independently reviewable: audio preparation, conservative
+Pipeline fixes remain independently reviewable: conservative
 dictionary correction, preview vocabulary consistency, short-reply filtering,
 and explicit local collection of corrected examples. A Qwen experiment does not
 replace those fixes or justify changing the default model before evaluation.
+
+The untrimmed-audio experiment was also tested through the full Parakeet v3
+pipeline on 427 cases. It did not repair the email omission there and increased
+clean raw errors from 10 to 11, and padded-audio errors from 5 to 9. The change
+is not included in the fixes. This is evidence to investigate phrase boundaries
+with real recordings, not justification to remove audio admission checks.
