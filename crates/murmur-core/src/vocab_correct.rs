@@ -1,294 +1,19 @@
-//! Vocabulary-aware correction of STT output text.
+//! Conservative vocabulary formatting after speech recognition.
 //!
-//! Whisper biases decoding toward the Personal Dictionary through a prompt
-//! clause, but Parakeet has no biasing API, so vocabulary terms were silently
-//! ignored on that engine. This pass instead corrects the *output* text of
-//! both engines, deterministically mapping misrecognized words back to
-//! vocabulary terms (complementary to Whisper's prompt biasing: it fixes what
-//! biasing missed).
-//!
-//! Two correction classes:
-//! - Casing repair (safe, aggressive): a word that case-insensitively equals
-//!   a term is rewritten to the term's casing ("github" -> "GitHub").
-//! - Phonetic repair (guarded, conservative): a word — or a 2..=3 word window
-//!   for terms spoken as several words — is replaced by a term only when the
-//!   phonetic keys match AND a Levenshtein distance guard passes.
-//!
-//! Phonetic algorithm: a compact Soundex refinement. Consonants map to the
-//! six classic Soundex classes, vowels separate runs of equal codes, and
-//! `h`/`w` are transparent — but unlike classic Soundex the first letter is
-//! coded by class too (so hard/soft confusions like "cubernetes"/"kubernetes"
-//! share a key) and keys are variable-length instead of truncated to four
-//! chars, which would over-merge long identifiers. Digits and non-ASCII
-//! letters code as themselves, so non-English words only bucket together
-//! when nearly identical.
-//!
-//! False-positive gates: words under three chars and a stoplist of common
-//! English words are never phonetically corrected (casing repair stays
-//! allowed); words exactly equal to a vocabulary term are frozen — never
-//! rewritten or merged into a window — which also makes the pass idempotent;
-//! punctuation around a corrected word is preserved exactly. There is
-//! deliberately no user setting: this is the Personal Dictionary doing its
-//! job, with the gates bounding the risk.
+//! Correct casing and exact word joins, without guessing another spelling.
+//! Phonetic similarity alone is not evidence that an ordinary word is wrong:
+//! a glossary containing "Fresha" must not change "a fresh approach".
 
 use std::collections::{HashMap, HashSet};
 
-/// Common English words never phonetically corrected, so "there" can't become
-/// a vocab term like "Terra". Casing repair still applies when such a word is
-/// genuinely in the vocabulary. Alphabetized for `binary_search`.
-const STOPLIST: &[&str] = &[
-    "a",
-    "about",
-    "above",
-    "actually",
-    "after",
-    "again",
-    "against",
-    "all",
-    "almost",
-    "also",
-    "always",
-    "am",
-    "an",
-    "and",
-    "another",
-    "any",
-    "anything",
-    "are",
-    "around",
-    "as",
-    "ask",
-    "asked",
-    "at",
-    "away",
-    "back",
-    "be",
-    "became",
-    "because",
-    "been",
-    "before",
-    "being",
-    "below",
-    "between",
-    "big",
-    "both",
-    "but",
-    "by",
-    "came",
-    "can",
-    "cannot",
-    "come",
-    "could",
-    "day",
-    "days",
-    "did",
-    "different",
-    "do",
-    "does",
-    "doing",
-    "done",
-    "down",
-    "each",
-    "either",
-    "end",
-    "enough",
-    "even",
-    "ever",
-    "every",
-    "everything",
-    "far",
-    "few",
-    "find",
-    "first",
-    "for",
-    "found",
-    "from",
-    "get",
-    "give",
-    "go",
-    "going",
-    "good",
-    "got",
-    "great",
-    "had",
-    "has",
-    "have",
-    "having",
-    "he",
-    "her",
-    "here",
-    "hers",
-    "him",
-    "his",
-    "how",
-    "i",
-    "if",
-    "in",
-    "into",
-    "is",
-    "it",
-    "its",
-    "itself",
-    "just",
-    "keep",
-    "kind",
-    "knew",
-    "know",
-    "large",
-    "last",
-    "left",
-    "less",
-    "let",
-    "like",
-    "little",
-    "long",
-    "look",
-    "looked",
-    "made",
-    "make",
-    "many",
-    "may",
-    "maybe",
-    "me",
-    "mean",
-    "might",
-    "mine",
-    "more",
-    "most",
-    "much",
-    "must",
-    "my",
-    "myself",
-    "need",
-    "never",
-    "new",
-    "next",
-    "no",
-    "none",
-    "not",
-    "nothing",
-    "now",
-    "of",
-    "off",
-    "often",
-    "old",
-    "on",
-    "once",
-    "one",
-    "only",
-    "or",
-    "other",
-    "our",
-    "out",
-    "over",
-    "own",
-    "part",
-    "people",
-    "place",
-    "put",
-    "quite",
-    "rather",
-    "really",
-    "right",
-    "said",
-    "same",
-    "saw",
-    "say",
-    "see",
-    "seem",
-    "seemed",
-    "she",
-    "should",
-    "since",
-    "small",
-    "so",
-    "some",
-    "something",
-    "soon",
-    "still",
-    "such",
-    "take",
-    "tell",
-    "than",
-    "that",
-    "the",
-    "their",
-    "them",
-    "then",
-    "there",
-    "these",
-    "they",
-    "thing",
-    "things",
-    "think",
-    "this",
-    "those",
-    "thought",
-    "three",
-    "through",
-    "time",
-    "to",
-    "today",
-    "together",
-    "told",
-    "too",
-    "took",
-    "toward",
-    "two",
-    "under",
-    "until",
-    "up",
-    "upon",
-    "us",
-    "use",
-    "used",
-    "very",
-    "want",
-    "was",
-    "way",
-    "we",
-    "well",
-    "went",
-    "were",
-    "what",
-    "when",
-    "where",
-    "which",
-    "while",
-    "who",
-    "whole",
-    "why",
-    "will",
-    "with",
-    "without",
-    "word",
-    "words",
-    "work",
-    "world",
-    "would",
-    "year",
-    "years",
-    "yes",
-    "yet",
-    "you",
-    "your",
-    "yours",
-];
-
-/// Longest run of output words that may be merged into one vocabulary term.
 const MAX_WINDOW: usize = 3;
-/// Words shorter than this are never phonetically corrected.
-const MIN_PHONETIC_CHARS: usize = 3;
 
-/// Apply vocabulary corrections to `text`. `vocabulary` order is priority
-/// order (earlier terms win ties). Returns the text unchanged when the
-/// vocabulary or text is empty.
+/// Apply exact vocabulary formatting, preserving unmatched text byte for byte.
 pub fn correct(text: &str, vocabulary: &[String]) -> String {
     correct_counted(text, vocabulary).0
 }
 
-/// Like [`correct`], also returning how many corrections were applied so
-/// callers can log a count without logging transcript content.
+/// Return the formatted text and the number of changed spans.
 pub fn correct_counted(text: &str, vocabulary: &[String]) -> (String, usize) {
     if text.is_empty() || vocabulary.is_empty() {
         return (text.to_string(), 0);
@@ -302,82 +27,52 @@ pub fn correct_counted(text: &str, vocabulary: &[String]) -> (String, usize) {
         let tok = &tokens[i];
         out.push_str(tok.ws);
         out.push_str(tok.prefix);
-        match longest_match(&tokens, i, &lookup) {
-            Some((consumed, term)) => {
-                out.push_str(term);
-                out.push_str(tokens[i + consumed - 1].suffix);
-                corrections += 1;
-                i += consumed;
-            }
-            None => {
-                out.push_str(tok.core);
-                out.push_str(tok.suffix);
-                i += 1;
-            }
+        if let Some((consumed, term)) = longest_match(&tokens, i, &lookup) {
+            out.push_str(term);
+            out.push_str(tokens[i + consumed - 1].suffix);
+            corrections += 1;
+            i += consumed;
+        } else {
+            out.push_str(tok.core);
+            out.push_str(tok.suffix);
+            i += 1;
         }
     }
     out.push_str(trailing_ws);
     (out, corrections)
 }
 
-/// One vocabulary term: its original text and its spoken form lowered and
-/// joined without separators ("UserController" -> "usercontroller").
-struct Term<'a> {
-    text: &'a str,
-    joined: String,
-}
-
-/// Per-call lookup over the vocabulary. Built fresh every call: a few
-/// thousand identifiers hash in microseconds, and the merged vocabulary can
-/// change between sessions, so caching across calls isn't worth the staleness
-/// risk.
 struct Lookup<'a> {
-    terms: Vec<Term<'a>>,
-    /// Case-sensitive term texts; matching output words are frozen.
     exact: HashSet<&'a str>,
-    /// Lowercased term text -> term index (first entry wins) for casing repair.
-    casing: HashMap<String, usize>,
-    /// Concatenated phonetic key -> candidate term indices, so per-word work
-    /// stays proportional to the bucket, not the whole vocabulary.
-    buckets: HashMap<String, Vec<usize>>,
+    casing: HashMap<String, &'a str>,
+    joined: HashMap<String, &'a str>,
 }
 
 impl<'a> Lookup<'a> {
     fn build(vocabulary: &'a [String]) -> Self {
         let mut lookup = Self {
-            terms: Vec::with_capacity(vocabulary.len()),
             exact: HashSet::new(),
             casing: HashMap::new(),
-            buckets: HashMap::new(),
+            joined: HashMap::new(),
         };
-        for raw in vocabulary {
-            let text = raw.trim();
-            if text.is_empty() {
-                continue;
-            }
-            let words = spoken_words(text);
-            let key: String = words.iter().map(|w| phonetic_key(w)).collect();
-            let idx = lookup.terms.len();
-            lookup.terms.push(Term {
-                text,
-                joined: words.concat(),
-            });
+        for text in vocabulary
+            .iter()
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+        {
             lookup.exact.insert(text);
-            lookup.casing.entry(text.to_lowercase()).or_insert(idx);
-            if !key.is_empty() {
-                lookup.buckets.entry(key).or_default().push(idx);
-            }
+            lookup.casing.entry(text.to_lowercase()).or_insert(text);
+            lookup
+                .joined
+                .entry(spoken_words(text).concat())
+                .or_insert(text);
         }
         lookup
     }
 }
 
-/// Best correction starting at token `i`: the longest matching window wins,
-/// then a single-token casing or phonetic repair. Returns (tokens consumed,
-/// replacement term).
 fn longest_match<'a>(tokens: &[Token], i: usize, lookup: &Lookup<'a>) -> Option<(usize, &'a str)> {
-    // Exact case-sensitive vocabulary hits are frozen: never rewritten or
-    // merged into a window. This is also what makes the pass idempotent.
+    // An explicit vocabulary hit takes priority over joining it into another term.
     if lookup.exact.contains(tokens[i].core) {
         return None;
     }
@@ -388,97 +83,26 @@ fn longest_match<'a>(tokens: &[Token], i: usize, lookup: &Lookup<'a>) -> Option<
             return Some((size, term));
         }
     }
-    match_single(&tokens[i], lookup).map(|term| (1, term))
+    lookup
+        .casing
+        .get(&tokens[i].core.to_lowercase())
+        .map(|&term| (1, term))
 }
 
-/// Match a run of output words against a term spoken as several words
-/// ("git hub" -> "GitHub"). Interior punctuation breaks the window, and
-/// every word must individually pass the phonetic gates.
 fn match_window<'a>(window: &[Token], lookup: &Lookup<'a>) -> Option<&'a str> {
     let last = window.len() - 1;
-    let mut key = String::new();
     for (j, tok) in window.iter().enumerate() {
-        if (j > 0 && !tok.prefix.is_empty()) || (j < last && !tok.suffix.is_empty()) {
+        if tok.core.is_empty()
+            || lookup.exact.contains(tok.core)
+            || (j > 0 && (!tok.prefix.is_empty() || tok.ws.contains(['\r', '\n'])))
+            || (j < last && !tok.suffix.is_empty())
+        {
             return None;
         }
-        if !phonetic_eligible(tok.core, lookup) {
-            return None;
-        }
-        key.push_str(&phonetic_key(tok.core));
     }
-    if key.is_empty() {
-        return None;
-    }
-    let joined = window
-        .iter()
-        .flat_map(|t| t.core.chars())
-        .collect::<String>()
-        .to_lowercase();
-    let span = span_text(window);
-    best_candidate(&key, &joined, &span, lookup)
-}
-
-/// Single-token repair: casing first (aggressive), then guarded phonetics.
-fn match_single<'a>(tok: &Token, lookup: &Lookup<'a>) -> Option<&'a str> {
-    if tok.core.is_empty() {
-        return None;
-    }
-    let lc = tok.core.to_lowercase();
-    if let Some(&idx) = lookup.casing.get(&lc) {
-        // Case-insensitive hit with different casing (exact matches were
-        // frozen earlier): rewrite to the vocabulary casing.
-        return Some(lookup.terms[idx].text);
-    }
-    if !phonetic_eligible(tok.core, lookup) {
-        return None;
-    }
-    let key = phonetic_key(tok.core);
-    if key.is_empty() {
-        return None;
-    }
-    best_candidate(&key, &lc, tok.core, lookup)
-}
-
-/// Whether a word may be phonetically corrected: long enough, not a common
-/// English word, and not itself an exact vocabulary term.
-fn phonetic_eligible(core: &str, lookup: &Lookup) -> bool {
-    if core.chars().count() < MIN_PHONETIC_CHARS || lookup.exact.contains(core) {
-        return false;
-    }
-    STOPLIST
-        .binary_search(&core.to_lowercase().as_str())
-        .is_err()
-}
-
-/// Closest candidate in the phonetic bucket for `key` that passes the
-/// distance guard; ties break toward the earlier vocabulary entry (user
-/// terms come first in the merged list). `span` is the original text of the
-/// window so a verbatim term is never counted as a correction.
-fn best_candidate<'a>(key: &str, joined: &str, span: &str, lookup: &Lookup<'a>) -> Option<&'a str> {
-    let word_len = joined.chars().count();
-    let limit = distance_threshold(word_len);
-    let mut best: Option<(usize, &'a str)> = None;
-    for &idx in lookup.buckets.get(key)? {
-        let term = &lookup.terms[idx];
-        if term.text == span || term.joined.chars().count().abs_diff(word_len) > limit {
-            continue;
-        }
-        let dist = levenshtein(joined, &term.joined);
-        if dist <= limit && best.is_none_or(|(d, _)| dist < d) {
-            best = Some((dist, term.text));
-        }
-    }
-    best.map(|(_, text)| text)
-}
-
-/// Edit-distance guard scaled to word length (chars): short words allow one
-/// edit, medium two, long identifiers three.
-fn distance_threshold(chars: usize) -> usize {
-    match chars {
-        0..=5 => 1,
-        6..=10 => 2,
-        _ => 3,
-    }
+    let joined: String = window.iter().map(|t| t.core.to_lowercase()).collect();
+    let &term = lookup.joined.get(&joined)?;
+    (term != span_text(window)).then_some(term)
 }
 
 /// One whitespace-delimited chunk: the whitespace before it, leading
@@ -589,76 +213,12 @@ fn flush_word(words: &mut Vec<String>, current: &mut String) {
     }
 }
 
-/// Refined Soundex key (see module doc): consonant classes with the first
-/// letter coded by class, vowels separating runs of equal codes, `h`/`w`
-/// transparent, variable length. Digits and non-ASCII alphanumerics code as
-/// themselves; the rare class-digit/literal-digit bucket collision is
-/// resolved by the distance guard. Vowel-only words yield an empty key and
-/// never match phonetically.
-fn phonetic_key(word: &str) -> String {
-    let mut key = String::new();
-    let mut last: Option<char> = None;
-    for ch in word.chars().flat_map(char::to_lowercase) {
-        let code = match ch {
-            'b' | 'f' | 'p' | 'v' => '1',
-            'c' | 'g' | 'j' | 'k' | 'q' | 's' | 'x' | 'z' => '2',
-            'd' | 't' => '3',
-            'l' => '4',
-            'm' | 'n' => '5',
-            'r' => '6',
-            'a' | 'e' | 'i' | 'o' | 'u' | 'y' => {
-                last = None;
-                continue;
-            }
-            'h' | 'w' => continue,
-            _ if ch.is_alphanumeric() => ch,
-            _ => {
-                last = None;
-                continue;
-            }
-        };
-        if last != Some(code) {
-            key.push(code);
-        }
-        last = Some(code);
-    }
-    key
-}
-
-/// Standard two-row Levenshtein over chars.
-fn levenshtein(a: &str, b: &str) -> usize {
-    let a: Vec<char> = a.chars().collect();
-    let b: Vec<char> = b.chars().collect();
-    if a.is_empty() {
-        return b.len();
-    }
-    let mut prev: Vec<usize> = (0..=b.len()).collect();
-    let mut curr = vec![0usize; b.len() + 1];
-    for (i, ca) in a.iter().enumerate() {
-        curr[0] = i + 1;
-        for (j, cb) in b.iter().enumerate() {
-            let cost = usize::from(ca != cb);
-            curr[j + 1] = (prev[j] + cost).min(prev[j + 1] + 1).min(curr[j] + 1);
-        }
-        std::mem::swap(&mut prev, &mut curr);
-    }
-    prev[b.len()]
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn vocab(items: &[&str]) -> Vec<String> {
         items.iter().map(|s| s.to_string()).collect()
-    }
-
-    #[test]
-    fn stoplist_is_sorted_and_deduped() {
-        assert!(
-            STOPLIST.windows(2).all(|w| w[0] < w[1]),
-            "STOPLIST must stay alphabetized for binary_search"
-        );
     }
 
     #[test]
@@ -678,54 +238,44 @@ mod tests {
     }
 
     #[test]
-    fn stoplist_word_still_casing_repairs_when_in_vocab() {
-        // "will" is stoplisted (no phonetic repair) but a genuine vocab entry
-        // still gets its casing.
+    fn explicit_common_word_can_still_receive_casing() {
         let v = vocab(&["Will"]);
         assert_eq!(correct("i asked will to help", &v), "i asked Will to help");
     }
 
     #[test]
-    fn phonetic_single_word_accepted() {
+    fn similar_spelling_alone_never_authorizes_a_replacement() {
         let v = vocab(&["Kubernetes", "Postgres"]);
-        // Same key (216532), distance 1 <= 2 for a 10-char word.
         assert_eq!(
             correct("we deployed kubernetis", &v),
-            "we deployed Kubernetes"
+            "we deployed kubernetis"
         );
-        // Same key (123262: trailing s merges), distance 1.
         assert_eq!(
             correct("dump it from postgrez", &v),
-            "dump it from Postgres"
+            "dump it from postgrez"
         );
     }
 
     #[test]
-    fn phonetic_rejected_too_short_word() {
-        // "ct" would match "Cat" (key 23, distance 1) but is under 3 chars.
+    fn preserves_too_short_word() {
         let v = vocab(&["Cat"]);
         assert_eq!(correct("the ct scanner", &v), "the ct scanner");
     }
 
     #[test]
-    fn phonetic_rejected_stoplist_word() {
-        // "would" and "Wold" share key 43 at distance 1, but "would" is a
-        // common English word and must never be phonetically rewritten.
+    fn preserves_stoplist_word() {
         let v = vocab(&["Wold"]);
         assert_eq!(correct("i would go", &v), "i would go");
     }
 
     #[test]
-    fn phonetic_rejected_distance_too_far() {
-        // Same key as Kubernetes but 4 edits away; limit for 11 chars is 3.
+    fn preserves_distance_too_far() {
         let v = vocab(&["Kubernetes"]);
         assert_eq!(correct("try coopernetes now", &v), "try coopernetes now");
     }
 
     #[test]
-    fn phonetic_rejected_key_mismatch() {
-        // "ruse" is one edit from "Rust" but keys differ (62 vs 623): both
-        // conditions are required.
+    fn preserves_key_mismatch() {
         let v = vocab(&["Rust"]);
         assert_eq!(correct("a clever ruse", &v), "a clever ruse");
     }
@@ -843,7 +393,7 @@ mod tests {
         let v = vocab(&["Müller", "Kubernetes"]);
         assert_eq!(
             correct("we met müller at the kubernetis talk", &v),
-            "we met Müller at the Kubernetes talk"
+            "we met Müller at the kubernetis talk"
         );
         // Unrelated non-ASCII words pass through untouched.
         assert_eq!(correct("the café was naïve", &v), "the café was naïve");
@@ -858,9 +408,32 @@ mod tests {
         );
         assert_eq!(
             out,
-            "i pushed the UserController to GitHub and deployed PostgreSQL on Kubernetes."
+            "i pushed the UserController to GitHub and deployed PostgreSQL on kubernetis."
         );
-        assert_eq!(count, 4);
+        assert_eq!(count, 3);
+    }
+
+    #[test]
+    fn ordinary_words_survive_a_collision_heavy_dictionary() {
+        let v = vocab(&["Fresha", "Cloude", "Wold", "Oneli", "Rust", "Planer"]);
+        for text in [
+            "We need a fresh approach.",
+            "The cloud is only one option.",
+            "I would rather leave the plane alone.",
+            "A clever ruse does not change my plan.",
+        ] {
+            assert_eq!(correct_counted(text, &v), (text.to_string(), 0));
+        }
+    }
+
+    #[test]
+    fn exact_joining_includes_short_words_but_never_crosses_a_line() {
+        let v = vocab(&["no-show", "TypeScript", "GitHub"]);
+        assert_eq!(
+            correct("a no show in type script", &v),
+            "a no-show in TypeScript"
+        );
+        assert_eq!(correct("git\n hub", &v), "git\n hub");
     }
 
     #[test]

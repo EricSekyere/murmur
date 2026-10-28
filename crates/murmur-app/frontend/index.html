@@ -885,7 +885,7 @@
               <div class="settings-group">
                 <div class="settings-row__text">
                   <label class="settings-label" for="vocabulary-input">Personal Dictionary</label>
-                  <span class="settings-hint">Names, jargon, or terms the model gets wrong. One per line; they bias transcription toward correct spelling.</span>
+                  <span class="settings-hint">Names and terms, one per line. Whisper also uses these as recognition hints. All models repair matching capitalization and joined words; similar-sounding words are left as heard.</span>
                 </div>
                 <textarea id="vocabulary-input" class="settings-textarea" rows="4" placeholder="GitHub&#10;Kubernetes&#10;PostgreSQL"></textarea>
                 <div class="settings-actions">
