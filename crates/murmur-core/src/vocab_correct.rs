@@ -6,6 +6,8 @@
 
 use std::collections::{HashMap, HashSet};
 
+pub mod replacements;
+
 const MAX_WINDOW: usize = 3;
 
 /// Apply exact vocabulary formatting, preserving unmatched text byte for byte.
