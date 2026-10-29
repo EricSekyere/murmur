@@ -1,4 +1,7 @@
-﻿param([string]$OutputDirectory = 'target/transcription-stress')
+param(
+    [string]$OutputDirectory = 'target/transcription-stress',
+    [string]$PhraseManifest = ''
+)
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Speech
 $directory = [System.IO.Path]::GetFullPath((Join-Path (Get-Location) $OutputDirectory))
@@ -16,6 +19,15 @@ $phrases = @(
     @{ id='thanks'; expected='Thank you.' },
     @{ id='okay'; expected='Okay.' }
 )
+if ($PhraseManifest) {
+    $loadedPhrases = Get-Content -LiteralPath $PhraseManifest -Raw | ConvertFrom-Json
+    $phrases = @(foreach ($phrase in $loadedPhrases) {
+        $entry = @{ id=$phrase.id; expected=$phrase.expected }
+        if ($phrase.identifier) { $entry.identifier=$phrase.identifier }
+        $entry
+    })
+    if (-not $phrases.Count) { throw 'The phrase manifest must contain at least one phrase.' }
+}
 $manifest = @()
 $voice = New-Object System.Speech.Synthesis.SpeechSynthesizer
 try {
