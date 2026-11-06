@@ -883,6 +883,12 @@
               <h3 class="settings-section-title" id="settings-vocabulary" tabindex="-1">Vocabulary</h3>
               <!-- Personal Dictionary -->
               <div class="settings-group">
+                <label class="settings-label" for="corrections-input">Reviewed corrections</label>
+                <p class="settings-hint" id="corrections-hint">Add only corrections you want applied every time, in all apps. One pair per line: heard phrase =&gt; intended phrase. Use a longer phrase to narrow the match. Whole words match regardless of capitalization; edits to transcripts never add rules automatically.</p>
+                <textarea id="corrections-input" class="settings-textarea" rows="3" aria-describedby="corrections-hint" placeholder="open super base =&gt; open Supabase"></textarea>
+                <button id="corrections-save" class="btn-small" disabled>Save Corrections</button>
+              </div>
+              <div class="settings-group">
                 <div class="settings-row__text">
                   <label class="settings-label" for="vocabulary-input">Personal Dictionary</label>
                   <span class="settings-hint">Names and terms, one per line. Whisper also uses these as recognition hints. All models repair matching capitalization and joined words; similar-sounding words are left as heard.</span>
@@ -1348,6 +1354,7 @@
   <script src="js/transcription.js"></script>
   <script src="js/meetings.js"></script>
   <script src="js/settings.js"></script>
+  <script src="js/corrections.js"></script>
   <script src="js/licenses.data.js"></script>
   <script src="js/about.js"></script>
   <script src="js/analytics.js"></script>

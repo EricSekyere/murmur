@@ -81,6 +81,7 @@ pub(crate) fn get_status(app: tauri::AppHandle, state: State<'_, AppState>) -> s
         "activation_mode": settings.activation_mode,
         "double_tap_key": settings.double_tap_key,
         "custom_vocabulary": settings.custom_vocabulary,
+        "vocabulary_replacements": settings.vocabulary_replacements,
         "sound_feedback": settings.sound_feedback,
         "vad_threshold": settings.vad_threshold,
         "live_preview": settings.live_preview,
@@ -571,6 +572,7 @@ pub(crate) fn set_wake_word_enabled(app: tauri::AppHandle, enabled: bool) -> Res
         None,
         None,
         None,
+        None,
         Some(enabled),
         None,
     )
@@ -600,6 +602,7 @@ pub(crate) fn update_settings(
     activation_mode: Option<String>,
     double_tap_key: Option<String>,
     custom_vocabulary: Option<Vec<String>>,
+    vocabulary_replacements: Option<Vec<murmur_core::vocab_correct::replacements::Replacement>>,
     sound_feedback: Option<bool>,
     vad_threshold: Option<f32>,
     live_preview: Option<bool>,
@@ -620,6 +623,9 @@ pub(crate) fn update_settings(
     wake_word_enabled: Option<bool>,
     wake_word_sensitivity: Option<String>,
 ) -> Result<(), String> {
+    if let Some(rules) = &vocabulary_replacements {
+        murmur_core::vocab_correct::replacements::validate(rules)?;
+    }
     let mut settings = state.settings.lock().unwrap_or_else(|e| e.into_inner());
     // Only warn about a model/language mismatch if those fields were touched.
     let language_touched = language.is_some() || translate_to_english.is_some();
@@ -701,6 +707,9 @@ pub(crate) fn update_settings(
             .map(|w| w.trim().to_string())
             .filter(|w| !w.is_empty())
             .collect();
+    }
+    if let Some(rules) = vocabulary_replacements {
+        settings.vocabulary_replacements = rules;
     }
     if let Some(sf) = sound_feedback {
         settings.sound_feedback = sf;

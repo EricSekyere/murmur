@@ -60,13 +60,14 @@ fn transcribe_preview(state: &AppState, audio: &AudioBuffer) -> Option<String> {
     if audio.samples.len() < MIN_PREVIEW_SAMPLES {
         return None;
     }
-    let (language, translate, profile, user_vocab) = {
+    let (language, translate, profile, user_vocab, replacements) = {
         let settings = state.settings.lock().unwrap_or_else(|e| e.into_inner());
         (
             settings.language.clone(),
             settings.translate_to_english,
             settings.transcription_profile,
             settings.custom_vocabulary.clone(),
+            settings.vocabulary_replacements.clone(),
         )
     };
     let vocabulary = crate::transcribe::vocabulary_snapshot(state, user_vocab);
@@ -89,5 +90,8 @@ fn transcribe_preview(state: &AppState, audio: &AudioBuffer) -> Option<String> {
     crate::transcribe::correct_vocabulary(&mut result, &vocabulary);
     let text =
         crate::transcribe::preview_text(&result, profile, prepared.duration_secs, non_english)?;
-    Some(text.to_string())
+    Some(murmur_core::vocab_correct::replacements::apply(
+        text,
+        &replacements,
+    ))
 }

@@ -112,6 +112,17 @@ change "a fresh approach" into "a Fresha approach". The dictionary does not
 guess corrections from phonetic similarity, and joins never cross sentences
 or line breaks.
 
+## Reviewed corrections
+
+Under Vocabulary, enter `heard phrase => intended phrase`, one pair per line,
+and save it. These rules apply in every app, only to matching whole words,
+without fuzzy guesses. Use a longer phrase to narrow a correction, for example
+`open super base => open Supabase`. Punctuation around the phrase is preserved;
+matches never cross punctuation or a paragraph break. Longer matches win, and
+replacement output is not scanned again. Up to 100 pairs are allowed, each
+with at most 8 heard words and 160 characters per side. Remove a line and save
+to stop that correction. Editing a transcript never creates a rule automatically.
+
 ## Learn from history
 
 Click Learn from history to scan your local history for distinctive

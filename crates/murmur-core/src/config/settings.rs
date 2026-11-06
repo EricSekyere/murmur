@@ -194,6 +194,10 @@ pub struct Settings {
     #[serde(default)]
     pub custom_vocabulary: Vec<String>,
 
+    /// Explicit whole-phrase corrections, approved in Vocabulary settings.
+    #[serde(default)]
+    pub vocabulary_replacements: Vec<crate::vocab_correct::replacements::Replacement>,
+
     /// Play a short chime when recording starts and stops.
     #[serde(default = "default_true")]
     pub sound_feedback: bool,
@@ -561,6 +565,7 @@ impl Default for Settings {
             double_tap_key: default_double_tap_key(),
             activation_mode: default_activation_mode(),
             custom_vocabulary: Vec::new(),
+            vocabulary_replacements: Vec::new(),
             sound_feedback: true,
             live_preview: true,
             snippets: Vec::new(),
@@ -840,6 +845,7 @@ impl Settings {
     /// Clamp collections to their count and per-element length caps, so an
     /// over-large hand-edited config is truncated rather than rejected.
     pub fn clamp_collections(&mut self) {
+        crate::vocab_correct::replacements::sanitize(&mut self.vocabulary_replacements);
         self.custom_vocabulary.truncate(MAX_VOCAB_ENTRIES);
         for w in &mut self.custom_vocabulary {
             truncate_chars(w, MAX_VOCAB_ENTRY_CHARS);

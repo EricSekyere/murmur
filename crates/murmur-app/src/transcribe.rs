@@ -193,7 +193,7 @@ fn transcribe_with(
             .unwrap_or_else(|e| e.into_inner()),
         PromptContext::Detached => None,
     };
-    let (developer_mode, clean_speech, profile, user_vocab, language, translate) = {
+    let (developer_mode, clean_speech, profile, user_vocab, language, translate, replacements) = {
         let settings = state.settings.lock().unwrap_or_else(|e| e.into_inner());
         (
             dev_override.unwrap_or(settings.developer_mode),
@@ -202,6 +202,7 @@ fn transcribe_with(
             settings.custom_vocabulary.clone(),
             settings.language.clone(),
             settings.translate_to_english,
+            settings.vocabulary_replacements.clone(),
         )
     };
     let vocabulary = vocabulary_snapshot(&state, user_vocab);
@@ -242,6 +243,7 @@ fn transcribe_with(
         Err(reason) => return reject(app, &state, reason, &prepared, Some(&result.text), context),
     };
 
+    let text = murmur_core::vocab_correct::replacements::apply(&text, &replacements);
     tracing::info!("Transcription accepted ({} chars)", text.chars().count());
     // Transcript only at trace, so debug-level diagnostics never log it.
     tracing::trace!("Accepted text: '{}'", text);
