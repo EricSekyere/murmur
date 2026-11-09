@@ -10,6 +10,18 @@ use tauri_plugin_global_shortcut::ShortcutState;
 use crate::session::handle_toggle;
 use crate::state::AppState;
 
+#[cfg(target_os = "macos")]
+mod macos_tap;
+#[cfg(target_os = "macos")]
+use macos_tap::listen;
+
+// macOS has its own listener: rdev's resolves key text off the main thread,
+// which macOS traps (see input/macos_tap.rs).
+#[cfg(not(target_os = "macos"))]
+fn listen(mut on_event: impl FnMut(rdev::EventType) + 'static) -> anyhow::Result<()> {
+    rdev::listen(move |event| on_event(event.event_type)).map_err(|e| anyhow::anyhow!("{e:?}"))
+}
+
 /// Dispatch the configured global hotkey by activation mode: toggle (press
 /// flips) or hold/push-to-talk (press starts, release stops).
 pub(crate) fn handle_hotkey_event(app: &tauri::AppHandle, shortcut_state: ShortcutState) {
@@ -223,47 +235,46 @@ pub(crate) fn spawn_global_input_listener(app: tauri::AppHandle) {
         #[cfg(any(windows, target_os = "macos"))]
         let mut hold_active = false;
 
-        if let Err(e) = rdev::listen(move |event| {
-            let _ =
-                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| match event.event_type {
-                    #[cfg(any(windows, target_os = "macos"))]
-                    rdev::EventType::KeyPress(key) => {
-                        // Refresh target + mode from settings (try_lock keeps
-                        // the hook non-blocking; stale-by-one-event is fine).
-                        let hold_mode = sync_activation(&app, &mut tracker.target);
-                        if hold_mode {
-                            // Auto-repeat resends KeyPress; begin_recording is
-                            // idempotent, so a held key won't restart.
-                            if tracker.is_target(key) && !hold_active {
-                                hold_active = true;
-                                handle_hold_start(&app);
-                            }
-                        } else {
-                            tracker.on_key_press(key);
+        if let Err(e) = listen(move |event_type| {
+            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| match event_type {
+                #[cfg(any(windows, target_os = "macos"))]
+                rdev::EventType::KeyPress(key) => {
+                    // Refresh target + mode from settings (try_lock keeps
+                    // the hook non-blocking; stale-by-one-event is fine).
+                    let hold_mode = sync_activation(&app, &mut tracker.target);
+                    if hold_mode {
+                        // Auto-repeat resends KeyPress; begin_recording is
+                        // idempotent, so a held key won't restart.
+                        if tracker.is_target(key) && !hold_active {
+                            hold_active = true;
+                            handle_hold_start(&app);
                         }
+                    } else {
+                        tracker.on_key_press(key);
                     }
-                    #[cfg(any(windows, target_os = "macos"))]
-                    rdev::EventType::KeyRelease(key) => {
-                        let hold_mode = sync_activation(&app, &mut tracker.target);
-                        if hold_mode {
-                            if tracker.is_target(key) && hold_active {
-                                hold_active = false;
-                                handle_hold_stop(&app);
-                            }
-                        } else if tracker.on_key_release(key) {
-                            handle_toggle(&app);
-                            show_widget_window(&app);
+                }
+                #[cfg(any(windows, target_os = "macos"))]
+                rdev::EventType::KeyRelease(key) => {
+                    let hold_mode = sync_activation(&app, &mut tracker.target);
+                    if hold_mode {
+                        if tracker.is_target(key) && hold_active {
+                            hold_active = false;
+                            handle_hold_stop(&app);
                         }
+                    } else if tracker.on_key_release(key) {
+                        handle_toggle(&app);
+                        show_widget_window(&app);
                     }
-                    rdev::EventType::ButtonPress(
-                        rdev::Button::Left | rdev::Button::Right | rdev::Button::Middle,
-                    ) => {
-                        #[cfg(any(windows, target_os = "macos"))]
-                        tracker.invalidate();
-                        handle_click_to_stop(&app);
-                    }
-                    _ => {}
-                }));
+                }
+                rdev::EventType::ButtonPress(
+                    rdev::Button::Left | rdev::Button::Right | rdev::Button::Middle,
+                ) => {
+                    #[cfg(any(windows, target_os = "macos"))]
+                    tracker.invalidate();
+                    handle_click_to_stop(&app);
+                }
+                _ => {}
+            }));
         }) {
             tracing::error!("Global input listener failed: {:?}", e);
         }

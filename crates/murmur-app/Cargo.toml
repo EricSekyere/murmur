@@ -84,5 +84,12 @@ windows = { version = "0.58", features = [
     "Win32_UI_WindowsAndMessaging",
 ] }
 
+# Global input listener: a listen-only Quartz event tap that reads key codes
+# without rdev's keyboard-layout lookup, which macOS traps off the main thread
+# (input::macos_tap). Both are already in the tree via enigo and tao.
+[target.'cfg(target_os = "macos")'.dependencies]
+core-foundation = "0.10"
+core-graphics = "0.25"
+
 [dev-dependencies]
 tempfile = "3"
