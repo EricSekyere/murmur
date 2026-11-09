@@ -100,6 +100,11 @@ function renderHistory() {
       retryBtn.setAttribute('aria-label', 'Re-transcribe this entry with the current model');
       retryBtn.addEventListener('click', () => retranscribeEntry(entry.id, retryBtn));
       li.appendChild(retryBtn);
+      const exampleBtn = document.createElement('button');
+      exampleBtn.className = 'history-item__retry';
+      exampleBtn.textContent = 'Save mistake';
+      exampleBtn.addEventListener('click', () => openCorrectionExample(entry));
+      li.appendChild(exampleBtn);
     }
     li.appendChild(copyBtn);
     historyList.appendChild(li);

@@ -33,16 +33,18 @@ original entry is left unchanged). Re-transcription waits its turn:
 while you are dictating or recording a meeting it refuses rather than
 slowing live speech.
 
-> **Privacy:** That audio lives in RAM only. It is never written to
-> disk, and it is dropped on exit, on Clear, and when Save History is
-> turned off.
+> **Privacy:** Automatic retention keeps audio in RAM and drops it on exit,
+> Clear, or disabling history. **Save mistake** lets you explicitly save a
+> selected clip with your corrected text for local testing. These saved
+> examples remain until you delete them under **Saved examples**.
 
 ## Clear history
 
 Click Clear to wipe the stored log.
 
 > **Privacy:** If you turn off Save History in Settings, the existing log
-> is purged and the file is removed, so nothing lingers on disk.
+> is purged and its file is removed. Explicitly saved correction examples
+> remain separate and can be deleted under Saved examples.
 
 ## Tagged by app
 

@@ -1,6 +1,6 @@
 # Privacy Policy
 
-**Effective date:** August 14, 2026
+**Effective date:** October 28, 2026
 
 This Privacy Policy explains how **Murmur** (the "Software"), a local-first
 desktop dictation application provided by **Eric S.** ("we," "us," "our"),
@@ -20,11 +20,15 @@ information about you or how you use Murmur.
 - Your microphone audio is captured locally, transcribed locally by the bundled
   speech-to-text engine (whisper.cpp or NVIDIA Parakeet), and delivered as text
   on your machine.
-- During dictation, audio is held in memory only for the duration of
-  processing and is never written to disk. The most recent few utterances may
-  also be kept in memory until the app exits so a phrase can be re-transcribed
-  from its history entry; that audio is likewise never written to disk.
-- **Meeting mode** is the one exception: when speaker labels are enabled (the
+- During dictation, audio is held in memory for processing and recent
+  re-transcription. Automatic dictation retention never writes audio to disk.
+- **Saved correction examples:** only when you choose **Save mistake** and
+  then **Save audio and correction locally**, Murmur saves that selected clip,
+  its recognized text, and your corrected text under `correction-examples` in
+  its config directory. Nothing is uploaded or learned automatically. These
+  examples remain after app exit, clearing history, or turning history off;
+  remove them individually under **Saved examples** or delete their folders.
+- **Meeting mode:** when speaker labels are enabled (the
   diarization model is downloaded), meeting audio is temporarily spooled to a
   file in Murmur's config directory so it can be processed after the meeting.
   That file is deleted immediately after processing, on any error, and, if the app crashed mid-meeting, swept on the next launch. It never leaves your
@@ -55,6 +59,8 @@ The following is stored **only on your own computer**, never in the cloud:
 - **Diagnostic logs:** local log files for troubleshooting. Transcript text is
   not written to logs at the default log level.
 - **Models:** downloaded speech-to-text model files.
+- **Correction examples:** audio and text you explicitly saved for accuracy
+  testing, with a local delete control separate from history.
 
 You can remove any of this by clearing history in the app, deleting Murmur's
 config directory, or uninstalling the Software.

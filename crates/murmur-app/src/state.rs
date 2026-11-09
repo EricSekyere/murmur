@@ -57,7 +57,8 @@ pub(crate) struct AppState {
     /// Persistent, searchable transcription history.
     pub history: Mutex<murmur_core::history::History>,
     /// Recent utterance audio kept in RAM only, keyed by history entry id, so
-    /// an entry can be re-transcribed. Never written to disk; cleared on
+    /// an entry can be re-transcribed or explicitly exported as a correction
+    /// example. Automatic retention never writes to disk; cleared on
     /// Clear History and when Save History is turned off.
     pub retained_audio: Mutex<crate::retained_audio::RetainedAudio>,
     /// Single-flight flag: at most one re-transcription runs at a time.

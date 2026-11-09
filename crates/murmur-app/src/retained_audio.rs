@@ -1,6 +1,7 @@
 //! In-memory store of recent utterance audio so a history entry can be
-//! re-transcribed. RAM only, by design: nothing in this module may ever write
-//! audio to disk, under any setting (see PRIVACY.md). The store empties itself
+//! re-transcribed. This module keeps audio in RAM only. An explicit Save
+//! Correction Example action can export a selected clip (see PRIVACY.md).
+//! The store empties itself
 //! on app exit, and is cleared explicitly on Clear History and when the user
 //! turns Save History off.
 
