@@ -1,8 +1,9 @@
 use super::AudioBuffer;
 use super::aec_health::AecHealth;
+use super::device::select_input_device;
 use super::warm::{ConfigCache, SessionState, StreamKey};
 use anyhow::{Context, Result};
-use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+use cpal::traits::{DeviceTrait, StreamTrait};
 use cpal::{SampleFormat, SupportedStreamConfig};
 use std::sync::{Arc, Mutex};
 
@@ -617,34 +618,6 @@ impl AudioCapture {
             false
         }
     }
-}
-
-fn select_input_device(host: &cpal::Host, preferred_device: Option<&str>) -> Result<cpal::Device> {
-    if let Some(preferred_name) = preferred_device
-        .map(str::trim)
-        .filter(|name| !name.is_empty())
-    {
-        let devices = host
-            .input_devices()
-            .context("Failed to enumerate input devices")?;
-
-        for device in devices {
-            let Ok(name) = device.name() else {
-                continue;
-            };
-            if name == preferred_name {
-                return Ok(device);
-            }
-        }
-
-        tracing::warn!(
-            "Preferred input device {:?} not found, falling back to default input device",
-            preferred_name
-        );
-    }
-
-    host.default_input_device()
-        .ok_or_else(|| anyhow::anyhow!("No input device available"))
 }
 
 fn choose_input_config(device: &cpal::Device) -> Result<SupportedStreamConfig> {

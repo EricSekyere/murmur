@@ -196,8 +196,8 @@ fn primary_modifier() -> enigo::Key {
 
 #[cfg(not(windows))]
 fn send_enigo_key(key: enigo::Key, count: usize) -> Result<()> {
-    use enigo::{Enigo, Keyboard, Settings};
-    let mut enigo = Enigo::new(&Settings::default())?;
+    use enigo::Keyboard;
+    let mut enigo = super::simulator::new_simulator()?;
     for _ in 0..count {
         enigo.key(key, enigo::Direction::Click)?;
     }
@@ -207,8 +207,8 @@ fn send_enigo_key(key: enigo::Key, count: usize) -> Result<()> {
 /// Press modifiers, click `key`, then release modifiers in reverse order.
 #[cfg(not(windows))]
 fn send_enigo_chord(modifiers: &[enigo::Key], key: enigo::Key) -> Result<()> {
-    use enigo::{Direction, Enigo, Keyboard, Settings};
-    let mut enigo = Enigo::new(&Settings::default())?;
+    use enigo::{Direction, Keyboard};
+    let mut enigo = super::simulator::new_simulator()?;
     for &m in modifiers {
         enigo.key(m, Direction::Press)?;
     }
@@ -715,9 +715,9 @@ fn linux_type_text(text: &str) -> Result<()> {
         );
         return clipboard_paste(text);
     }
-    use enigo::{Enigo, Keyboard, Settings};
+    use enigo::Keyboard;
     tracing::debug!("Typing {} chars via enigo (X11)", text.chars().count());
-    let mut enigo = Enigo::new(&Settings::default())?;
+    let mut enigo = super::simulator::new_simulator()?;
     enigo.text(text)?;
     Ok(())
 }
@@ -737,7 +737,7 @@ fn is_wayland() -> bool {
 fn clipboard_paste(text: &str) -> Result<()> {
     use anyhow::Context;
     use arboard::Clipboard;
-    use enigo::{Enigo, Key, Keyboard, Settings};
+    use enigo::{Key, Keyboard};
 
     let mut clipboard = Clipboard::new().context("Failed to open clipboard")?;
     let previous = clipboard.get_text().ok();
@@ -748,7 +748,7 @@ fn clipboard_paste(text: &str) -> Result<()> {
 
     std::thread::sleep(std::time::Duration::from_millis(50));
 
-    let mut enigo = Enigo::new(&Settings::default())?;
+    let mut enigo = super::simulator::new_simulator()?;
 
     // macOS uses Cmd+V, others use Ctrl+V
     let modifier = if cfg!(target_os = "macos") {

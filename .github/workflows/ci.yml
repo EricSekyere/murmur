@@ -171,13 +171,13 @@ jobs:
   # release rather than during one; anyone touching macOS code can trigger it
   # by hand on their branch via workflow_dispatch.
   #
-  # Native arch only (aarch64 on macos-14), not universal: universal is a
+  # Native arch only (aarch64 on macos-15), not universal: universal is a
   # packaging concern for release.yml, and a single-arch pass catches the
   # compile errors this job exists to catch.
   build-and-test-macos:
-    name: Build & test (macos-14, merge gate)
+    name: Build & test (macos-15, merge gate)
     if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 60
     env:
       # Same as release-macos: whisper.cpp's ggml uses std::filesystem, which
@@ -186,6 +186,10 @@ jobs:
       MACOSX_DEPLOYMENT_TARGET: "10.15"
     steps:
       - uses: actions/checkout@v4
+      # Same as release-macos: without SOURCE_DATE_EPOCH, ggml compiles with
+      # -mcpu=native, which fails on macos-15 runners.
+      - name: Build whisper.cpp for any Apple Silicon CPU
+        run: echo "SOURCE_DATE_EPOCH=$(git log -1 --format=%ct)" >> "$GITHUB_ENV"
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: "1.93.1"
