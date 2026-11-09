@@ -1,0 +1,67 @@
+name: Build macOS
+
+# macOS compile + test gate. Nothing else compiles the ~36
+# `cfg(target_os = "macos")` sites before release-macos, which runs AFTER
+# release-windows has already published the GitHub release, so a macOS compile
+# error used to surface mid-publish as a release with no dmg.
+#
+# A workflow of its own so pull requests can be path-filtered (a job-level `if`
+# can't see which files changed): PRs that change Rust code, Cargo manifests or
+# the macOS app config run it, docs- and frontend-only PRs don't. Every push to
+# main still runs it to keep main releasable, and it can be started by hand on
+# any branch. No branch protection requires it, so a skipped run blocks nothing.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    paths:
+      - "**/*.rs"
+      - "**/Cargo.toml"
+      - "Cargo.lock"
+      - "crates/murmur-app/tauri.conf.json"
+      - "crates/murmur-app/Info.plist"
+      - ".github/workflows/build-macos.yml"
+  workflow_dispatch:
+
+# A newer push to the same ref supersedes an in-flight run (mirrors ci.yml).
+concurrency:
+  group: build-macos-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  # Native arch only (aarch64 on macos-15), not universal: universal is a
+  # packaging concern for release.yml, and a single-arch pass catches the
+  # compile errors this job exists to catch.
+  build-and-test-macos:
+    name: Build & test (macos-15)
+    runs-on: macos-15
+    timeout-minutes: 60
+    env:
+      # Same as release-macos: whisper.cpp's ggml uses std::filesystem, which
+      # AppleClang marks unavailable below macOS 10.15. Keep in sync with
+      # tauri.conf.json's bundle.macOS.minimumSystemVersion.
+      MACOSX_DEPLOYMENT_TARGET: "10.15"
+    steps:
+      - uses: actions/checkout@v4
+      # Same as release-macos: without SOURCE_DATE_EPOCH, ggml compiles with
+      # -mcpu=native, which fails on macos-15 runners.
+      - name: Build whisper.cpp for any Apple Silicon CPU
+        run: echo "SOURCE_DATE_EPOCH=$(git log -1 --format=%ct)" >> "$GITHUB_ENV"
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.93.1"
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target"
+      - name: Clippy (full features)
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Test (full features)
+        run: cargo test --workspace
