@@ -37,7 +37,7 @@ Download from [Releases](https://github.com/EricSekyere/murmur/releases/latest):
 | Platform | Package | Notes |
 |---|---|---|
 | Windows 10/11 x64 | `.exe` installer | Signed auto-updates. Requires an AVX2-capable CPU (any Intel/AMD from ~2013 onward). NVIDIA GPU optional. |
-| Linux x64 (X11) | `.deb` or `.AppImage` | AppImage carries signed auto-updates. |
+| Linux x64 (X11) | `.deb` or `.AppImage` | AppImage carries signed auto-updates. Requires an AVX2-capable CPU (any Intel/AMD from ~2013 onward). |
 | macOS (universal) | `.dmg` | Apple Silicon + Intel. Currently unsigned: right-click → Open on first launch. |
 
 The default model (~490 MB) downloads on first launch; downloads resume if interrupted.
