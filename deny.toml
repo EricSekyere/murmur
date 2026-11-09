@@ -75,6 +75,17 @@ ignore = [
     #     release. Remove both once plist ships with quick-xml >=0.41.
     "RUSTSEC-2026-0194",
     "RUSTSEC-2026-0195",
+
+    # zip 4.x: ZipArchive::extract aborts the process on a crafted symlink
+    # entry. Accepted with justification:
+    #   - A Windows-only dependency of tauri-plugin-updater. Its one extract()
+    #     call runs inside install, which Murmur reaches only through
+    #     download_and_install, after download has verified the archive's
+    #     minisign signature against our updater key. An archive not signed
+    #     with the release key never reaches extract().
+    #   - Fixed in zip >=9, which arrives with tauri-plugin-updater >=2.14;
+    #     that requires Tauri >=2.12. Remove with the Tauri 2.12 upgrade.
+    "RUSTSEC-2026-0429",
 ]
 
 [licenses]
