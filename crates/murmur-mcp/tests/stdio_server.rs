@@ -359,8 +359,10 @@ fn a_request_without_an_id_gets_no_response() {
     // No id makes this a notification; a response would be a protocol bug.
     server.send(&json!({"jsonrpc": "2.0", "method": "tools/list"}));
     server.assert_silent_for(Duration::from_millis(500));
-    // A null id must not wedge or crash the connection either.
+    // A null id is an invalid request: it earns an error, never a result, and
+    // must not wedge or crash the connection.
     server.send(&json!({"jsonrpc": "2.0", "id": null, "method": "tools/list"}));
+    assert_eq!(server.recv()["error"]["code"], -32600);
     server.send(&json!({"jsonrpc": "2.0", "id": 5, "method": "tools/list"}));
     assert_eq!(server.recv()["id"], 5);
 }
