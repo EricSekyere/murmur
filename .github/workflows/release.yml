@@ -118,6 +118,13 @@ jobs:
             choco install ninja --no-progress -y
           }
 
+      # Otherwise ggml probes the runner's CPU and, on one with AVX-512, adds
+      # /arch:AVX512 after the /arch:AVX2 above, which then crashes on most
+      # users' CPUs. SOURCE_DATE_EPOCH turns that probing off.
+      - name: Keep whisper.cpp on the AVX2 baseline
+        shell: bash
+        run: echo "SOURCE_DATE_EPOCH=$(git log -1 --format=%ct)" >> "$GITHUB_ENV"
+
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: ". -> target"
