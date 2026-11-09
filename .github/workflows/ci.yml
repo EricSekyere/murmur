@@ -186,6 +186,10 @@ jobs:
       MACOSX_DEPLOYMENT_TARGET: "10.15"
     steps:
       - uses: actions/checkout@v4
+      # Same as release-macos: without SOURCE_DATE_EPOCH, ggml compiles with
+      # -mcpu=native, which fails on macos-15 runners.
+      - name: Build whisper.cpp for any Apple Silicon CPU
+        run: echo "SOURCE_DATE_EPOCH=$(git log -1 --format=%ct)" >> "$GITHUB_ENV"
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: "1.93.1"

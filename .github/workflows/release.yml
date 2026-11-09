@@ -272,6 +272,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # ggml (whisper.cpp) compiles with -mcpu=native unless SOURCE_DATE_EPOCH
+      # is set. A shipped binary must not depend on the release runner's CPU: a
+      # newer runner would bake in instructions M1 Macs lack, and on macos-15
+      # the native build fails outright (i8mm intrinsics compiled for a CPU
+      # without i8mm). Off, it targets the arm64 baseline every Apple Silicon
+      # Mac has (NEON, dotprod, fp16).
+      - name: Build whisper.cpp for any Apple Silicon CPU
+        shell: bash
+        run: echo "SOURCE_DATE_EPOCH=$(git log -1 --format=%ct)" >> "$GITHUB_ENV"
+
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-apple-darwin,x86_64-apple-darwin
