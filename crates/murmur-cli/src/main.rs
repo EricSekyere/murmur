@@ -335,10 +335,9 @@ fn cmd_audio_test(device_name: Option<String>, all: bool, seconds: u64) -> Resul
             .ok_or_else(|| anyhow::anyhow!("Input device not found: {}", requested))?;
         targets.push(device);
     } else {
-        targets.push(
-            host.default_input_device()
-                .ok_or_else(|| anyhow::anyhow!("No default input device available"))?,
-        );
+        targets.push(murmur_core::audio::device::select_input_device(
+            &host, None,
+        )?);
     }
 
     for device in targets {
