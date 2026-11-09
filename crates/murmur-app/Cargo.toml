@@ -37,7 +37,10 @@ murmur-core = { workspace = true, features = ["indexer"] }
 # MCP server + client setup, shared with the CLI. Lets `murmur-app mcp` act as
 # a stdio MCP server and the Settings button wire up Cursor / Claude.
 murmur-mcp.workspace = true
-tauri = { version = "2", features = ["tray-icon", "image-png"] }
+# macos-private-api: without it macOS paints the transparent widget and caption
+# windows opaque. Must match tauri.conf.json's app.macOSPrivateApi; it rules
+# out the Mac App Store, which Murmur doesn't ship through.
+tauri = { version = "2", features = ["tray-icon", "image-png", "macos-private-api"] }
 serde.workspace = true
 serde_json = "1"
 tokio.workspace = true
