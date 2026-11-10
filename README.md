@@ -38,7 +38,7 @@ Download from [Releases](https://github.com/EricSekyere/murmur/releases/latest):
 |---|---|---|
 | Windows 10/11 x64 | `.exe` installer | Signed auto-updates. Requires an AVX2-capable CPU (any Intel/AMD from ~2013 onward). NVIDIA GPU optional. |
 | Linux x64 (X11) | `.deb` or `.AppImage` | AppImage carries signed auto-updates. Requires an AVX2-capable CPU (any Intel/AMD from ~2013 onward). |
-| macOS (universal) | `.dmg` | Apple Silicon + Intel. Currently unsigned: right-click → Open on first launch. |
+| macOS 10.15+ (universal) | `.dmg` | Apple Silicon + Intel. Not notarized yet, so the first launch says Apple could not verify Murmur: open System Settings → Privacy & Security and click **Open Anyway**. |
 
 The default model (~490 MB) downloads on first launch; downloads resume if interrupted.
 
