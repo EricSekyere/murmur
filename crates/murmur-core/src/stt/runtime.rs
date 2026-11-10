@@ -100,12 +100,34 @@ pub fn ort_dir() -> Result<PathBuf> {
     Ok(dir)
 }
 
-/// Full path to the ONNX Runtime DLL.
+/// The copy a macOS release ships in `Murmur.app/Contents/Frameworks`, given the
+/// app's executable (`Contents/MacOS/<exe>`). The release build re-signs it with
+/// the app's Team ID, so a signed app can load it with library validation on;
+/// a downloaded copy keeps Microsoft's signature and is refused.
+#[cfg(target_os = "macos")]
+fn bundled_dll_path_for(exe: &Path) -> Option<PathBuf> {
+    let contents = exe.parent()?.parent()?;
+    let dylib = contents.join("Frameworks").join(DLL_FILENAME);
+    dylib.is_file().then_some(dylib)
+}
+
+/// Full path to the ONNX Runtime DLL: the app bundle's own copy on a macOS
+/// release, otherwise the one [`download`] caches in the data directory.
 pub fn dll_path() -> Result<PathBuf> {
+    #[cfg(target_os = "macos")]
+    {
+        let bundled = std::env::current_exe()
+            .ok()
+            .and_then(|exe| bundled_dll_path_for(&exe));
+        if let Some(bundled) = bundled {
+            return Ok(bundled);
+        }
+    }
     Ok(ort_dir()?.join(DLL_FILENAME))
 }
 
-/// Check if the ONNX Runtime DLL is already downloaded.
+/// Whether the ONNX Runtime DLL is available, either bundled with the app or
+/// already downloaded.
 pub fn is_downloaded() -> bool {
     dll_path().map(|p| p.exists()).unwrap_or(false)
 }
@@ -322,4 +344,37 @@ pub fn apply_realtime(
         .with_intra_threads(1)?
         .with_intra_op_spinning(false)?
         .with_inter_op_spinning(false)
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod tests {
+    use super::*;
+
+    fn app_bundle(root: &Path) -> PathBuf {
+        let exe = root.join("Murmur.app/Contents/MacOS/murmur-app");
+        std::fs::create_dir_all(exe.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(root.join("Murmur.app/Contents/Frameworks")).unwrap();
+        std::fs::write(&exe, b"").unwrap();
+        exe
+    }
+
+    #[test]
+    fn finds_the_dylib_shipped_in_the_app_bundle() {
+        let dir = tempfile::tempdir().unwrap();
+        let exe = app_bundle(dir.path());
+        let dylib = dir
+            .path()
+            .join("Murmur.app/Contents/Frameworks/libonnxruntime.dylib");
+        std::fs::write(&dylib, b"").unwrap();
+
+        assert_eq!(bundled_dll_path_for(&exe), Some(dylib));
+    }
+
+    #[test]
+    fn no_bundled_dylib_outside_a_release_bundle() {
+        let dir = tempfile::tempdir().unwrap();
+        let exe = app_bundle(dir.path());
+
+        assert_eq!(bundled_dll_path_for(&exe), None);
+    }
 }

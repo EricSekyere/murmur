@@ -20,6 +20,7 @@ on:
       - "Cargo.lock"
       - "crates/murmur-app/tauri.conf.json"
       - "crates/murmur-app/Info.plist"
+      - ".github/scripts/fetch-ort-macos.sh"
       - ".github/workflows/build-macos.yml"
   workflow_dispatch:
 
@@ -65,3 +66,7 @@ jobs:
         run: cargo clippy --workspace --all-targets -- -D warnings
       - name: Test (full features)
         run: cargo test --workspace
+      # release-macos bundles this dylib after release-windows has published,
+      # so a stale pin or a broken script would ship a release with no dmg.
+      - name: Fetch the ONNX Runtime that release-macos bundles
+        run: .github/scripts/fetch-ort-macos.sh "$RUNNER_TEMP/ort"

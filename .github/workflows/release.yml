@@ -323,6 +323,19 @@ jobs:
         shell: bash
         run: cp whatsnew.data.js crates/murmur-app/frontend/js/whatsnew.data.js
 
+      # Ship ONNX Runtime (Parakeet, VAD, wake word) inside the app, where
+      # tauri re-signs it with our Team ID. A signed app can then load it with
+      # library validation on. The alternative, loading the copy the app
+      # downloads into a user-writable directory, would need library
+      # validation disabled, which lets any same-user process inject code that
+      # inherits Murmur's microphone and Accessibility grants.
+      - name: Bundle ONNX Runtime
+        shell: bash
+        run: |
+          .github/scripts/fetch-ort-macos.sh "$RUNNER_TEMP/ort"
+          printf '{ "bundle": { "macOS": { "frameworks": ["%s"] } } }' \
+            "$RUNNER_TEMP/ort/libonnxruntime.dylib" > crates/murmur-app/.ort.conf.json
+
       - name: Configure macOS signing
         shell: bash
         env:
@@ -379,5 +392,6 @@ jobs:
           # build actually produces macOS bundles: app (+ the updater
           # .app.tar.gz/.sig from createUpdaterArtifacts) and the dmg installer.
           # Without this, tauri builds the binary but no bundle, and
-          # tauri-action reports "No artifacts were found".
-          args: --target universal-apple-darwin --bundles app,dmg
+          # tauri-action reports "No artifacts were found". .ort.conf.json comes
+          # from the "Bundle ONNX Runtime" step.
+          args: --target universal-apple-darwin --bundles app,dmg --config .ort.conf.json
