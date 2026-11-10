@@ -3,6 +3,8 @@ pub mod clipboard;
 pub mod keyboard;
 #[cfg(feature = "keyboard")]
 pub mod paste;
+#[cfg(feature = "keyboard")]
+pub mod simulator;
 pub mod stdout;
 
 use serde::{Deserialize, Serialize};

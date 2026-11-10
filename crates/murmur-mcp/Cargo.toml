@@ -11,7 +11,7 @@ description = "MCP stdio server and client setup for Murmur, shared by the CLI a
 # Uses only murmur-core's history/config, but core needs its default features
 # to compile; both consumers (CLI, app) already pull these, so it's free there.
 murmur-core.workspace = true
-rmcp = { version = "1", features = [
+rmcp = { version = "3", features = [
     "server",
     "client",
     "macros",

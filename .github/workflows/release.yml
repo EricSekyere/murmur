@@ -118,6 +118,13 @@ jobs:
             choco install ninja --no-progress -y
           }
 
+      # Otherwise ggml probes the runner's CPU and, on one with AVX-512, adds
+      # /arch:AVX512 after the /arch:AVX2 above, which then crashes on most
+      # users' CPUs. SOURCE_DATE_EPOCH turns that probing off.
+      - name: Keep whisper.cpp on the AVX2 baseline
+        shell: bash
+        run: echo "SOURCE_DATE_EPOCH=$(git log -1 --format=%ct)" >> "$GITHUB_ENV"
+
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: ". -> target"
@@ -216,6 +223,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Before rust-cache, so its key covers the pinned CFLAGS. build-linux.yml
+      # checks the resulting binary on every PR.
+      - name: Pin the C/C++ CPU baseline
+        run: .github/scripts/cpu-baseline-env.sh
+
       - name: Install system dependencies
         timeout-minutes: 15
         run: .github/scripts/apt-install.sh libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev libasound2-dev libxdo-dev libx11-dev libxtst-dev libxi-dev libxcb1-dev cmake clang libclang-dev pkg-config
@@ -267,10 +279,20 @@ jobs:
   release-macos:
     needs: [prepare, release-windows]
     if: needs.prepare.outputs.release == 'true'
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
+
+      # ggml (whisper.cpp) compiles with -mcpu=native unless SOURCE_DATE_EPOCH
+      # is set. A shipped binary must not depend on the release runner's CPU: a
+      # newer runner would bake in instructions M1 Macs lack, and on macos-15
+      # the native build fails outright (i8mm intrinsics compiled for a CPU
+      # without i8mm). Off, it targets the arm64 baseline every Apple Silicon
+      # Mac has (NEON, dotprod, fp16).
+      - name: Build whisper.cpp for any Apple Silicon CPU
+        shell: bash
+        run: echo "SOURCE_DATE_EPOCH=$(git log -1 --format=%ct)" >> "$GITHUB_ENV"
 
       - uses: dtolnay/rust-toolchain@stable
         with:

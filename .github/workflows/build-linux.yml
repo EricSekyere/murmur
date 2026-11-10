@@ -33,6 +33,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Same baseline as release-linux, so the check below covers what ships.
+      # Before rust-cache: its key hashes CFLAGS, so no native-built whisper.cpp
+      # objects are restored.
+      - name: Pin the C/C++ CPU baseline
+        run: .github/scripts/cpu-baseline-env.sh
+
       # Tauri v2 needs webkit2gtk-4.1 + GTK3 + appindicator; the app also needs
       # ALSA (cpal), X11/xdo (enigo, arboard, global-hotkey, rdev), and
       # cmake/clang to build whisper.cpp.
@@ -60,6 +66,9 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: cargo tauri build --bundles deb,appimage
+
+      - name: Check the CPU baseline
+        run: .github/scripts/check-cpu-baseline.sh target/release/murmur-app
 
       - uses: actions/upload-artifact@v4
         with:

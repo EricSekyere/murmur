@@ -9,7 +9,7 @@ use murmur_mcp::{ActionBackend, ServerConfig};
 use rmcp::{
     ErrorData as McpError, ServerHandler, ServiceExt,
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
-    model::{CallToolResult, Content, ServerCapabilities, ServerInfo},
+    model::{CallToolResult, ContentBlock, InitializeResult, ServerCapabilities},
     schemars, tool, tool_handler, tool_router,
 };
 use serde::Deserialize;
@@ -36,14 +36,14 @@ impl EchoServer {
 
     #[tool(description = "Echo the input text back")]
     fn echo(&self, Parameters(req): Parameters<EchoRequest>) -> Result<CallToolResult, McpError> {
-        Ok(CallToolResult::success(vec![Content::text(req.text)]))
+        Ok(CallToolResult::success(vec![ContentBlock::text(req.text)]))
     }
 }
 
 #[tool_handler(router = self.tool_router)]
 impl ServerHandler for EchoServer {
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+    fn get_info(&self) -> InitializeResult {
+        InitializeResult::new(ServerCapabilities::builder().enable_tools().build())
     }
 }
 

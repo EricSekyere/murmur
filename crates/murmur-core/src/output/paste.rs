@@ -199,9 +199,9 @@ fn simulate_paste() -> Result<()> {
 /// Simulate Cmd+V (macOS) or Ctrl+V (Linux) using enigo.
 #[cfg(not(windows))]
 fn simulate_paste() -> Result<()> {
-    use enigo::{Enigo, Key, Keyboard, Settings};
+    use enigo::{Key, Keyboard};
 
-    let mut enigo = Enigo::new(&Settings::default())?;
+    let mut enigo = super::simulator::new_simulator()?;
 
     let modifier = if cfg!(target_os = "macos") {
         Key::Meta
