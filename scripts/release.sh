@@ -238,7 +238,9 @@ fi
 
 **Windows:** download the `.exe` installer and run it. Requires Windows 10/11 x64 with an AVX2-capable CPU (any Intel or AMD CPU from about 2013 onward). An NVIDIA GPU is optional and accelerates the larger models.
 
-**Linux (X11):** download the `.AppImage`, `chmod +x`, and run it, or install the `.deb`. Best on an X11 session; on Wayland, typing into other apps is limited.
+**Linux (X11):** download the `.AppImage`, `chmod +x`, and run it, or install the `.deb`. Requires an AVX2-capable CPU (any Intel or AMD CPU from about 2013 onward). Best on an X11 session; on Wayland, typing into other apps is limited.
+
+**macOS:** open the `.dmg` and drag Murmur to Applications. Requires macOS 10.15 or later, on Apple Silicon or Intel. Murmur isn't notarized yet, so the first launch says Apple could not verify it: open System Settings → Privacy & Security and click **Open Anyway**.
 
 Models download automatically on first launch. Installed copies update themselves.
 INSTALL
