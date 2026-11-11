@@ -149,21 +149,8 @@ fn function_or_char(token: &str) -> Option<ParsedKey> {
 /// modifier-only chord (e.g. "press windows") presses and releases just the
 /// modifiers, which is how the Start key works.
 fn press_chord(chord: &Chord) -> Result<()> {
-    use enigo::{Direction, Keyboard};
-    let mut enigo = murmur_core::output::simulator::new_simulator()
-        .context("initializing keystroke backend")?;
-    for &m in &chord.modifiers {
-        enigo.key(m, Direction::Press)?;
-    }
-    let taps: Result<()> = chord.taps.iter().try_for_each(|&k| {
-        enigo.key(k, Direction::Click)?;
-        Ok(())
-    });
-    for &m in chord.modifiers.iter().rev() {
-        // Best-effort unwind: modifiers must not stay held after a tap error.
-        let _ = enigo.key(m, Direction::Release);
-    }
-    taps
+    murmur_core::output::keyboard::press_chord(&chord.modifiers, &chord.taps)
+        .context("pressing keys")
 }
 
 #[cfg(windows)]

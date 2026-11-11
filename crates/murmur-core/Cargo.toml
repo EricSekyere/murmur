@@ -54,7 +54,7 @@ parakeet = ["dep:parakeet-rs", "dep:ort", "dep:zip", "dep:flate2", "dep:tar"]
 # `full` (CPU-only, no GPU SDK) so CI's full build covers the meeting pipeline.
 diarization = ["parakeet", "parakeet-rs/sortformer"]
 # Keystroke simulation
-keyboard = ["dep:enigo"]
+keyboard = ["dep:enigo", "dep:dispatch2"]
 # Opt-in BYO-key cloud rewrite backend. Strictly off by
 # default and deliberately NOT part of `full`: enabling it only compiles the
 # code; a request additionally requires the config opt-in and the
@@ -175,6 +175,17 @@ tree-sitter-java = { version = "0.23", optional = true }
 
 [dev-dependencies]
 tempfile = "3"
+
+# Moves keystroke synthesis onto the main thread (output::main_thread).
+[target.'cfg(target_os = "macos")'.dependencies]
+dispatch2 = { version = "0.3", optional = true }
+
+# Owns the process's main thread (no libtest harness) so it can service the
+# main dispatch queue the way the app's event loop does.
+[[test]]
+name = "macos_main_thread"
+harness = false
+required-features = ["keyboard"]
 
 # DirectML GPU execution provider for Parakeet — Windows only.
 [target.'cfg(windows)'.dependencies]

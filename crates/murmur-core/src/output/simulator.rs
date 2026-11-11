@@ -1,4 +1,4 @@
-//! The one place keystroke simulators are created.
+//! The one place keystroke simulators are created and driven.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -6,15 +6,38 @@ use enigo::{Enigo, NewConError, Settings};
 
 static PERMISSION_PROMPTED: AtomicBool = AtomicBool::new(false);
 
-/// A keystroke simulator for typing and paste shortcuts.
+/// How long keystrokes wait for a busy main thread before output falls back.
+#[cfg(target_os = "macos")]
+const MAIN_THREAD_WAIT: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// Run `keystrokes` against a fresh simulator: on the main thread on macOS,
+/// where enigo's key mapping traps anywhere else (see `output::main_thread`),
+/// and inline on other platforms.
 ///
 /// # Errors
 /// [`NewConError::NoPermission`] on macOS while the app (or, for a dev build,
-/// the terminal that launched it) lacks Accessibility permission. Only the
-/// first attempt in a run asks macOS to show its permission dialog; output
-/// falls back to the clipboard, and re-asking on every phrase would open the
-/// dialog each time the user speaks.
-pub fn new_simulator() -> Result<Enigo, NewConError> {
+/// the terminal that launched it) lacks Accessibility permission; whatever
+/// `keystrokes` returns; and on macOS, a main thread too busy to take the work.
+pub fn with_simulator<R, F>(keystrokes: F) -> anyhow::Result<R>
+where
+    F: FnOnce(&mut Enigo) -> anyhow::Result<R> + Send + 'static,
+    R: Send + 'static,
+{
+    let task = move || keystrokes(&mut new_simulator()?);
+    #[cfg(target_os = "macos")]
+    {
+        super::main_thread::run(task, MAIN_THREAD_WAIT)?
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        task()
+    }
+}
+
+/// Only the first attempt in a run asks macOS to show its Accessibility
+/// dialog; output falls back to the clipboard, and re-asking on every phrase
+/// would open the dialog each time the user speaks.
+fn new_simulator() -> Result<Enigo, NewConError> {
     Enigo::new(&settings(&PERMISSION_PROMPTED))
 }
 

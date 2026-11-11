@@ -1,6 +1,8 @@
 pub mod clipboard;
 #[cfg(feature = "keyboard")]
 pub mod keyboard;
+#[cfg(all(feature = "keyboard", target_os = "macos"))]
+pub mod main_thread;
 #[cfg(feature = "keyboard")]
 pub mod paste;
 #[cfg(feature = "keyboard")]

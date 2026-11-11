@@ -90,7 +90,7 @@ pub fn press_ctrl_enter() -> Result<()> {
     }
     #[cfg(not(windows))]
     {
-        send_enigo_chord(&[enigo::Key::Control], enigo::Key::Return)
+        press_chord(&[enigo::Key::Control], &[enigo::Key::Return])
     }
 }
 
@@ -134,9 +134,9 @@ pub fn redo() -> Result<()> {
     }
     #[cfg(not(windows))]
     {
-        send_enigo_chord(
+        press_chord(
             &[primary_modifier(), enigo::Key::Shift],
-            enigo::Key::Unicode('z'),
+            &[enigo::Key::Unicode('z')],
         )
     }
 }
@@ -175,7 +175,7 @@ fn primary_chord(ascii_upper: u8) -> Result<()> {
     #[cfg(not(windows))]
     {
         let key = enigo::Key::Unicode(ascii_upper.to_ascii_lowercase() as char);
-        send_enigo_chord(&[primary_modifier()], key)
+        press_chord(&[primary_modifier()], &[key])
     }
 }
 
@@ -196,27 +196,54 @@ fn primary_modifier() -> enigo::Key {
 
 #[cfg(not(windows))]
 fn send_enigo_key(key: enigo::Key, count: usize) -> Result<()> {
-    use enigo::Keyboard;
-    let mut enigo = super::simulator::new_simulator()?;
-    for _ in 0..count {
-        enigo.key(key, enigo::Direction::Click)?;
-    }
-    Ok(())
+    super::simulator::with_simulator(move |enigo| {
+        use enigo::Keyboard;
+        for _ in 0..count {
+            enigo.key(key, enigo::Direction::Click)?;
+        }
+        Ok(())
+    })
 }
 
-/// Press modifiers, click `key`, then release modifiers in reverse order.
+/// Press the platform paste shortcut: Cmd+V on macOS, Ctrl+V elsewhere.
+///
+/// # Errors
+/// As [`press_chord`].
 #[cfg(not(windows))]
-fn send_enigo_chord(modifiers: &[enigo::Key], key: enigo::Key) -> Result<()> {
-    use enigo::{Direction, Keyboard};
-    let mut enigo = super::simulator::new_simulator()?;
-    for &m in modifiers {
-        enigo.key(m, Direction::Press)?;
-    }
-    enigo.key(key, Direction::Click)?;
-    for &m in modifiers.iter().rev() {
-        enigo.key(m, Direction::Release)?;
-    }
-    Ok(())
+pub fn press_paste() -> Result<()> {
+    press_chord(&[primary_modifier()], &[enigo::Key::Unicode('v')])
+}
+
+/// Hold `modifiers`, click each of `taps`, then release the modifiers in
+/// reverse order, even after a failed tap.
+///
+/// # Errors
+/// When the simulator can't start (see [`super::simulator::with_simulator`])
+/// or a key event can't be sent.
+pub fn press_chord(modifiers: &[enigo::Key], taps: &[enigo::Key]) -> Result<()> {
+    let modifiers = modifiers.to_vec();
+    let taps = taps.to_vec();
+    super::simulator::with_simulator(move |enigo| {
+        use enigo::{Direction, Keyboard};
+        let mut pressed = Vec::with_capacity(modifiers.len());
+        let result = modifiers
+            .iter()
+            .try_for_each(|&m| {
+                enigo.key(m, Direction::Press)?;
+                pressed.push(m);
+                Ok(())
+            })
+            .and_then(|()| {
+                taps.iter()
+                    .try_for_each(|&k| enigo.key(k, Direction::Click))
+            });
+        for &m in pressed.iter().rev() {
+            // Best-effort unwind: a modifier left held would stick in the
+            // user's session; the original error is the one worth reporting.
+            let _ = enigo.key(m, Direction::Release);
+        }
+        Ok(result?)
+    })
 }
 
 /// Send a modifier chord (e.g. Ctrl+C) via SendInput: modifiers down, key
@@ -715,11 +742,12 @@ fn linux_type_text(text: &str) -> Result<()> {
         );
         return clipboard_paste(text);
     }
-    use enigo::Keyboard;
     tracing::debug!("Typing {} chars via enigo (X11)", text.chars().count());
-    let mut enigo = super::simulator::new_simulator()?;
-    enigo.text(text)?;
-    Ok(())
+    let text = text.to_owned();
+    super::simulator::with_simulator(move |enigo| {
+        use enigo::Keyboard;
+        Ok(enigo.text(&text)?)
+    })
 }
 
 /// Whether the current session is Wayland rather than X11.
@@ -737,7 +765,6 @@ fn is_wayland() -> bool {
 fn clipboard_paste(text: &str) -> Result<()> {
     use anyhow::Context;
     use arboard::Clipboard;
-    use enigo::{Key, Keyboard};
 
     let mut clipboard = Clipboard::new().context("Failed to open clipboard")?;
     let previous = clipboard.get_text().ok();
@@ -748,23 +775,7 @@ fn clipboard_paste(text: &str) -> Result<()> {
 
     std::thread::sleep(std::time::Duration::from_millis(50));
 
-    let mut enigo = super::simulator::new_simulator()?;
-
-    // macOS uses Cmd+V, others use Ctrl+V
-    let modifier = if cfg!(target_os = "macos") {
-        Key::Meta
-    } else {
-        Key::Control
-    };
-
-    enigo.key(modifier, enigo::Direction::Press)?;
-    let res = (|| {
-        enigo.key(Key::Unicode('v'), enigo::Direction::Press)?;
-        enigo.key(Key::Unicode('v'), enigo::Direction::Release)?;
-        Ok::<(), anyhow::Error>(())
-    })();
-    let _ = enigo.key(modifier, enigo::Direction::Release);
-    res?;
+    press_paste()?;
 
     std::thread::sleep(std::time::Duration::from_millis(150));
 

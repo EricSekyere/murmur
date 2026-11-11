@@ -3403,6 +3403,7 @@ dependencies = [
  "arboard",
  "cpal",
  "dirs",
+ "dispatch2",
  "enigo",
  "flate2",
  "futures-util",
