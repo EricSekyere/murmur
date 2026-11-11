@@ -41,9 +41,10 @@ crates/murmur-app/.tauri-signing-key.key
 UPDATER_SETUP.local.md
 crates/murmur-app/.tauri-signing-key.key.pub
 
-# CI-generated tauri config fragments (Windows Trusted Signing, macOS ONNX Runtime bundle)
+# CI-generated tauri config fragments (Windows Trusted Signing, macOS ONNX Runtime bundle and ad-hoc signing)
 crates/murmur-app/.winsign.conf.json
 crates/murmur-app/.ort.conf.json
+crates/murmur-app/.adhoc.conf.json
 
 # Python (wake-word training pipeline)
 **/__pycache__/

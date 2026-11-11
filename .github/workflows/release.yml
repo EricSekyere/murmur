@@ -268,9 +268,9 @@ jobs:
 
   # Runs after Windows so the GitHub release already exists; builds a universal
   # (Apple Silicon + Intel) bundle and uploads the .app/.dmg to it. Signing and
-  # notarization are inert until the Apple Developer secrets exist: with
-  # APPLE_SIGNING_IDENTITY unset, tauri-action builds an unsigned bundle exactly
-  # like the other platforms. Once the APPLE_* secrets are set, tauri-action
+  # notarization are inert until the Apple Developer secrets exist: without
+  # them, the bundle is ad-hoc signed (see "Configure macOS signing") and
+  # Gatekeeper still warns on first launch. Once the APPLE_* secrets are set, tauri-action
   # imports the Developer ID certificate into a temporary keychain, codesigns the
   # .app with the hardened runtime, submits it to Apple's notary service, and
   # staples the ticket — clearing Gatekeeper's "unidentified developer" block.
@@ -337,6 +337,7 @@ jobs:
             "$RUNNER_TEMP/ort/libonnxruntime.dylib" > crates/murmur-app/.ort.conf.json
 
       - name: Configure macOS signing
+        id: macsign
         shell: bash
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
@@ -365,7 +366,17 @@ jobs:
               echo "APPLE_TEAM_ID=$APPLE_TEAM_ID"
             } >> "$GITHUB_ENV"
           else
-            echo "::notice::macOS signing/notarization skipped (no APPLE_* secrets); shipping an unsigned universal bundle."
+            echo "::notice::macOS signing/notarization skipped (no APPLE_* secrets); shipping an ad-hoc signed universal bundle."
+            # Left to the linker, only the arm64 executable carries a signature
+            # and the bundle reads as "not signed at all", so macOS can never
+            # match the app to a permission the user granted: it asks for the
+            # microphone on every launch. Sealing the bundle ad-hoc gives it a
+            # stable identity until the next update. The hardened runtime stays
+            # on so no other process can inject code to borrow those grants;
+            # Entitlements.adhoc.plist explains the one trade-off it needs.
+            printf '{ "bundle": { "macOS": { "signingIdentity": "-", "hardenedRuntime": true, "entitlements": "Entitlements.adhoc.plist" } } }' \
+              > crates/murmur-app/.adhoc.conf.json
+            echo "tauri_args=--config .adhoc.conf.json" >> "$GITHUB_OUTPUT"
           fi
 
       - uses: tauri-apps/tauri-action@v0
@@ -393,5 +404,6 @@ jobs:
           # .app.tar.gz/.sig from createUpdaterArtifacts) and the dmg installer.
           # Without this, tauri builds the binary but no bundle, and
           # tauri-action reports "No artifacts were found". .ort.conf.json comes
-          # from the "Bundle ONNX Runtime" step.
-          args: --target universal-apple-darwin --bundles app,dmg --config .ort.conf.json
+          # from the "Bundle ONNX Runtime" step; the macsign output adds the
+          # ad-hoc signing fragment when there is no Developer ID.
+          args: --target universal-apple-darwin --bundles app,dmg --config .ort.conf.json ${{ steps.macsign.outputs.tauri_args }}

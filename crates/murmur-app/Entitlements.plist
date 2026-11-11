@@ -9,7 +9,8 @@
   same-user process plant a dylib that runs with Murmur's microphone and
   Accessibility grants. ONNX Runtime is bundled in Contents/Frameworks and
   re-signed with our Team ID instead (see release.yml), so it loads with
-  library validation on.
+  library validation on. Ad-hoc releases, which have no Team ID, use
+  Entitlements.adhoc.plist.
 -->
 <plist version="1.0">
 <dict>
